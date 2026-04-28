@@ -1,0 +1,6 @@
+node_env: production
+nodeProcessCommandLine: node --import tsx
+loggingEnabled: true
+logDirectory: iisnode
+devMode: false
+watchedFiles: web.config;*.js;*.ts

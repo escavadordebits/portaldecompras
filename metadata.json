@@ -1,0 +1,5 @@
+{
+  "name": "Portal de Compras SAP",
+  "description": "Portal de compras integrado ao SAP Business One Service Layer com dashboards estilo Fiori.",
+  "requestFramePermissions": []
+}
