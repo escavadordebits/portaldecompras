@@ -7,13 +7,13 @@ import https from 'https';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import FormData from 'form-data';
-import nodemailer from 'nodemailer';
 import { config } from './config';
+import { Resend } from 'resend';
 
 dotenv.config();
 
 const app = express();
-const PORT = config.server.port;
+const PORT = Number(config.server.port) || 3000;
 
 app.use(express.json());
 app.use(cookieParser());
@@ -171,13 +171,10 @@ app.post('/api/send-email', async (req, res) => {
   }
 
   try {
-    // Basic validation of transporter configuration
-    const host = process.env.SMTP_HOST;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (!host || !user || !pass) {
-      console.log('--- MOCK EMAIL PROCESSED (SMTP NOT CONFIGURED) ---');
+    const resendKey = process.env.RESEND_API_KEY;
+    
+    if (!resendKey) {
+      console.log('--- MOCK EMAIL PROCESSED (RESEND NOT CONFIGURED) ---');
       console.log('To:', to);
       console.log('CC:', cc);
       console.log('Subject:', subject);
@@ -185,32 +182,32 @@ app.post('/api/send-email', async (req, res) => {
       console.log('------------------------------------------------');
       return res.json({ 
         success: true, 
-        message: 'E-mail processado em modo demonstração (SMTP não configurado). No ambiente de produção, configure as variáveis SMTP para envio real.',
+        message: 'E-mail processado em modo demonstração (RESEND_API_KEY não configurada).',
         isMock: true 
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      host,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: process.env.SMTP_PORT === '465',
-      auth: { user, pass },
-    });
+    const resend = new Resend(resendKey);
 
-    const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || user,
-      to,
-      cc,
-      subject,
+    const { data, error } = await resend.emails.send({
+      from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+      to: [to],
+      cc: cc ? [cc] : undefined,
+      subject: subject,
       text: body,
       html: body.replace(/\n/g, '<br>'),
     });
 
-    console.log('Email sent successfully:', info.messageId);
-    res.json({ success: true, messageId: info.messageId });
+    if (error) {
+      console.error('Resend Error:', error);
+      return res.status(400).json({ error: 'Erro ao enviar e-mail via Resend.', details: error });
+    }
+
+    console.log('Email sent successfully via Resend:', data?.id);
+    res.json({ success: true, messageId: data?.id });
   } catch (error: any) {
     console.error('Email Sending Error:', error);
-    res.status(500).json({ error: 'Erro ao enviar e-mail.', details: error.message });
+    res.status(500).json({ error: 'Erro interno ao enviar e-mail.', details: error.message });
   }
 });
 
