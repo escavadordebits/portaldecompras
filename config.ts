@@ -9,6 +9,6 @@ export const config = {
     defaultCompany: process.env.SAP_COMPANY_DB || 'SBO_QUALITECH_QAS'
   },
   server: {
-    port: process.env.PORT || 3000
+    port: 3000
   }
 };

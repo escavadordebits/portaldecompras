@@ -8,12 +8,11 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import FormData from 'form-data';
 import { config } from './config';
-import { Resend } from 'resend';
 
 dotenv.config();
 
 const app = express();
-const PORT = Number(config.server.port) || 3000;
+const PORT = config.server.port;
 
 app.use(express.json());
 app.use(cookieParser());
@@ -159,55 +158,6 @@ app.post('/api/login', async (req, res) => {
     return res.status(500).json({ 
       error: 'Erro ao conectar com o SAP Service Layer. Verifique se a URL e as credenciais estão corretas.' 
     });
-  }
-});
-
-// Email Sending Route
-app.post('/api/send-email', async (req, res) => {
-  const { to, cc, subject, body } = req.body;
-
-  if (!to || !subject || !body) {
-    return res.status(400).json({ error: 'Destinatário, assunto e corpo são obrigatórios.' });
-  }
-
-  try {
-    const resendKey = process.env.RESEND_API_KEY;
-    
-    if (!resendKey) {
-      console.log('--- MOCK EMAIL PROCESSED (RESEND NOT CONFIGURED) ---');
-      console.log('To:', to);
-      console.log('CC:', cc);
-      console.log('Subject:', subject);
-      console.log('Body:', body);
-      console.log('------------------------------------------------');
-      return res.json({ 
-        success: true, 
-        message: 'E-mail processado em modo demonstração (RESEND_API_KEY não configurada).',
-        isMock: true 
-      });
-    }
-
-    const resend = new Resend(resendKey);
-
-    const { data, error } = await resend.emails.send({
-      from: process.env.RESEND_FROM || 'onboarding@resend.dev',
-      to: [to],
-      cc: cc ? [cc] : undefined,
-      subject: subject,
-      text: body,
-      html: body.replace(/\n/g, '<br>'),
-    });
-
-    if (error) {
-      console.error('Resend Error:', error);
-      return res.status(400).json({ error: 'Erro ao enviar e-mail via Resend.', details: error });
-    }
-
-    console.log('Email sent successfully via Resend:', data?.id);
-    res.json({ success: true, messageId: data?.id });
-  } catch (error: any) {
-    console.error('Email Sending Error:', error);
-    res.status(500).json({ error: 'Erro interno ao enviar e-mail.', details: error.message });
   }
 });
 

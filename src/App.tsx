@@ -1258,29 +1258,14 @@ function CreateOrderView({
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [createdDocEntry, setCreatedDocEntry] = useState<number | null>(null);
 
-  const handleSendEmail = async (to: string, cc: string, subject: string, body: string) => {
-    try {
-      toast.info('Enviando e-mail...');
-      await sapService.sendEmail({ to, cc, subject, body });
-      toast.success('Solicitação de e-mail enviada com sucesso!');
-      setIsEmailModalOpen(false);
-      // After sending, reset form
-      setOrderItems([]);
-      setSelectedSupplier(null);
-      setSelectedFiles([]);
-      if (typeof window !== 'undefined') {
-        const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-        // Fallback for user local client if they still want it, but the server already tried sending
-        console.log('Server send attempted. Browser mailto fallback ready at:', mailtoUrl);
-      }
-    } catch (error) {
-      toast.error('Erro ao processar envio de e-mail.');
-      console.error(error);
-      // Fallback to mailto if server fails
-      const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      window.location.href = mailtoUrl;
-      setIsEmailModalOpen(false);
-    }
+  const handleSendEmail = (to: string, cc: string, subject: string, body: string) => {
+    const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailtoUrl;
+    setIsEmailModalOpen(false);
+    // After sending, reset form
+    setOrderItems([]);
+    setSelectedSupplier(null);
+    setSelectedFiles([]);
   };
 
   useEffect(() => {
@@ -1951,14 +1936,6 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
   const [subject, setSubject] = useState(`Solicitação de Cotação - Oferta #${docEntry}`);
   const [body, setBody] = useState(`Prezado fornecedor,\n\nFavor preencher sua proposta comercial no link abaixo para a oferta #${docEntry}:\n\n${portalUrl}\n\nAtenciosamente,\nSetor de Compras Qualitech`);
 
-  useEffect(() => {
-    setTo(defaultTo);
-  }, [defaultTo]);
-
-  useEffect(() => {
-    setCc(defaultCC);
-  }, [defaultCC]);
-
   if (!isOpen) return null;
 
   return (
@@ -2025,7 +2002,7 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
             onClick={() => onConfirm(to, cc, subject, body)}
             className="evo-button-primary rounded-none h-12 px-8 flex items-center gap-2"
           >
-            <LogOut className="w-4 h-4 rotate-180" /> ENVIAR E-MAIL AGORA
+            <LogOut className="w-4 h-4 rotate-180" /> CONFIRMAR E ABRIR E-MAIL
           </Button>
         </div>
       </motion.div>
@@ -2059,18 +2036,10 @@ function ListOrdersView({
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [supplierEmail, setSupplierEmail] = useState('');
 
-  const handleSendEmail = async (to: string, cc: string, subject: string, body: string) => {
-    try {
-      toast.info('Enviando e-mail...');
-      await sapService.sendEmail({ to, cc, subject, body });
-      toast.success('E-mail enviado com sucesso!');
-      setIsEmailModalOpen(false);
-    } catch (error) {
-      toast.error('Erro ao enviar e-mail via servidor. Tentando cliente local...');
-      const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      window.location.href = mailtoUrl;
-      setIsEmailModalOpen(false);
-    }
+  const handleSendEmail = (to: string, cc: string, subject: string, body: string) => {
+    const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailtoUrl;
+    setIsEmailModalOpen(false);
   };
 
   useEffect(() => {

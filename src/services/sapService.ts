@@ -250,15 +250,6 @@ export const sapService = {
     }
   },
 
-  sendEmail: async (data: { to: string; cc?: string; subject: string; body: string }) => {
-    try {
-      const response = await api.post('/send-email', data);
-      return response.data;
-    } catch (error) {
-      return handleApiError(error, 'sendEmail');
-    }
-  },
-
   updatePurchaseOrder: async (docEntry: number, data: any) => {
     try {
       const response = await api.patch(`/sap/PurchaseOrders(${docEntry})`, data);
