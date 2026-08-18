@@ -1,5 +1,6 @@
 {
-  "name": "Portal de Compras SAP",
-  "description": "Portal de compras integrado ao SAP Business One Service Layer com dashboards estilo Fiori.",
-  "requestFramePermissions": []
+  "name": "Portal Qualitech SAP",
+  "description": "Portal corporativo Qualitech integrado ao SAP Business One Service Layer para compras, aprovações, qualidade, manutenção, calibração e custos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

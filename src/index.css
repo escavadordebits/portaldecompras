@@ -1,44 +1,52 @@
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-evo-dark: #4a4b4c;
-  --color-evo-teal: #00aeb6;
-  --color-evo-teal-dark: #008a91;
-  --color-evo-bg: #f4f4f4;
-  --color-evo-text: #333333;
+  --color-qualitech-navy: #1b2a4e;
+  --color-qualitech-navy-dark: #121c35;
+  --color-qualitech-blue: #0078bd;
+  --color-qualitech-blue-dark: #005a8f;
+  --color-qualitech-blue-light: #e0f2fe;
+  --color-qualitech-bg: #f8fafc;
+  --color-qualitech-text: #0f172a;
+  
+  --color-evo-dark: #1b2a4e;
+  --color-evo-teal: #0078bd;
+  --color-evo-teal-dark: #005a8f;
+  --color-evo-bg: #f8fafc;
+  --color-evo-text: #0f172a;
 }
 
 @layer base {
   body {
-    @apply bg-evo-bg text-evo-text font-sans antialiased;
+    @apply bg-slate-50 text-slate-900 font-sans antialiased;
   }
 }
 
 @layer components {
-  .evo-header {
-    @apply bg-evo-dark text-white shadow-md;
+  .qualitech-header, .evo-header {
+    @apply bg-[#1b2a4e] text-white shadow-md;
   }
   
-  .evo-card {
-    @apply bg-white rounded shadow transition-all hover:shadow-lg;
+  .qualitech-card, .evo-card {
+    @apply bg-white rounded-lg border border-slate-200/80 shadow-sm transition-all hover:shadow-md;
   }
   
-  .evo-nav-link {
-    @apply text-[11px] font-bold uppercase tracking-widest px-4 py-2 transition-all relative inline-block text-white/80 hover:text-white;
+  .qualitech-nav-link, .evo-nav-link {
+    @apply text-[11px] font-semibold uppercase tracking-wider px-3.5 py-2 transition-all relative inline-block text-white/80 hover:text-white;
   }
 
-  .evo-nav-link.active {
-    @apply text-white;
+  .qualitech-nav-link.active, .evo-nav-link.active {
+    @apply text-white font-bold;
   }
 
-  .evo-nav-link.active::after {
+  .qualitech-nav-link.active::after, .evo-nav-link.active::after {
     content: '';
-    @apply absolute bottom-0 left-4 right-4 h-1 bg-evo-teal;
+    @apply absolute bottom-0 left-3.5 right-3.5 h-0.5 bg-[#0078bd];
   }
 
-  .evo-button-primary {
-    @apply bg-evo-teal hover:bg-evo-teal-dark text-white font-bold py-2 px-6 rounded transition-colors uppercase text-xs tracking-wider;
+  .qualitech-button-primary, .evo-button-primary {
+    @apply bg-[#0078bd] hover:bg-[#005a8f] text-white font-semibold py-2 px-5 rounded-md transition-colors uppercase text-xs tracking-wider shadow-sm;
   }
 }
 

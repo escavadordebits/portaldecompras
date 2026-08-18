@@ -425,9 +425,9 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 relative overflow-hidden font-sans">
         {/* Background Accent */}
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
+        <div className="absolute top-0 right-0 w-1/2 h-full bg-[#1b2a4e] skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
         
         <motion.div 
           initial={{ opacity: 0, x: -20 }}
@@ -435,39 +435,39 @@ export default function App() {
           className="w-full max-w-md relative z-10"
         >
           <div className="mb-8 flex flex-col items-center lg:items-start">
-            <div className="bg-evo-dark p-3 rounded shadow-xl mb-4">
-              <ShoppingCart className="text-evo-teal w-10 h-10" />
+            <div className="bg-[#1b2a4e] p-3 rounded-lg shadow-xl mb-4 border border-blue-400/20">
+              <Package className="text-[#0078bd] w-10 h-10" />
             </div>
-            <h1 className="text-4xl font-bold tracking-tighter text-evo-dark">EVO</h1>
-            <p className="text-xs uppercase tracking-[0.4em] font-bold text-evo-teal">Procurement Portal</p>
+            <h1 className="text-4xl font-extrabold tracking-tight text-[#1b2a4e]">QUALITECH</h1>
+            <p className="text-xs uppercase tracking-[0.3em] font-bold text-[#0078bd]">Portal Corporativo SAP</p>
           </div>
 
-          <Card className="shadow-2xl border-none overflow-hidden">
-            <div className="h-1 bg-evo-teal w-full" />
-            <CardHeader>
-              <CardTitle className="text-xl font-bold text-evo-dark uppercase tracking-tight">Autenticação</CardTitle>
-              <CardDescription className="text-xs uppercase tracking-widest font-medium opacity-60">Acesse sua conta SAP Business One</CardDescription>
+          <Card className="shadow-2xl border-slate-200 overflow-hidden bg-white">
+            <div className="h-1.5 bg-[#0078bd] w-full" />
+            <CardHeader className="pb-4">
+              <CardTitle className="text-xl font-bold text-[#1b2a4e] uppercase tracking-tight">Autenticação</CardTitle>
+              <CardDescription className="text-xs uppercase tracking-wider font-medium text-slate-500">Acesse sua conta SAP Business One</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleLogin} className="space-y-5">
                 <div className="space-y-1.5">
-                  <Label htmlFor="email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail Corporativo</Label>
+                  <Label htmlFor="email" className="text-[10px] font-bold uppercase tracking-widest text-slate-600 ml-1">E-mail Corporativo</Label>
                   <Input 
                     id="email" 
                     type="email" 
-                    placeholder="usuario@empresa.com" 
-                    className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
+                    placeholder="usuario@qualitech.com.br" 
+                    className="h-11 border-slate-200 bg-slate-50/70 focus:bg-white transition-all text-sm rounded-md"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     required
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="company" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Base de Dados (CompanyDB)</Label>
+                  <Label htmlFor="company" className="text-[10px] font-bold uppercase tracking-widest text-slate-600 ml-1">Base de Dados (CompanyDB)</Label>
                   <Input 
                     id="company" 
-                    placeholder="SBO_DATABASE_PROD" 
-                    className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
+                    placeholder="SBO_QUALITECH_PROD" 
+                    className="h-11 border-slate-200 bg-slate-50/70 focus:bg-white transition-all text-sm rounded-md"
                     value={loginCompany}
                     onChange={(e) => setLoginCompany(e.target.value)}
                     required
@@ -475,63 +475,63 @@ export default function App() {
                 </div>
                 <Button 
                   type="submit" 
-                  className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs transition-all shadow-lg rounded-none" 
+                  className="w-full h-11 bg-[#0078bd] hover:bg-[#005a8f] text-white font-bold uppercase tracking-wider text-xs transition-all shadow-md rounded-md" 
                   disabled={isLoading}
                 >
-                  {isLoading ? 'Verificando credenciais...' : 'Acessar Sistema'}
+                  {isLoading ? 'Verificando credenciais...' : 'Acessar Sistema Qualitech'}
                 </Button>
               </form>
 
-              <div className="mt-8 pt-6 border-t border-evo-bg flex justify-center">
+              <div className="mt-6 pt-5 border-t border-slate-100 flex justify-center">
                 <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
                   <DialogTrigger 
                     render={
-                      <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 hover:text-evo-teal gap-2 transition-all">
-                        <Settings className="w-3 h-3" />
-                        Configurações Técnicas
+                      <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-[#0078bd] gap-2 transition-all">
+                        <Settings className="w-3.5 h-3.5" />
+                        Configurações Técnicas SAP
                       </Button>
                     }
                   />
-                  <DialogContent className="rounded-none">
+                  <DialogContent className="rounded-lg max-w-md">
                     <DialogHeader>
-                      <DialogTitle className="uppercase tracking-tight font-bold">Configurações SAP Service Layer</DialogTitle>
-                      <CardDescription className="text-[10px] uppercase tracking-widest">Ajustes de infraestrutura e conexão</CardDescription>
+                      <DialogTitle className="tracking-tight font-bold text-[#1b2a4e]">Configurações SAP Service Layer</DialogTitle>
+                      <CardDescription className="text-xs">Ajustes de conexão e módulos do sistema</CardDescription>
                     </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider">URL do Service Layer</Label>
+                    <div className="space-y-4 py-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">URL do Service Layer</Label>
                         <Input 
                           id="sap-url" 
                           placeholder="https://sap-server:50000/b1s/v1" 
-                          className="rounded-none h-10 text-xs"
+                          className="rounded-md h-9 text-xs"
                           value={sapConfig.url}
                           onChange={(e) => setSapConfig({...sapConfig, url: e.target.value})}
                         />
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider">Usuário do Sistema</Label>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Usuário do Sistema</Label>
                         <Input 
                           id="sap-user" 
                           placeholder="manager" 
-                          className="rounded-none h-10 text-xs"
+                          className="rounded-md h-9 text-xs"
                           value={sapConfig.user}
                           onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
                         />
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider">Senha do Sistema</Label>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Senha do Sistema</Label>
                         <Input 
                           id="sap-pass" 
                           type="password" 
                           placeholder="••••••••" 
-                          className="rounded-none h-10 text-xs"
+                          className="rounded-md h-9 text-xs"
                           value={sapConfig.password}
                           onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
                         />
                       </div>
-                      <div className="space-y-4 pt-4 border-t border-evo-bg">
-                        <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60">Serviços e Aprovações</Label>
-                        <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-3 pt-3 border-t border-slate-100">
+                        <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Módulos do Portal Qualitech</Label>
+                        <div className="grid grid-cols-2 gap-3">
                           {[
                             { id: 'procurement', label: 'Compras / Suprimentos' },
                             { id: 'approvals', label: 'Centro de Aprovações' },
@@ -550,9 +550,9 @@ export default function App() {
                                   ...sapConfig, 
                                   modules: { ...sapConfig.modules, [mod.id]: e.target.checked }
                                 })}
-                                className="w-4 h-4 rounded border-gray-300 text-evo-teal focus:ring-evo-teal transition-all cursor-pointer"
+                                className="w-4 h-4 rounded border-slate-300 text-[#0078bd] focus:ring-[#0078bd] cursor-pointer"
                               />
-                              <Label htmlFor={`module-${mod.id}`} className="text-[10px] font-black uppercase tracking-tight cursor-pointer">
+                              <Label htmlFor={`module-${mod.id}`} className="text-xs font-semibold text-slate-700 cursor-pointer">
                                 {mod.label}
                               </Label>
                             </div>
@@ -561,8 +561,8 @@ export default function App() {
                       </div>
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" className="rounded-none text-xs uppercase tracking-widest" onClick={() => setIsSettingsOpen(false)}>Fechar</Button>
-                      <Button onClick={saveSapConfig} className="bg-evo-teal hover:bg-evo-teal-dark rounded-none text-xs uppercase tracking-widest">Salvar</Button>
+                      <Button variant="outline" className="rounded-md text-xs" onClick={() => setIsSettingsOpen(false)}>Fechar</Button>
+                      <Button onClick={saveSapConfig} className="bg-[#0078bd] hover:bg-[#005a8f] text-white rounded-md text-xs font-semibold">Salvar Configurações</Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
@@ -576,31 +576,31 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-evo-bg flex flex-col font-sans">
-      {/* Evo Style Header */}
-      <header className="evo-header flex items-center justify-between px-6 sticky top-0 z-50">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      {/* Qualitech Header */}
+      <header className="bg-[#1b2a4e] text-white flex items-center justify-between px-6 py-2.5 sticky top-0 z-50 shadow-md">
         <div className="flex items-center gap-8">
           <div className="flex items-center gap-3">
-            <div className="bg-evo-teal p-1.5 rounded-sm">
-              <ShoppingCart className="text-white w-5 h-5" />
+            <div className="bg-[#0078bd] p-2 rounded-md shadow-sm">
+              <Package className="text-white w-5 h-5" />
             </div>
             <div className="flex flex-col leading-none">
-              <span className="font-bold text-xl tracking-tighter">EVO</span>
-              <span className="text-[8px] uppercase tracking-[0.2em] font-medium opacity-70">Procurement</span>
+              <span className="font-extrabold text-lg tracking-tight text-white">QUALITECH</span>
+              <span className="text-[9px] uppercase tracking-[0.2em] font-semibold text-blue-200/80">Portal SAP B1</span>
             </div>
           </div>
 
-          <nav className="hidden lg:flex items-center">
+          <nav className="hidden lg:flex items-center space-x-1">
             <button 
               onClick={() => setCurrentView('dashboard')}
-              className={`evo-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
+              className={`qualitech-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
             >
               Dashboard
             </button>
             {sapConfig.modules?.procurement && (
               <button 
                 onClick={() => setCurrentView('create-order')}
-                className={`evo-nav-link ${(currentView === 'create-order' || currentView === 'create-request' || currentView === 'create-quotation' || currentView === 'create-down-payment') ? 'active' : ''}`}
+                className={`qualitech-nav-link ${(currentView === 'create-order' || currentView === 'create-request' || currentView === 'create-quotation' || currentView === 'create-down-payment') ? 'active' : ''}`}
               >
                 Ações
               </button>
@@ -608,15 +608,15 @@ export default function App() {
             {sapConfig.modules?.procurement && (
               <button 
                 onClick={() => setCurrentView('list-orders')}
-                className={`evo-nav-link ${(currentView === 'list-orders' || currentView === 'list-requests' || currentView === 'list-quotations' || currentView === 'list-down-payments') ? 'active' : ''}`}
+                className={`qualitech-nav-link ${(currentView === 'list-orders' || currentView === 'list-requests' || currentView === 'list-quotations' || currentView === 'list-down-payments') ? 'active' : ''}`}
               >
                 Consultas
               </button>
             )}
-            {sapConfig.modules?.procurement && (
+            {sapConfig.modules?.approvals && (
               <button 
                 onClick={() => setCurrentView('approvals')}
-                className={`evo-nav-link ${currentView === 'approvals' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'approvals' ? 'active' : ''}`}
               >
                 Aprovações
               </button>
@@ -624,7 +624,7 @@ export default function App() {
             {sapConfig.modules?.quotations && (
               <button 
                 onClick={() => setCurrentView('list-quotations')}
-                className={`evo-nav-link ${currentView === 'list-quotations' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'list-quotations' ? 'active' : ''}`}
               >
                 Ofertas
               </button>
@@ -632,7 +632,7 @@ export default function App() {
             {sapConfig.modules?.quality && (
               <button 
                 onClick={() => setCurrentView('quality')}
-                className={`evo-nav-link ${currentView === 'quality' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'quality' ? 'active' : ''}`}
               >
                 Qualidade
               </button>
@@ -640,7 +640,7 @@ export default function App() {
             {sapConfig.modules?.maintenance && (
               <button 
                 onClick={() => setCurrentView('maintenance')}
-                className={`evo-nav-link ${currentView === 'maintenance' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'maintenance' ? 'active' : ''}`}
               >
                 Manutenção
               </button>
@@ -648,7 +648,7 @@ export default function App() {
             {sapConfig.modules?.calibration && (
               <button 
                 onClick={() => setCurrentView('calibration')}
-                className={`evo-nav-link ${currentView === 'calibration' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'calibration' ? 'active' : ''}`}
               >
                 Calibração
               </button>
@@ -656,7 +656,7 @@ export default function App() {
             {sapConfig.modules?.costs && (
               <button 
                 onClick={() => setCurrentView('costs')}
-                className={`evo-nav-link ${currentView === 'costs' ? 'active' : ''}`}
+                className={`qualitech-nav-link ${currentView === 'costs' ? 'active' : ''}`}
               >
                 Custos
               </button>
@@ -664,24 +664,27 @@ export default function App() {
           </nav>
         </div>
         
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider opacity-80">
-            <User className="w-4 h-4 text-evo-teal" />
-            <span className="hidden md:inline">{user?.name}</span>
+        <div className="flex items-center gap-5">
+          <div className="flex items-center gap-2.5 text-xs font-medium text-slate-200">
+            <div className="w-7 h-7 rounded-full bg-blue-900/60 border border-blue-400/30 flex items-center justify-center text-blue-200">
+              <User className="w-3.5 h-3.5" />
+            </div>
+            <span className="hidden md:inline font-semibold">{user?.name}</span>
           </div>
           <Button 
             variant="ghost" 
-            size="icon" 
-            className="text-white hover:bg-white/10" 
+            size="sm" 
+            className="text-slate-200 hover:text-white hover:bg-white/10 text-xs gap-1.5" 
             onClick={handleLogout}
             title="Sair"
           >
             <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">Sair</span>
           </Button>
           <Button 
             variant="ghost" 
             size="icon" 
-            className="lg:hidden text-white" 
+            className="lg:hidden text-white hover:bg-white/10" 
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
             <Menu />
@@ -690,11 +693,11 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Evo Sidebar */}
+        {/* Qualitech Sidebar */}
         <aside className={`
           ${sidebarOpen ? 'w-64' : 'w-0 lg:w-16'} 
-          transition-all duration-300 bg-evo-dark text-white/70 flex flex-col overflow-hidden
-          fixed lg:relative z-40 h-[calc(100vh-4rem)] lg:h-auto border-r border-white/5 shadow-2xl lg:shadow-none
+          transition-all duration-300 bg-[#1b2a4e] text-white/80 flex flex-col overflow-hidden
+          fixed lg:relative z-40 h-[calc(100vh-4rem)] lg:h-auto border-r border-slate-700/50 shadow-2xl lg:shadow-none
         `}>
           <nav className="flex-1 py-6">
             <SidebarItem 
@@ -1000,14 +1003,14 @@ function SidebarItem({ icon, label, active, expanded, onClick }: any) {
     <button 
       onClick={onClick}
       className={`
-        w-full flex items-center gap-4 px-6 py-3 transition-all duration-200 border-l-4
+        w-full flex items-center gap-3.5 px-5 py-2.5 transition-all duration-200 border-l-4
         ${active 
-          ? 'bg-white/5 text-white border-evo-teal' 
-          : 'border-transparent hover:bg-white/5 hover:text-white'}
+          ? 'bg-blue-500/15 text-white border-[#0078bd] font-semibold' 
+          : 'border-transparent text-slate-300 hover:bg-white/5 hover:text-white'}
       `}
     >
-      <span className={`shrink-0 transition-colors ${active ? 'text-evo-teal' : ''}`}>{React.cloneElement(icon, { size: 18 })}</span>
-      {expanded && <span className="text-xs font-bold uppercase tracking-wider whitespace-nowrap">{label}</span>}
+      <span className={`shrink-0 transition-colors ${active ? 'text-[#38bdf8]' : 'text-slate-400'}`}>{React.cloneElement(icon, { size: 18 })}</span>
+      {expanded && <span className="text-xs tracking-wide whitespace-nowrap">{label}</span>}
     </button>
   );
 }
