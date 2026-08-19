@@ -1,5 +1,6 @@
 {
   "name": "Procurement Service Portal",
   "description": "Portal de compras e serviços integrado ao SAP Business One Service Layer.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

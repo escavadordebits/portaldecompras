@@ -27,7 +27,14 @@ api.interceptors.request.use((config) => {
 
 // Helper to handle API errors
 const handleApiError = (error: any, context: string) => {
-  console.error(`API Error (${context}):`, error.response?.data || error.message);
+  const errorData = error.response?.data;
+  const isHtml = typeof errorData === 'string' && (errorData.includes('<!DOCTYPE') || errorData.includes('<html'));
+  
+  if (isHtml || error.response?.status === 404) {
+    console.error(`API Error (${context}): Endpoint 404 Not Found or returned HTML page.`);
+  } else {
+    console.error(`API Error (${context}):`, errorData || error.message);
+  }
   throw error;
 };
 

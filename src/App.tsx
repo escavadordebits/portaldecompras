@@ -400,9 +400,20 @@ export default function App() {
       }
     } catch (error: any) {
       console.error('SAP verification failed:', error);
-      const errorMessage = error.response?.data?.error || 'Erro de autenticação';
-      const errorDetails = error.response?.data?.details || 'Verifique seus dados e tente novamente.';
-      const sapRaw = error.response?.data?.sapRaw;
+      const isHtml = typeof error.response?.data === 'string' && (error.response.data.includes('<!DOCTYPE') || error.response.data.includes('<html'));
+      let errorMessage = error.response?.data?.error;
+      let errorDetails = error.response?.data?.details;
+
+      if (!errorMessage) {
+        if (error.response?.status === 404 || isHtml) {
+          errorMessage = 'Serviço Backend Indisponível (404)';
+          errorDetails = 'O endpoint da API /api/login não foi encontrado. Se estiver no Netlify, confirme a publicação das Netlify Functions.';
+        } else {
+          errorMessage = 'Erro de autenticação';
+          errorDetails = error.message || 'Verifique seus dados e tente novamente.';
+        }
+      }
+      const sapRaw = isHtml ? undefined : error.response?.data?.sapRaw;
       const targetDB = error.response?.data?.targetDB;
 
       toast.error(
