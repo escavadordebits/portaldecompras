@@ -28,11 +28,59 @@ import {
   TrendingUp,
   CreditCard,
   ArrowUpRight,
-  CheckSquare
+  CheckSquare,
+  ShieldCheck,
+  Zap,
+  Globe,
+  Edit,
+  Trash2,
+  Building,
+  Users,
+  DollarSign,
+  Activity,
+  Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { auth, db, signInWithGoogle } from './lib/firebase';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  signOut 
+} from 'firebase/auth';
 import { sapService } from './services/sapService';
+import UserManagementView from './components/UserManagementView';
 import { Button } from '@/components/ui/button';
+
+// Enhanced Logo Component using Icons
+const Logo = ({ size = "md", className = "" }: { size?: "sm" | "md" | "lg" | "xl", className?: string }) => {
+  const iconSize = {
+    sm: "w-5 h-5",
+    md: "w-6 h-6",
+    lg: "w-8 h-8",
+    xl: "w-10 h-10"
+  }[size];
+  
+  const containerSize = {
+    sm: "p-1",
+    md: "p-1.5",
+    lg: "p-2",
+    xl: "p-3"
+  }[size];
+
+  return (
+    <div className={`inline-flex items-center justify-center bg-evo-teal text-white rounded-md shadow-sm ${containerSize} ${className}`}>
+      <ShieldCheck className={iconSize} />
+    </div>
+  );
+};
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -52,6 +100,7 @@ import {
   DialogContent, 
   DialogHeader, 
   DialogTitle, 
+  DialogDescription,
   DialogTrigger,
   DialogFooter,
   DialogClose
@@ -71,7 +120,7 @@ import {
   Cell 
 } from 'recharts';
 
-type View = 'dashboard' | 'create-order' | 'list-orders' | 'create-request' | 'list-requests' | 'create-quotation' | 'list-quotations' | 'approvals' | 'create-down-payment' | 'list-down-payments' | 'quality' | 'maintenance' | 'costs' | 'calibration' | 'quotation-portal';
+type View = 'dashboard' | 'create-order' | 'list-orders' | 'create-request' | 'list-requests' | 'create-quotation' | 'list-quotations' | 'approvals' | 'create-down-payment' | 'list-down-payments' | 'quality' | 'maintenance' | 'costs' | 'calibration' | 'quotation-portal' | 'users' | 'sales-orders';
 
 function SupplierPortalView({ docEntry }: { docEntry: number }) {
   const [quotation, setQuotation] = useState<any>(null);
@@ -131,8 +180,8 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-evo-bg p-6">
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md w-full text-center space-y-6">
-          <div className="bg-evo-dark p-6 inline-block rounded-full mb-4 shadow-xl">
-            <CheckCircle2 className="w-16 h-16 text-evo-teal" />
+          <div className="bg-white p-2 rounded shadow-xl inline-block mb-4">
+             <Logo size="lg" />
           </div>
           <h2 className="text-3xl font-black text-evo-dark uppercase tracking-tight">Proposta Recebida</h2>
           <p className="text-gray-500 font-medium">Sua proposta comercial foi registrada com segurança no nosso sistema. Entraremos em contato em breve.</p>
@@ -146,9 +195,12 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
     <div className="min-h-screen bg-evo-bg font-sans">
       <header className="bg-evo-dark text-white p-6 shadow-2xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-black tracking-tighter text-evo-teal">PORTAL DO FORNECEDOR</h1>
-            <p className="text-[10px] uppercase font-bold tracking-[0.3em] opacity-40">Proposta Comercial para Oferta #{docEntry}</p>
+          <div className="flex items-center gap-4">
+            <Logo size="md" className="bg-white text-evo-teal" />
+            <div>
+              <h1 className="text-2xl font-black tracking-tighter text-evo-teal">PORTAL DO FORNECEDOR</h1>
+              <p className="text-[10px] uppercase font-bold tracking-[0.3em] opacity-40">Proposta Comercial para Oferta #{docEntry}</p>
+            </div>
           </div>
           <div className="text-right">
             <p className="text-[10px] font-black uppercase text-white/40 tracking-widest">Empresa Requisitante</p>
@@ -286,10 +338,90 @@ interface SAPConfig {
 }
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [fbUser, fbLoading] = useAuthState(auth);
+  const [isSAPLoggedIn, setIsSAPLoggedIn] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [sapUser, setSapUser] = useState<any>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [portalDocEntry, setPortalDocEntry] = useState<number | null>(null);
+
+  // Auth & Sync Logic
+  useEffect(() => {
+    if (fbUser) {
+      syncUserProfile(fbUser);
+    } else if (!fbLoading) {
+      setIsSAPLoggedIn(false);
+      setUserProfile(null);
+      setSapUser(null);
+    }
+  }, [fbUser, fbLoading]);
+
+  const syncUserProfile = async (user: any) => {
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      let profileData: any;
+      if (!userSnap.exists()) {
+        const isAdmin = user.email === 'sap.qualitech@qualitechirm.com';
+        profileData = {
+          uid: user.uid,
+          email: user.email,
+          role: isAdmin ? 'admin' : 'user',
+          status: isAdmin ? 'approved' : 'pending',
+          createdAt: serverTimestamp(),
+          sapEmail: isAdmin ? 'manager' : '', // Initial placeholder if admin (searching by UserCode now)
+          sapCompany: 'SBO_QUALITECH_IRML'
+        };
+        await setDoc(userRef, profileData);
+      } else {
+        profileData = userSnap.data();
+      }
+      
+      setUserProfile(profileData);
+
+      // If approved, attempt SAP login automatically
+      if (profileData.status === 'approved' && profileData.sapEmail && profileData.sapCompany) {
+        handleSAPVerification(profileData.sapEmail, profileData.sapCompany);
+      }
+    } catch (error) {
+      console.error('Error syncing profile:', error);
+      toast.error('Erro ao sincronizar perfil de usuário.');
+    }
+  };
+
+  const handleSAPVerification = async (email: string, company: string) => {
+    setIsLoading(true);
+    try {
+      const result = await sapService.login(email.trim(), company.trim());
+      if (result.success) {
+        setSapUser(result.user);
+        setIsSAPLoggedIn(true);
+      }
+    } catch (error: any) {
+      console.error('SAP verification failed:', error);
+      const errorMessage = error.response?.data?.error || 'Erro de autenticação';
+      const errorDetails = error.response?.data?.details || 'Verifique seus dados e tente novamente.';
+      const sapRaw = error.response?.data?.sapRaw;
+      const targetDB = error.response?.data?.targetDB;
+
+      toast.error(
+        <div className="flex flex-col gap-1 max-w-xs">
+          <p className="font-bold text-[10px] uppercase tracking-wider text-red-500">{errorMessage}</p>
+          <p className="text-[9px] opacity-80 leading-tight">{errorDetails}</p>
+          {targetDB && <p className="text-[8px] font-mono opacity-60">DB: {targetDB}</p>}
+          {sapRaw && (
+            <div className="mt-2 p-1 bg-black/5 rounded font-mono text-[8px] break-all overflow-hidden max-h-24 overflow-y-auto">
+              DEBUG_INFO: {typeof sapRaw === 'string' ? sapRaw : JSON.stringify(sapRaw)}
+            </div>
+          )}
+        </div>,
+        { duration: 10000 }
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Detect Portal Route on Mount
   useEffect(() => {
@@ -300,7 +432,7 @@ export default function App() {
     if (portal === 'quotation' && id) {
       setPortalDocEntry(parseInt(id));
       setCurrentView('quotation-portal');
-      setIsLoggedIn(true); // Bypass main login for the public portal
+      setIsSAPLoggedIn(true); // Bypass main login for the public portal
     }
   }, []);
   const [selectedOrderEntry, setSelectedOrderEntry] = useState<number | null>(null);
@@ -312,8 +444,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Login State
+  const [isRegistering, setIsRegistering] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
-  const [loginCompany, setLoginCompany] = useState('SBO_QUALITECH_QAS');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginCompany, setLoginCompany] = useState('SBO_QUALITECH_IRML');
 
   // SAP Config State
   const [sapConfig, setSapConfig] = useState<SAPConfig>(() => {
@@ -333,6 +467,7 @@ export default function App() {
       calibration: true,
       costs: true,
       quotations: true,
+      salesOrders: true,
       approvals: true
     };
 
@@ -348,6 +483,19 @@ export default function App() {
     config.modules = mergedModules;
     return config;
   });
+  // User active modules permission logic (userProfile module configuration takes priority)
+  const activeModules = {
+    procurement: userProfile?.modules?.procurement ?? sapConfig.modules?.procurement ?? true,
+    salesOrders: userProfile?.modules?.salesOrders ?? sapConfig.modules?.salesOrders ?? true,
+    quotations: userProfile?.modules?.quotations ?? sapConfig.modules?.quotations ?? true,
+    negotiations: userProfile?.modules?.negotiations ?? sapConfig.modules?.negotiations ?? (userProfile?.modules?.quotations ?? true),
+    approvals: userProfile?.modules?.approvals ?? sapConfig.modules?.approvals ?? true,
+    quality: userProfile?.modules?.quality ?? sapConfig.modules?.quality ?? true,
+    maintenance: userProfile?.modules?.maintenance ?? sapConfig.modules?.maintenance ?? true,
+    calibration: userProfile?.modules?.calibration ?? sapConfig.modules?.calibration ?? true,
+    costs: userProfile?.modules?.costs ?? sapConfig.modules?.costs ?? true,
+  };
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const saveSapConfig = () => {
@@ -360,23 +508,26 @@ export default function App() {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const result = await sapService.login(loginEmail.trim(), loginCompany.trim());
-      if (result.success) {
-        setUser(result.user);
-        setIsLoggedIn(true);
-        toast.success(`Bem-vindo, ${result.user.name}!`);
+      if (isRegistering) {
+        await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
+        toast.success('Conta criada com sucesso! Aguarde aprovação do administrador.');
+        setIsRegistering(false);
+      } else {
+        await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+        toast.success('Login efetuado na plataforma.');
       }
     } catch (error: any) {
-      const msg = error.response?.data?.error || 'Erro ao realizar login.';
-      toast.error(msg);
+      toast.error(error.message || 'Erro de autenticação.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setIsLoggedIn(false);
-    setUser(null);
+  const handleLogout = async () => {
+    await signOut(auth);
+    setIsSAPLoggedIn(false);
+    setSapUser(null);
+    setUserProfile(null);
     setCurrentView('dashboard');
     setSelectedOrderEntry(null);
     setSelectedRequestEntry(null);
@@ -423,11 +574,15 @@ export default function App() {
     return <SupplierPortalView docEntry={portalDocEntry} />;
   }
 
-  if (!isLoggedIn) {
+  if (fbLoading) {
+    return <div className="min-h-screen flex items-center justify-center bg-evo-bg"><Loader2 className="animate-spin text-evo-teal w-12 h-12" /></div>;
+  }
+
+  if (!fbUser) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 relative overflow-hidden font-sans">
+      <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
         {/* Background Accent */}
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-[#1b2a4e] skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
+        <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
         
         <motion.div 
           initial={{ opacity: 0, x: -20 }}
@@ -435,138 +590,87 @@ export default function App() {
           className="w-full max-w-md relative z-10"
         >
           <div className="mb-8 flex flex-col items-center lg:items-start">
-            <div className="bg-[#1b2a4e] p-3 rounded-lg shadow-xl mb-4 border border-blue-400/20">
-              <Package className="text-[#0078bd] w-10 h-10" />
+            <div className="mb-4">
+              <Logo size="xl" />
             </div>
-            <h1 className="text-4xl font-extrabold tracking-tight text-[#1b2a4e]">QUALITECH</h1>
-            <p className="text-xs uppercase tracking-[0.3em] font-bold text-[#0078bd]">Portal Corporativo SAP</p>
+            <h1 className="text-4xl font-bold tracking-tighter text-evo-dark uppercase">QUALITECH</h1>
+            <p className="text-xs uppercase tracking-[0.4em] font-bold text-evo-teal">Procurement Service Portal</p>
           </div>
 
-          <Card className="shadow-2xl border-slate-200 overflow-hidden bg-white">
-            <div className="h-1.5 bg-[#0078bd] w-full" />
-            <CardHeader className="pb-4">
-              <CardTitle className="text-xl font-bold text-[#1b2a4e] uppercase tracking-tight">Autenticação</CardTitle>
-              <CardDescription className="text-xs uppercase tracking-wider font-medium text-slate-500">Acesse sua conta SAP Business One</CardDescription>
+          <Card className="shadow-2xl border-none overflow-hidden">
+            <div className="h-1 bg-evo-teal w-full" />
+            <CardHeader>
+              <CardTitle className="text-xl font-bold text-evo-dark uppercase tracking-tight">
+                {isRegistering ? 'Criar Nova Conta' : 'Autenticação'}
+              </CardTitle>
+              <CardDescription className="text-xs uppercase tracking-widest font-medium opacity-60">
+                {isRegistering ? 'Registre-se para solicitar acesso' : 'Acesse o portal de serviços'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleLogin} className="space-y-5">
                 <div className="space-y-1.5">
-                  <Label htmlFor="email" className="text-[10px] font-bold uppercase tracking-widest text-slate-600 ml-1">E-mail Corporativo</Label>
+                  <Label htmlFor="email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail Corporativo</Label>
                   <Input 
                     id="email" 
                     type="email" 
-                    placeholder="usuario@qualitech.com.br" 
-                    className="h-11 border-slate-200 bg-slate-50/70 focus:bg-white transition-all text-sm rounded-md"
+                    placeholder="usuario@empresa.com" 
+                    className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     required
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="company" className="text-[10px] font-bold uppercase tracking-widest text-slate-600 ml-1">Base de Dados (CompanyDB)</Label>
+                  <Label htmlFor="pass" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Senha de Acesso</Label>
                   <Input 
-                    id="company" 
-                    placeholder="SBO_QUALITECH_PROD" 
-                    className="h-11 border-slate-200 bg-slate-50/70 focus:bg-white transition-all text-sm rounded-md"
-                    value={loginCompany}
-                    onChange={(e) => setLoginCompany(e.target.value)}
+                    id="pass" 
+                    type="password"
+                    placeholder="••••••••" 
+                    className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
                     required
                   />
                 </div>
                 <Button 
                   type="submit" 
-                  className="w-full h-11 bg-[#0078bd] hover:bg-[#005a8f] text-white font-bold uppercase tracking-wider text-xs transition-all shadow-md rounded-md" 
+                  className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs transition-all shadow-lg rounded-none" 
                   disabled={isLoading}
                 >
-                  {isLoading ? 'Verificando credenciais...' : 'Acessar Sistema Qualitech'}
+                  {isLoading ? 'Processando...' : isRegistering ? 'Registrar Agora' : 'Acessar Sistema'}
                 </Button>
-              </form>
 
-              <div className="mt-6 pt-5 border-t border-slate-100 flex justify-center">
-                <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-                  <DialogTrigger 
-                    render={
-                      <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-[#0078bd] gap-2 transition-all">
-                        <Settings className="w-3.5 h-3.5" />
-                        Configurações Técnicas SAP
-                      </Button>
-                    }
-                  />
-                  <DialogContent className="rounded-lg max-w-md">
-                    <DialogHeader>
-                      <DialogTitle className="tracking-tight font-bold text-[#1b2a4e]">Configurações SAP Service Layer</DialogTitle>
-                      <CardDescription className="text-xs">Ajustes de conexão e módulos do sistema</CardDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">URL do Service Layer</Label>
-                        <Input 
-                          id="sap-url" 
-                          placeholder="https://sap-server:50000/b1s/v1" 
-                          className="rounded-md h-9 text-xs"
-                          value={sapConfig.url}
-                          onChange={(e) => setSapConfig({...sapConfig, url: e.target.value})}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Usuário do Sistema</Label>
-                        <Input 
-                          id="sap-user" 
-                          placeholder="manager" 
-                          className="rounded-md h-9 text-xs"
-                          value={sapConfig.user}
-                          onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Senha do Sistema</Label>
-                        <Input 
-                          id="sap-pass" 
-                          type="password" 
-                          placeholder="••••••••" 
-                          className="rounded-md h-9 text-xs"
-                          value={sapConfig.password}
-                          onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
-                        />
-                      </div>
-                      <div className="space-y-3 pt-3 border-t border-slate-100">
-                        <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Módulos do Portal Qualitech</Label>
-                        <div className="grid grid-cols-2 gap-3">
-                          {[
-                            { id: 'procurement', label: 'Compras / Suprimentos' },
-                            { id: 'approvals', label: 'Centro de Aprovações' },
-                            { id: 'quotations', label: 'Ofertas de Compras' },
-                            { id: 'quality', label: 'Qualidade (QLDADE)' },
-                            { id: 'maintenance', label: 'Manutenção (CAB)' },
-                            { id: 'calibration', label: 'Calibração' },
-                            { id: 'costs', label: 'Gestão de Custos' }
-                          ].map((mod) => (
-                            <div key={mod.id} className="flex items-center space-x-2">
-                              <input 
-                                type="checkbox" 
-                                id={`module-${mod.id}`}
-                                checked={!!sapConfig.modules?.[mod.id]}
-                                onChange={(e) => setSapConfig({
-                                  ...sapConfig, 
-                                  modules: { ...sapConfig.modules, [mod.id]: e.target.checked }
-                                })}
-                                className="w-4 h-4 rounded border-slate-300 text-[#0078bd] focus:ring-[#0078bd] cursor-pointer"
-                              />
-                              <Label htmlFor={`module-${mod.id}`} className="text-xs font-semibold text-slate-700 cursor-pointer">
-                                {mod.label}
-                              </Label>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" className="rounded-md text-xs" onClick={() => setIsSettingsOpen(false)}>Fechar</Button>
-                      <Button onClick={saveSapConfig} className="bg-[#0078bd] hover:bg-[#005a8f] text-white rounded-md text-xs font-semibold">Salvar Configurações</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
+                <div className="relative py-4">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-evo-bg" /></div>
+                  <div className="relative flex justify-center text-[8px] uppercase font-black"><span className="bg-white px-3 text-evo-dark/20 tracking-widest">Ou continue com</span></div>
+                </div>
+
+                <Button 
+                  type="button"
+                  variant="outline"
+                  onClick={() => signInWithGoogle().catch(e => toast.error(e.message))}
+                  className="w-full h-12 border-evo-bg rounded-none text-xs font-bold uppercase tracking-widest gap-3"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="currentColor" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94L5.84 14.1z" />
+                    <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                  Google Account
+                </Button>
+
+                <p className="text-center">
+                  <button 
+                    type="button"
+                    onClick={() => setIsRegistering(!isRegistering)}
+                    className="text-[10px] font-bold uppercase tracking-widest text-evo-teal hover:underline"
+                  >
+                    {isRegistering ? 'Já tenho uma conta? Entrar' : 'Não tem conta? Solicite acesso'}
+                  </button>
+                </p>
+              </form>
             </CardContent>
           </Card>
         </motion.div>
@@ -575,116 +679,304 @@ export default function App() {
     );
   }
 
+  if (!isSAPLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
+        <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
+        
+        <motion.div 
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="w-full max-w-md relative z-10"
+        >
+          <div className="mb-8 flex flex-col items-center lg:items-start">
+            <div className="mb-4">
+              <Logo size="xl" />
+            </div>
+            <h1 className="text-4xl font-bold tracking-tighter text-evo-dark uppercase">QUALITECH</h1>
+            {userProfile?.status === 'approved' ? (
+              <p className="text-xs uppercase tracking-[0.4em] font-bold text-evo-teal">Vínculo SAP Necessário</p>
+            ) : (
+              <p className="text-xs uppercase tracking-[0.4em] font-bold text-amber-500">Acesso Pendente</p>
+            )}
+          </div>
+
+          <Card className="shadow-2xl border-none overflow-hidden">
+            <div className={`h-1 w-full ${userProfile?.status === 'approved' ? 'bg-evo-teal' : 'bg-amber-500'}`} />
+            <CardHeader>
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle className="text-xl font-bold text-evo-dark uppercase tracking-tight">Verificação SAP</CardTitle>
+                  <CardDescription className="text-[10px] uppercase tracking-widest font-medium opacity-60">
+                    Olá, {fbUser.displayName || fbUser.email}
+                  </CardDescription>
+                </div>
+                <Button variant="ghost" size="sm" onClick={handleLogout} className="text-[10px] font-bold uppercase text-red-500 h-6">Sair</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {userProfile?.status === 'approved' ? (
+                <form onSubmit={(e) => { e.preventDefault(); handleSAPVerification(loginEmail, loginCompany); }} className="space-y-5">
+                  <div className="p-4 bg-evo-teal/5 border border-evo-teal/10 text-[10px] font-bold text-evo-teal uppercase leading-relaxed text-center">
+                    Sua conta está aprovada. Vincule seu e-mail do sistema SAP para prosseguir.
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="sap-email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail no SAP</Label>
+                    <Input 
+                      id="sap-email" 
+                      type="email" 
+                      placeholder="manager@empresa.com" 
+                      className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
+                      value={loginEmail || userProfile.sapEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="sap-company" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Company Database</Label>
+                    <Input 
+                      id="sap-company" 
+                      placeholder="SBO_COMPANY" 
+                      className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
+                      value={loginCompany || userProfile.sapCompany}
+                      onChange={(e) => setLoginCompany(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <Button 
+                    type="submit" 
+                    className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs shadow-lg rounded-none" 
+                    disabled={isLoading}
+                  >
+                    {isLoading ? 'Validando Service Layer...' : 'Entrar no ERP'}
+                  </Button>
+
+                  <div className="mt-8 pt-6 border-t border-evo-bg flex justify-center">
+                    <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+                      <DialogTrigger render={
+                        <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 hover:text-evo-teal gap-2 transition-all">
+                          <Settings className="w-3 h-3" />
+                          Configurações Técnicas SAP
+                        </Button>
+                      } />
+                      <DialogContent className="rounded-none max-w-lg">
+                        <DialogHeader>
+                          <DialogTitle className="uppercase tracking-tight font-bold">Configurações SAP Service Layer</DialogTitle>
+                          <CardDescription className="text-[10px] uppercase tracking-widest">Ajustes de infraestrutura e conexão</CardDescription>
+                        </DialogHeader>
+                        <div className="space-y-4 py-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider">URL do Service Layer</Label>
+                            <Input 
+                              id="sap-url" 
+                              placeholder="https://sap-server:50000/b1s/v1" 
+                              className="rounded-none h-10 text-xs"
+                              value={sapConfig.url}
+                              onChange={(e) => setSapConfig({...sapConfig, url: e.target.value})}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider">Usuário do Sistema</Label>
+                            <Input 
+                              id="sap-user" 
+                              placeholder="manager" 
+                              className="rounded-none h-10 text-xs"
+                              value={sapConfig.user}
+                              onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider">Senha do Sistema</Label>
+                            <Input 
+                              id="sap-pass" 
+                              type="password" 
+                              placeholder="••••••••" 
+                              className="rounded-none h-10 text-xs"
+                              value={sapConfig.password}
+                              onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
+                            />
+                          </div>
+                          <div className="space-y-4 pt-4 border-t border-evo-bg">
+                            <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60">Módulos Ativos</Label>
+                            <div className="grid grid-cols-2 gap-4">
+                              {[
+                                { id: 'procurement', label: 'Compras / Suprimentos' },
+                                { id: 'approvals', label: 'Centro de Aprovações' },
+                                { id: 'quotations', label: 'Ofertas de Compras' },
+                                { id: 'quality', label: 'Qualidade (QLDADE)' },
+                                { id: 'maintenance', label: 'Manutenção (CAB)' },
+                                { id: 'calibration', label: 'Calibração' },
+                                { id: 'costs', label: 'Gestão de Custos' }
+                              ].map((mod) => (
+                                <div key={mod.id} className="flex items-center space-x-2">
+                                  <input 
+                                    type="checkbox" 
+                                    id={`module-${mod.id}`}
+                                    checked={!!sapConfig.modules?.[mod.id]}
+                                    onChange={(e) => setSapConfig({
+                                      ...sapConfig, 
+                                      modules: { ...sapConfig.modules, [mod.id]: e.target.checked }
+                                    })}
+                                    className="w-4 h-4 rounded border-gray-300 text-evo-teal focus:ring-evo-teal transition-all cursor-pointer"
+                                  />
+                                  <Label htmlFor={`module-${mod.id}`} className="text-[10px] font-black uppercase tracking-tight cursor-pointer">
+                                    {mod.label}
+                                  </Label>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" className="rounded-none text-xs uppercase tracking-widest" onClick={() => setIsSettingsOpen(false)}>Fechar</Button>
+                          <Button onClick={saveSapConfig} className="bg-evo-teal hover:bg-evo-teal-dark rounded-none text-xs uppercase tracking-widest font-bold">Salvar Configurações</Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-6 py-10 text-center">
+                  <div className="bg-amber-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Clock className="w-10 h-10 text-amber-500 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black uppercase text-evo-dark tracking-tighter">Aguardando Aprovação</h3>
+                    <p className="text-[10px] text-gray-500 font-medium mt-2 px-10 leading-relaxed">
+                      Seu cadastro foi recebido com sucesso. Um administrador irá revisar seu acesso em breve.
+                    </p>
+                  </div>
+                  <Button variant="outline" onClick={handleLogout} className="rounded-none border-evo-bg uppercase text-[10px] font-black tracking-widest px-10">Tentar outra conta</Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+        {userProfile?.role === 'admin' && (
+           <div className="fixed bottom-6 right-6">
+              <Button onClick={() => setIsSAPLoggedIn(true)} className="bg-evo-dark text-white rounded-none border-t-4 border-evo-teal h-14 px-8 font-black uppercase tracking-widest shadow-2xl">
+                 Bypass SAP (Admin Mode)
+              </Button>
+           </div>
+        )}
+        <Toaster position="top-right" />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {/* Qualitech Header */}
-      <header className="bg-[#1b2a4e] text-white flex items-center justify-between px-6 py-2.5 sticky top-0 z-50 shadow-md">
+    <div className="min-h-screen bg-evo-bg flex flex-col font-sans">
+      {/* Evo Style Header */}
+      <header className="evo-header flex items-center justify-between px-6 sticky top-0 z-50">
         <div className="flex items-center gap-8">
           <div className="flex items-center gap-3">
-            <div className="bg-[#0078bd] p-2 rounded-md shadow-sm">
-              <Package className="text-white w-5 h-5" />
-            </div>
+            <Logo size="md" className="bg-white text-evo-teal shadow-none" />
             <div className="flex flex-col leading-none">
-              <span className="font-extrabold text-lg tracking-tight text-white">QUALITECH</span>
-              <span className="text-[9px] uppercase tracking-[0.2em] font-semibold text-blue-200/80">Portal SAP B1</span>
+              <span className="font-bold text-xl tracking-tighter">QUALITECH</span>
+              <span className="text-[8px] uppercase tracking-[0.2em] font-medium opacity-70">Procurement Service</span>
             </div>
           </div>
 
-          <nav className="hidden lg:flex items-center space-x-1">
+          <nav className="hidden lg:flex items-center">
             <button 
               onClick={() => setCurrentView('dashboard')}
-              className={`qualitech-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
+              className={`evo-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
             >
               Dashboard
             </button>
-            {sapConfig.modules?.procurement && (
+            {activeModules.procurement && (
               <button 
                 onClick={() => setCurrentView('create-order')}
-                className={`qualitech-nav-link ${(currentView === 'create-order' || currentView === 'create-request' || currentView === 'create-quotation' || currentView === 'create-down-payment') ? 'active' : ''}`}
+                className={`evo-nav-link ${(currentView === 'create-order' || currentView === 'create-request' || currentView === 'create-quotation' || currentView === 'create-down-payment') ? 'active' : ''}`}
               >
                 Ações
               </button>
             )}
-            {sapConfig.modules?.procurement && (
+            {activeModules.procurement && (
               <button 
                 onClick={() => setCurrentView('list-orders')}
-                className={`qualitech-nav-link ${(currentView === 'list-orders' || currentView === 'list-requests' || currentView === 'list-quotations' || currentView === 'list-down-payments') ? 'active' : ''}`}
+                className={`evo-nav-link ${(currentView === 'list-orders' || currentView === 'list-requests' || currentView === 'list-quotations' || currentView === 'list-down-payments') ? 'active' : ''}`}
               >
                 Consultas
               </button>
             )}
-            {sapConfig.modules?.approvals && (
+            {activeModules.approvals && (
               <button 
                 onClick={() => setCurrentView('approvals')}
-                className={`qualitech-nav-link ${currentView === 'approvals' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'approvals' ? 'active' : ''}`}
               >
                 Aprovações
               </button>
             )}
-            {sapConfig.modules?.quotations && (
+            {activeModules.negotiations && (
               <button 
                 onClick={() => setCurrentView('list-quotations')}
-                className={`qualitech-nav-link ${currentView === 'list-quotations' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'list-quotations' ? 'active' : ''}`}
               >
-                Ofertas
+                Negociações
               </button>
             )}
-            {sapConfig.modules?.quality && (
+            {activeModules.quality && (
               <button 
                 onClick={() => setCurrentView('quality')}
-                className={`qualitech-nav-link ${currentView === 'quality' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'quality' ? 'active' : ''}`}
               >
                 Qualidade
               </button>
             )}
-            {sapConfig.modules?.maintenance && (
+            {activeModules.maintenance && (
               <button 
                 onClick={() => setCurrentView('maintenance')}
-                className={`qualitech-nav-link ${currentView === 'maintenance' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'maintenance' ? 'active' : ''}`}
               >
                 Manutenção
               </button>
             )}
-            {sapConfig.modules?.calibration && (
+            {activeModules.calibration && (
               <button 
                 onClick={() => setCurrentView('calibration')}
-                className={`qualitech-nav-link ${currentView === 'calibration' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'calibration' ? 'active' : ''}`}
               >
                 Calibração
               </button>
             )}
-            {sapConfig.modules?.costs && (
+            {activeModules.costs && (
               <button 
                 onClick={() => setCurrentView('costs')}
-                className={`qualitech-nav-link ${currentView === 'costs' ? 'active' : ''}`}
+                className={`evo-nav-link ${currentView === 'costs' ? 'active' : ''}`}
               >
                 Custos
+              </button>
+            )}
+            {userProfile?.role === 'admin' && (
+              <button 
+                onClick={() => setCurrentView('users')}
+                className={`evo-nav-link ${currentView === 'users' ? 'active' : ''}`}
+              >
+                Administração
               </button>
             )}
           </nav>
         </div>
         
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-2.5 text-xs font-medium text-slate-200">
-            <div className="w-7 h-7 rounded-full bg-blue-900/60 border border-blue-400/30 flex items-center justify-center text-blue-200">
-              <User className="w-3.5 h-3.5" />
-            </div>
-            <span className="hidden md:inline font-semibold">{user?.name}</span>
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider opacity-80">
+            <User className="w-4 h-4 text-evo-teal" />
+            <span className="hidden md:inline">{sapUser?.name || fbUser?.email}</span>
           </div>
           <Button 
             variant="ghost" 
-            size="sm" 
-            className="text-slate-200 hover:text-white hover:bg-white/10 text-xs gap-1.5" 
+            size="icon" 
+            className="text-white hover:bg-white/10" 
             onClick={handleLogout}
             title="Sair"
           >
             <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">Sair</span>
           </Button>
           <Button 
             variant="ghost" 
             size="icon" 
-            className="lg:hidden text-white hover:bg-white/10" 
+            className="lg:hidden text-white" 
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
             <Menu />
@@ -693,11 +985,11 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Qualitech Sidebar */}
+        {/* Evo Sidebar */}
         <aside className={`
           ${sidebarOpen ? 'w-64' : 'w-0 lg:w-16'} 
-          transition-all duration-300 bg-[#1b2a4e] text-white/80 flex flex-col overflow-hidden
-          fixed lg:relative z-40 h-[calc(100vh-4rem)] lg:h-auto border-r border-slate-700/50 shadow-2xl lg:shadow-none
+          transition-all duration-300 bg-evo-dark text-white/70 flex flex-col overflow-hidden
+          fixed lg:relative z-40 h-[calc(100vh-4rem)] lg:h-auto border-r border-white/5 shadow-2xl lg:shadow-none
         `}>
           <nav className="flex-1 py-6">
             <SidebarItem 
@@ -711,7 +1003,7 @@ export default function App() {
               }}
             />
             
-            {sapConfig.modules?.procurement && (
+            {activeModules.procurement && (
               <>
                 <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Compras</div>
                 <SidebarItem 
@@ -761,7 +1053,7 @@ export default function App() {
               </>
             )}
 
-            {sapConfig.modules?.approvals && (
+            {activeModules.approvals && (
               <>
                 <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Aprovações</div>
                 <SidebarItem 
@@ -777,7 +1069,7 @@ export default function App() {
               </>
             )}
 
-            {sapConfig.modules?.quotations && (
+            {activeModules.negotiations && (
               <>
                 <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Negociações</div>
                 <SidebarItem 
@@ -804,11 +1096,11 @@ export default function App() {
               </>
             )}
 
-            {(sapConfig.modules?.quality || sapConfig.modules?.maintenance || sapConfig.modules?.calibration) && (
+            {(activeModules.quality || activeModules.maintenance || activeModules.calibration) && (
               <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Indústria & Qualidade</div>
             )}
             
-            {sapConfig.modules?.quality && (
+            {activeModules.quality && (
               <SidebarItem 
                 icon={<CheckCircle />} 
                 label="Qualidade (QLDADE)" 
@@ -821,7 +1113,7 @@ export default function App() {
               />
             )}
             
-            {sapConfig.modules?.maintenance && (
+            {activeModules.maintenance && (
               <SidebarItem 
                 icon={<Settings />} 
                 label="Manutenção (CAB)" 
@@ -834,7 +1126,7 @@ export default function App() {
               />
             )}
 
-            {sapConfig.modules?.calibration && (
+            {activeModules.calibration && (
               <SidebarItem 
                 icon={<Clock />} 
                 label="Calibração" 
@@ -847,23 +1139,49 @@ export default function App() {
               />
             )}
 
-            {sapConfig.modules?.costs && (
+            {(activeModules.costs || activeModules.quotations || activeModules.salesOrders) && (
               <>
                 <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Gestão</div>
-                <SidebarItem 
-                  icon={<FileText />} 
-                  label="Controle de Custos" 
-                  active={currentView === 'costs'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('costs');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
+                {activeModules.costs && (
+                  <SidebarItem 
+                    icon={<FileText />} 
+                    label="Controle de Custos" 
+                    active={currentView === 'costs'} 
+                    expanded={sidebarOpen}
+                    onClick={() => {
+                      setCurrentView('costs');
+                      if (window.innerWidth < 1024) setSidebarOpen(false);
+                    }}
+                  />
+                )}
+                {activeModules.quotations && (
+                  <SidebarItem 
+                    icon={<FileText />} 
+                    label="Cotações" 
+                    active={currentView === 'quotations'} 
+                    expanded={sidebarOpen}
+                    onClick={() => {
+                      setCurrentView('quotations');
+                      if (window.innerWidth < 1024) setSidebarOpen(false);
+                    }}
+                  />
+                )}
+                {activeModules.salesOrders && (
+                  <SidebarItem 
+                    icon={<ShoppingCart />} 
+                    label="Pedido de Venda" 
+                    active={currentView === 'sales-orders'} 
+                    expanded={sidebarOpen}
+                    onClick={() => {
+                      setCurrentView('sales-orders');
+                      if (window.innerWidth < 1024) setSidebarOpen(false);
+                    }}
+                  />
+                )}
               </>
             )}
 
-            {sapConfig.modules?.procurement && (
+            {activeModules.procurement && (
               <>
                 <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Financeiro</div>
                 <SidebarItem 
@@ -889,6 +1207,22 @@ export default function App() {
                 />
               </>
             )}
+
+            {userProfile?.role === 'admin' && (
+              <>
+                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Administração</div>
+                <SidebarItem 
+                  icon={<Settings />} 
+                  label="Usuários & Acessos" 
+                  active={currentView === 'users'} 
+                  expanded={sidebarOpen}
+                  onClick={() => {
+                    setCurrentView('users');
+                    if (window.innerWidth < 1024) setSidebarOpen(false);
+                  }}
+                />
+              </>
+            )}
           </nav>
           <div className="p-4 border-t border-white/5 text-[9px] uppercase tracking-widest text-white/30 font-bold">
             {sidebarOpen ? 'SAP Business One' : 'B1'}
@@ -898,11 +1232,11 @@ export default function App() {
         {/* Main Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <AnimatePresence mode="wait">
-            {currentView === 'dashboard' && <DashboardView key="dashboard" onViewDetails={handleViewDetails} />}
+            {currentView === 'dashboard' && <DashboardView key="dashboard" onViewDetails={handleViewDetails} activeModules={activeModules} />}
             {currentView === 'create-order' && (
               <CreateOrderView 
                 key="create" 
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'list-orders' && (
@@ -911,7 +1245,7 @@ export default function App() {
                 selectedDocEntry={selectedOrderEntry} 
                 onBack={() => setSelectedOrderEntry(null)}
                 onViewDetails={handleViewDetails}
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-request' && (
@@ -919,7 +1253,7 @@ export default function App() {
                 key="create-request" 
                 title="Nova Solicitação de Compra" 
                 onSubmit={sapService.createPurchaseRequest} 
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'list-requests' && (
@@ -931,7 +1265,7 @@ export default function App() {
                 selectedDocEntry={selectedRequestEntry} 
                 onBack={() => setSelectedRequestEntry(null)}
                 onViewDetails={handleViewRequestDetails}
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-quotation' && (
@@ -939,7 +1273,7 @@ export default function App() {
                 key="create-quotation" 
                 title="Nova Cotação de Compra" 
                 onSubmit={sapService.createPurchaseQuotation} 
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'list-quotations' && (
@@ -951,7 +1285,7 @@ export default function App() {
                 selectedDocEntry={selectedQuotationEntry} 
                 onBack={() => setSelectedQuotationEntry(null)}
                 onViewDetails={handleViewQuotationDetails}
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-down-payment' && (
@@ -959,7 +1293,7 @@ export default function App() {
                 key="create-down-payment" 
                 title="Novo Adiantamento a Fornecedor" 
                 onSubmit={sapService.createPurchaseDownPayment} 
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
                 allowAttachments={true}
               />
             )}
@@ -972,7 +1306,7 @@ export default function App() {
                 selectedDocEntry={selectedDownPaymentEntry} 
                 onBack={() => setSelectedDownPaymentEntry(null)}
                 onViewDetails={handleViewDownPaymentDetails}
-                userEmail={user?.email}
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'approvals' && (
@@ -987,8 +1321,17 @@ export default function App() {
             {currentView === 'costs' && (
               <CostsView key="costs" />
             )}
+            {currentView === 'quotations' && (
+              <QuotationsView key="quotations" />
+            )}
+            {currentView === 'sales-orders' && (
+              <SalesOrdersView key="sales-orders" />
+            )}
             {currentView === 'calibration' && (
               <CalibrationView key="calibration" />
+            )}
+            {currentView === 'users' && userProfile?.role === 'admin' && (
+              <UserManagementView key="users" />
             )}
           </AnimatePresence>
         </main>
@@ -1003,62 +1346,183 @@ function SidebarItem({ icon, label, active, expanded, onClick }: any) {
     <button 
       onClick={onClick}
       className={`
-        w-full flex items-center gap-3.5 px-5 py-2.5 transition-all duration-200 border-l-4
+        w-full flex items-center gap-4 px-6 py-3 transition-all duration-200 border-l-4
         ${active 
-          ? 'bg-blue-500/15 text-white border-[#0078bd] font-semibold' 
-          : 'border-transparent text-slate-300 hover:bg-white/5 hover:text-white'}
+          ? 'bg-white/5 text-white border-evo-teal' 
+          : 'border-transparent hover:bg-white/5 hover:text-white'}
       `}
     >
-      <span className={`shrink-0 transition-colors ${active ? 'text-[#38bdf8]' : 'text-slate-400'}`}>{React.cloneElement(icon, { size: 18 })}</span>
-      {expanded && <span className="text-xs tracking-wide whitespace-nowrap">{label}</span>}
+      <span className={`shrink-0 transition-colors ${active ? 'text-evo-teal' : ''}`}>{React.cloneElement(icon, { size: 18 })}</span>
+      {expanded && <span className="text-xs font-bold uppercase tracking-wider whitespace-nowrap">{label}</span>}
     </button>
   );
 }
 
-function DashboardView({ onViewDetails }: { key?: string, onViewDetails: (id: number, type: string) => void }) {
+function DashboardView({ onViewDetails, activeModules = {} }: { key?: string, onViewDetails: (id: number, type: string) => void, activeModules?: any }) {
   const [stats, setStats] = useState<any>({
     orders: [],
     requests: [],
     quotations: [],
     downpayments: [],
-    approvals: []
+    approvals: [],
+    salesOrders: [],
+    salesQuotations: [],
+    personnelCosts: [],
+    rentalCosts: [],
+    quality: [],
+    maintenance: [],
+    calibration: []
   });
   const [isLoading, setIsLoading] = useState(true);
+
+  const hasProcurement = activeModules.procurement !== false;
+  const hasSalesOrders = activeModules.salesOrders !== false;
+  const hasNegotiations = activeModules.negotiations !== false || activeModules.quotations !== false;
+  const hasApprovals = activeModules.approvals !== false;
+  const hasCosts = activeModules.costs !== false;
+  const hasQuality = activeModules.quality !== false;
+  const hasMaintenance = activeModules.maintenance !== false;
+  const hasCalibration = activeModules.calibration !== false;
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const [orders, requests, quotations, downpayments, approvals] = await Promise.all([
-          sapService.getPurchaseOrders().then(res => res.map((r: any) => ({ ...r, _type: 'order' }))),
-          sapService.getPurchaseRequests().then(res => res.map((r: any) => ({ ...r, _type: 'request' }))),
-          sapService.getPurchaseQuotations().then(res => res.map((r: any) => ({ ...r, _type: 'quotation' }))),
-          sapService.getPurchaseDownPayments().then(res => res.map((r: any) => ({ ...r, _type: 'down-payment' }))),
-          sapService.getApprovalRequests().catch(() => []).then(res => res.map((r: any) => ({ ...r, _type: 'approval' })))
+        const ordersPromise = hasProcurement
+          ? sapService.getPurchaseOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'order' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const requestsPromise = hasProcurement
+          ? sapService.getPurchaseRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'request' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const quotationsPromise = hasNegotiations
+          ? sapService.getPurchaseQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quotation' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const downpaymentsPromise = hasProcurement
+          ? sapService.getPurchaseDownPayments().then(res => (res || []).map((r: any) => ({ ...r, _type: 'down-payment' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const approvalsPromise = hasApprovals
+          ? sapService.getApprovalRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'approval' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const salesOrdersPromise = hasSalesOrders
+          ? sapService.getOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-order' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const salesQuotationsPromise = hasNegotiations
+          ? sapService.getQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-quotation' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const personnelCostsPromise = hasCosts
+          ? sapService.getPersonnelCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'personnel-cost' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const rentalCostsPromise = hasCosts
+          ? sapService.getRentalCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'rental-cost' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const qualityPromise = hasQuality
+          ? sapService.getQualityRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quality' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const maintenancePromise = hasMaintenance
+          ? sapService.getMaintenanceRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'maintenance' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const calibrationPromise = hasCalibration
+          ? sapService.getCalibrationRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'calibration' }))).catch(() => [])
+          : Promise.resolve([]);
+
+        const [
+          orders,
+          requests,
+          quotations,
+          downpayments,
+          approvals,
+          salesOrders,
+          salesQuotations,
+          personnelCosts,
+          rentalCosts,
+          quality,
+          maintenance,
+          calibration
+        ] = await Promise.all([
+          ordersPromise,
+          requestsPromise,
+          quotationsPromise,
+          downpaymentsPromise,
+          approvalsPromise,
+          salesOrdersPromise,
+          salesQuotationsPromise,
+          personnelCostsPromise,
+          rentalCostsPromise,
+          qualityPromise,
+          maintenancePromise,
+          calibrationPromise
         ]);
-        setStats({ orders, requests, quotations, downpayments, approvals });
+
+        setStats({
+          orders,
+          requests,
+          quotations,
+          downpayments,
+          approvals,
+          salesOrders,
+          salesQuotations,
+          personnelCosts,
+          rentalCosts,
+          quality,
+          maintenance,
+          calibration
+        });
       } catch (error) {
-        toast.error('Erro ao carregar estatísticas.');
+        toast.error('Erro ao carregar estatísticas do dashboard.');
       } finally {
         setIsLoading(false);
       }
     };
     fetchStats();
-  }, []);
+  }, [hasProcurement, hasSalesOrders, hasNegotiations, hasApprovals, hasCosts, hasQuality, hasMaintenance, hasCalibration]);
 
-  const totalOrdersValue = stats.orders.reduce((acc: number, curr: any) => acc + (curr.DocTotal || 0), 0);
+  // Financial calculations
+  const totalPurchaseOrdersValue = stats.orders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
+  const totalSalesOrdersValue = stats.salesOrders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
+  const totalSalesQuotationsValue = stats.salesQuotations.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
+  
+  const totalPersonnelCosts = stats.personnelCosts.reduce((acc: number, c: any) => 
+    acc + (Number(c.U_ValorTotal || c.U_TotalCost || c.DocTotal || c.U_SalarioBase) || 0), 0
+  );
+  const totalRentalCosts = stats.rentalCosts.reduce((acc: number, c: any) => 
+    acc + (Number(c.U_ValorTotal || c.U_TotalCost || c.DocTotal || c.U_ValorAluguel) || 0), 0
+  );
+
   const openOrders = stats.orders.filter((o: any) => o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O').length;
   const openQuotations = stats.quotations.filter((o: any) => o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O').length;
   const openRequests = stats.requests.filter((o: any) => o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O').length;
   const pendingApprovals = stats.approvals.filter((a: any) => a.Status === 'W' || a.Status === 'ardPending').length;
 
   const chartData = [
-    { name: 'Pedidos', value: stats.orders.length, color: '#00D1FF' },
-    { name: 'Solicitações', value: stats.requests.length, color: '#3b82f6' },
-    { name: 'Cotações', value: stats.quotations.length, color: '#10b981' },
-    { name: 'Aprovações', value: stats.approvals.length, color: '#f59e0b' },
+    hasCosts ? { name: 'Custos Pessoal', value: Math.round(totalPersonnelCosts), color: '#00D1FF' } : null,
+    hasCosts ? { name: 'Custos Locação', value: Math.round(totalRentalCosts), color: '#3b82f6' } : null,
+    hasSalesOrders ? { name: 'Ped. Venda', value: Math.round(totalSalesOrdersValue), color: '#10b981' } : null,
+    hasNegotiations ? { name: 'Cotações', value: Math.round(totalSalesQuotationsValue), color: '#f59e0b' } : null,
+    hasProcurement ? { name: 'Ped. Compra', value: Math.round(totalPurchaseOrdersValue), color: '#8b5cf6' } : null,
+  ].filter(Boolean) as { name: string; value: number; color: string }[];
+
+  const allowedActivityArrays = [
+    ...(hasProcurement ? [stats.orders, stats.requests, stats.downpayments] : []),
+    ...(hasNegotiations ? [stats.quotations, stats.salesQuotations] : []),
+    ...(hasSalesOrders ? [stats.salesOrders] : []),
+    ...(hasCosts ? [stats.personnelCosts, stats.rentalCosts] : []),
+    ...(hasApprovals ? [stats.approvals] : []),
+    ...(hasQuality ? [stats.quality] : []),
+    ...(hasMaintenance ? [stats.maintenance] : []),
+    ...(hasCalibration ? [stats.calibration] : [])
   ];
 
-  const recentActivity = [...stats.orders, ...stats.requests, ...stats.quotations, ...stats.approvals, ...stats.downpayments]
+  const recentActivity = allowedActivityArrays.flat()
     .sort((a, b) => new Date(b.DocDate || b.CreationDate || 0).getTime() - new Date(a.DocDate || a.CreationDate || 0).getTime())
     .slice(0, 8);
 
@@ -1072,7 +1536,7 @@ function DashboardView({ onViewDetails }: { key?: string, onViewDetails: (id: nu
       <div className="flex flex-col gap-1">
         <h1 className="text-4xl font-black tracking-tighter text-evo-dark uppercase">Visão Geral</h1>
         <div className="h-1.5 w-16 bg-evo-teal rounded-full" />
-        <p className="text-[10px] font-black uppercase tracking-[0.4em] text-evo-dark/30 mt-3 italic">Procurement Intelligence Dashboard</p>
+        <p className="text-[10px] font-black uppercase tracking-[0.4em] text-evo-dark/30 mt-3 italic">Painel Consolidado de Gestão Empresarial</p>
       </div>
 
       {isLoading ? (
@@ -1083,41 +1547,271 @@ function DashboardView({ onViewDetails }: { key?: string, onViewDetails: (id: nu
         </div>
       ) : (
         <>
-          {/* Bento Grid Layout */}
+          {/* Top KPI Bento Grid Layout */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-            <StatCard 
-              title="Solicitações Pendentes" 
-              value={openRequests} 
-              icon={<ShoppingCart />}
-              description="Aguardando virar pedido"
-            />
-            <StatCard 
-              title="Aprovações Ativas" 
-              value={pendingApprovals} 
-              icon={<CheckSquare />}
-              description="Aguardando decisão gestor"
-            />
-            <StatCard 
-              title="Cotações em Aberto" 
-              value={openQuotations} 
-              icon={<ClipboardList />}
-              description="Aguardando fornecedor"
-            />
-            <StatCard 
-              title="Volume de Pedidos" 
-              value={`R$ ${(totalOrdersValue/1000).toFixed(1)}k`} 
-              icon={<TrendingUp />}
-              description="Total em ordens de compra"
-            />
+            {hasCosts && (
+              <StatCard 
+                title="Custos de Pessoal" 
+                value={`R$ ${(totalPersonnelCosts/1000).toFixed(1)}k`} 
+                icon={<Users />}
+                description={`${stats.personnelCosts.length} lançamentos de folha e encargos`}
+              />
+            )}
+            {hasCosts && (
+              <StatCard 
+                title="Custos de Locação" 
+                value={`R$ ${(totalRentalCosts/1000).toFixed(1)}k`} 
+                icon={<Building />}
+                description={`${stats.rentalCosts.length} imóveis e instalações`}
+              />
+            )}
+            {hasSalesOrders && (
+              <StatCard 
+                title="Pedidos de Venda" 
+                value={`R$ ${(totalSalesOrdersValue/1000).toFixed(1)}k`} 
+                icon={<ShoppingCart />}
+                description={`${stats.salesOrders.length} pedidos de venda ativos`}
+              />
+            )}
+            {hasNegotiations && (
+              <StatCard 
+                title="Cotações de Venda" 
+                value={`R$ ${(totalSalesQuotationsValue/1000).toFixed(1)}k`} 
+                icon={<ClipboardList />}
+                description={`${stats.salesQuotations.length} cotações em negociação`}
+              />
+            )}
+            {hasProcurement && (
+              <StatCard 
+                title="Volume de Compras" 
+                value={`R$ ${(totalPurchaseOrdersValue/1000).toFixed(1)}k`} 
+                icon={<TrendingUp />}
+                description={`${stats.orders.length} ordens de compra em suprimentos`}
+              />
+            )}
+            {hasProcurement && (
+              <StatCard 
+                title="Solicitações Pendentes" 
+                value={openRequests} 
+                icon={<FileText />}
+                description="Aguardando cotação/pedido"
+              />
+            )}
+            {hasApprovals && (
+              <StatCard 
+                title="Aprovações Ativas" 
+                value={pendingApprovals} 
+                icon={<CheckSquare />}
+                description="Aguardando decisão gestor"
+              />
+            )}
           </div>
 
+          {/* DETAILED DASHBOARD SECTION: CONTROLE DE CUSTOS */}
+          {hasCosts && (
+            <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5">
+              <CardHeader className="bg-evo-dark px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Controle de Custos Detalhado</CardTitle>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Análise de Custos de Pessoal, Encargos e Locação de Imóveis</p>
+                </div>
+                <Badge className="bg-evo-teal text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo de Custos</Badge>
+              </CardHeader>
+              <CardContent className="p-8 space-y-8">
+                {/* Metrics Row */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  <div className="bg-evo-bg/50 p-6 border-l-4 border-evo-teal">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Custos de Pessoal</p>
+                    <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalPersonnelCosts.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                    <p className="text-[9px] font-bold text-evo-teal mt-1">{stats.personnelCosts.length} lançamentos registrados</p>
+                  </div>
+                  <div className="bg-evo-bg/50 p-6 border-l-4 border-blue-500">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Custos de Locação</p>
+                    <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalRentalCosts.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                    <p className="text-[9px] font-bold text-blue-500 mt-1">{stats.rentalCosts.length} contratos / unidades</p>
+                  </div>
+                  <div className="bg-evo-bg/50 p-6 border-l-4 border-indigo-500">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Consolidado Geral de Custos</p>
+                    <p className="text-2xl font-black text-evo-dark mt-1">R$ {(totalPersonnelCosts + totalRentalCosts).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                    <p className="text-[9px] font-bold text-indigo-500 mt-1">Soma de saídas de pessoal e locação</p>
+                  </div>
+                  <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Distribuição Pessoal vs Locação</p>
+                    <p className="text-2xl font-black text-evo-dark mt-1">
+                      {totalPersonnelCosts + totalRentalCosts > 0 
+                        ? `${Math.round((totalPersonnelCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}% / ${Math.round((totalRentalCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}%`
+                        : '0% / 0%'}
+                    </p>
+                    <p className="text-[9px] font-bold text-amber-500 mt-1">Proporção no orçamento total</p>
+                  </div>
+                </div>
+
+                {/* Charts & Breakdown */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Composição de Gastos (R$)</h4>
+                    <div className="h-[250px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={[
+                          { category: 'Custos de Pessoal', valor: totalPersonnelCosts },
+                          { category: 'Custos de Locação', valor: totalRentalCosts }
+                        ]}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                          <XAxis dataKey="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800 }} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 700 }} />
+                          <Tooltip formatter={(value: any) => [`R$ ${Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Valor Total']} />
+                          <Bar dataKey="valor" radius={[0, 0, 0, 0]} barSize={60}>
+                            <Cell fill="#00D1FF" />
+                            <Cell fill="#3b82f6" />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Últimos Lançamentos de Custos</h4>
+                    <div className="divide-y divide-evo-bg max-h-[250px] overflow-y-auto border border-evo-bg">
+                      {[...stats.personnelCosts, ...stats.rentalCosts]
+                        .sort((a, b) => new Date(b.DocDate || b.CreationDate || 0).getTime() - new Date(a.DocDate || a.CreationDate || 0).getTime())
+                        .slice(0, 5)
+                        .map((c: any, i: number) => {
+                          const isPersonnel = c._type === 'personnel-cost';
+                          const name = c.U_NomeColaborador || c.U_Colaborador || c.U_Imovel || c.U_TipoContrato || `Lançamento #${c.DocEntry}`;
+                          const val = Number(c.U_ValorTotal || c.U_TotalCost || c.DocTotal || c.U_SalarioBase || c.U_ValorAluguel || 0);
+                          return (
+                            <div key={i} className="p-4 flex items-center justify-between hover:bg-evo-teal/5 transition-colors">
+                              <div className="flex items-center gap-3">
+                                <div className={`p-2 text-white ${isPersonnel ? 'bg-evo-teal' : 'bg-blue-500'}`}>
+                                  {isPersonnel ? <Users className="w-3.5 h-3.5" /> : <Building className="w-3.5 h-3.5" />}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-evo-dark">{name}</p>
+                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isPersonnel ? 'Custo de Pessoal' : 'Custo de Locação'}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-black text-evo-dark">R$ {val.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {[...stats.personnelCosts, ...stats.rentalCosts].length === 0 && (
+                        <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-evo-dark/30 italic">Nenhum lançamento de custo encontrado</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* DETAILED DASHBOARD SECTION: VENDAS & NEGOCIAÇÕES */}
+          {(hasSalesOrders || hasNegotiations) && (
+            <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5">
+              <CardHeader className="bg-evo-dark px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Análise de Vendas & Negociações</CardTitle>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Acompanhamento Comercial de Pedidos de Venda e Cotações</p>
+                </div>
+                <Badge className="bg-emerald-500 text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo Comercial</Badge>
+              </CardHeader>
+              <CardContent className="p-8 space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {hasSalesOrders && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-emerald-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Pedidos de Venda</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalSalesOrdersValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-[9px] font-bold text-emerald-500 mt-1">{stats.salesOrders.length} pedidos de venda</p>
+                    </div>
+                  )}
+                  {hasSalesOrders && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-teal-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Ticket Médio de Venda</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">
+                        R$ {stats.salesOrders.length > 0 ? (totalSalesOrdersValue / stats.salesOrders.length).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                      </p>
+                      <p className="text-[9px] font-bold text-teal-500 mt-1">Valor médio por pedido</p>
+                    </div>
+                  )}
+                  {hasNegotiations && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Volume Cotações de Venda</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalSalesQuotationsValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-[9px] font-bold text-amber-500 mt-1">{stats.salesQuotations.length} cotações ativas</p>
+                    </div>
+                  )}
+                  {hasNegotiations && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-indigo-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total de Oportunidades</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">{stats.salesOrders.length + stats.salesQuotations.length}</p>
+                      <p className="text-[9px] font-bold text-indigo-500 mt-1">Documentos comerciais</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Volume Comercial por Categoria (R$)</h4>
+                    <div className="h-[240px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={[
+                          ...(hasSalesOrders ? [{ name: 'Pedidos de Venda', valor: totalSalesOrdersValue }] : []),
+                          ...(hasNegotiations ? [{ name: 'Cotações de Venda', valor: totalSalesQuotationsValue }] : [])
+                        ]}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800 }} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 700 }} />
+                          <Tooltip formatter={(val: any) => [`R$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Valor Total']} />
+                          <Bar dataKey="valor" fill="#10b981" barSize={50} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Últimos Pedidos & Cotações de Venda</h4>
+                    <div className="divide-y divide-evo-bg max-h-[240px] overflow-y-auto border border-evo-bg">
+                      {[...stats.salesOrders, ...stats.salesQuotations]
+                        .sort((a, b) => new Date(b.DocDate || b.CreationDate || 0).getTime() - new Date(a.DocDate || a.CreationDate || 0).getTime())
+                        .slice(0, 5)
+                        .map((doc: any, i: number) => {
+                          const isOrder = doc._type === 'sales-order';
+                          return (
+                            <div key={i} className="p-4 flex items-center justify-between hover:bg-emerald-500/5 transition-colors">
+                              <div className="flex items-center gap-3">
+                                <div className={`p-2 text-white ${isOrder ? 'bg-emerald-500' : 'bg-amber-500'}`}>
+                                  {isOrder ? <ShoppingCart className="w-3.5 h-3.5" /> : <ClipboardList className="w-3.5 h-3.5" />}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-evo-dark">{doc.CardName || `Cliente #${doc.CardCode || doc.DocEntry}`}</p>
+                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isOrder ? 'Pedido de Venda' : 'Cotação de Venda'} #{doc.DocEntry}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-black text-evo-dark">R$ {(Number(doc.DocTotal) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {[...stats.salesOrders, ...stats.salesQuotations].length === 0 && (
+                        <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-evo-dark/30 italic">Nenhum documento comercial encontrado</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* GLOBAL VOLUME CHART AND RECENT ACTIVITY STREAM */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             {/* Main analytics plate */}
             <Card className="evo-card border-none lg:col-span-7 overflow-hidden">
               <CardHeader className="bg-evo-dark px-8 py-6">
-                <CardTitle className="text-[10px] font-black uppercase tracking-[0.3em] text-white/40">Distribuição de Volume por Módulo</CardTitle>
+                <CardTitle className="text-[10px] font-black uppercase tracking-[0.3em] text-white/40">Distribuição Consolidada de Volume por Módulo</CardTitle>
               </CardHeader>
-              <CardContent className="h-[400px] pt-10">
+              <CardContent className="h-[380px] pt-10">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
@@ -1135,6 +1829,7 @@ function DashboardView({ onViewDetails }: { key?: string, onViewDetails: (id: nu
                     <Tooltip 
                       cursor={{ fill: '#f8fafc' }} 
                       contentStyle={{ borderRadius: '0', border: '1px solid #f0f0f0', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
+                      formatter={(val: any) => [`R$ ${Number(val).toLocaleString('pt-BR')}`, 'Volume (R$)']}
                     />
                     <Bar dataKey="value" radius={[0, 0, 0, 0]} barSize={50}>
                       {chartData.map((entry, index) => (
@@ -1162,12 +1857,18 @@ function DashboardView({ onViewDetails }: { key?: string, onViewDetails: (id: nu
                         </div>
                         <div>
                           <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">Ref. #{activity.DocEntry}</p>
-                          <p className="text-[9px] font-bold text-evo-teal/60 uppercase tracking-widest truncate max-w-[200px]">{activity.CardName || activity.RequesterName || '-'}</p>
-                          <p className="text-[9px] font-bold text-evo-dark/30 uppercase tracking-widest">{new Date(activity.DocDate || activity.CreationDate || 0).toLocaleDateString('pt-BR')}</p>
+                          <p className="text-[9px] font-bold text-evo-teal/60 uppercase tracking-widest truncate max-w-[200px]">
+                            {activity.CardName || activity.RequesterName || activity.U_NomeColaborador || activity.U_Imovel || '-'}
+                          </p>
+                          <p className="text-[9px] font-bold text-evo-dark/30 uppercase tracking-widest">
+                            {new Date(activity.DocDate || activity.CreationDate || 0).toLocaleDateString('pt-BR')}
+                          </p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-xs font-black text-evo-dark">R$ {activity.DocTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                        <p className="text-xs font-black text-evo-dark">
+                          R$ {(activity.DocTotal || activity.U_ValorTotal || activity.U_TotalCost || activity.U_SalarioBase || activity.U_ValorAluguel || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </p>
                         <Button 
                           variant="ghost" 
                           size="icon" 
@@ -2507,13 +3208,11 @@ function ApprovalsView() {
                   {activeTab === 'W' && (
                     <TableCell className="px-6 py-5 text-right">
                       <Sheet>
-                        <SheetTrigger 
-                          render={
-                            <Button variant="outline" size="sm" className="h-9 rounded-none border-evo-bg uppercase text-[9px] font-black tracking-widest text-evo-teal hover:bg-evo-teal hover:text-white transition-all px-4">
-                              Decidir
-                            </Button>
-                          }
-                        />
+                        <SheetTrigger render={
+                          <Button variant="outline" size="sm" className="h-9 rounded-none border-evo-bg uppercase text-[9px] font-black tracking-widest text-evo-teal hover:bg-evo-teal hover:text-white transition-all px-4">
+                            Decidir
+                          </Button>
+                        } />
                         <SheetContent className="rounded-none sm:max-w-md">
                           <SheetHeader>
                             <SheetTitle className="uppercase tracking-tight font-black">Decisão de Workflow</SheetTitle>
@@ -2642,7 +3341,9 @@ function QualityView() {
         </div>
         
         <Dialog>
-          <DialogTrigger render={<Button className="evo-button-primary shadow-xl">Nova Avaliação</Button>} />
+          <DialogTrigger render={
+            <Button className="evo-button-primary shadow-xl">Nova Avaliação</Button>
+          } />
           <DialogContent className="max-w-2xl rounded-none">
             <DialogHeader>
               <DialogTitle className="uppercase tracking-tight font-black">Registro de Qualidade (QLT_QLDADE)</DialogTitle>
@@ -2737,7 +3438,9 @@ function QualityView() {
               </div>
 
               <DialogFooter>
-                <DialogClose render={<Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>} />
+                <DialogClose render={
+                  <Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
+                } />
                 <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none">
                   {isSubmitLoading ? 'Gravando...' : 'Gravar Avaliação'}
                 </Button>
@@ -2886,7 +3589,9 @@ function MaintenanceView() {
         </div>
         
         <Dialog>
-          <DialogTrigger render={<Button className="evo-button-primary shadow-xl">Registrar Intervenção</Button>} />
+          <DialogTrigger render={
+            <Button className="evo-button-primary shadow-xl">Registrar Intervenção</Button>
+          } />
           <DialogContent className="max-w-4xl rounded-none">
             <DialogHeader>
               <DialogTitle className="uppercase tracking-tight font-black">Nova Manutenção (QLT_CAB)</DialogTitle>
@@ -2998,7 +3703,9 @@ function MaintenanceView() {
               </div>
 
               <DialogFooter>
-                <DialogClose render={<Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>} />
+                <DialogClose render={
+                  <Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
+                } />
                 <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none">
                   {isSubmitLoading ? 'Gravando...' : 'Gravar Registro'}
                 </Button>
@@ -3086,7 +3793,9 @@ function MaintenanceView() {
                     <TableCell className="px-6 py-4 uppercase font-bold text-[10px] text-evo-dark/60">{cal.U_Lab}</TableCell>
                     <TableCell className="px-6 py-4 font-black text-rose-500">{cal.U_MajorErro || cal.U_MaiorErro || 0}%</TableCell>
                     <TableCell className="px-6 py-4">
-                      <Badge className="rounded-none bg-evo-dark text-white text-[9px] font-black px-2 py-0.5">{cal.U_StatusCal}</Badge>
+                      <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${cal.U_Status?.toLowerCase().includes('ok') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {cal.U_Status || 'OK'}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -3105,7 +3814,11 @@ function CostsView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitLoading, setIsSubmitLoading] = useState(false);
   
-  const [formData, setFormData] = useState({
+  const [isPersDialogOpen, setIsPersDialogOpen] = useState(false);
+  const [isRentalDialogOpen, setIsRentalDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const initialPersForm = {
     U_DataInicial: new Date().toISOString().split('T')[0],
     U_DataFinal: new Date().toISOString().split('T')[0],
     U_Colaborador: '',
@@ -3118,23 +3831,9 @@ function CostsView() {
     U_HExtraDiu: 0,
     U_HExtraNot: 0,
     U_Total: 0
-  });
-
-  const calculateTotal = () => {
-    const total = (Number(formData.U_VlNormal) * Number(formData.U_QtdDiariasNormal)) + 
-                (Number(formData.U_StandByRate) * Number(formData.U_QtdDiariasStandBy)) + 
-                (Number(formData.U_NoturnoNor) * 10) + // Example weight
-                (Number(formData.U_NoturnoNob) * 15) + 
-                (Number(formData.U_HExtraDiu) * 12) + 
-                (Number(formData.U_HExtraNot) * 18);
-    setFormData(prev => ({ ...prev, U_Total: total }));
   };
 
-  useEffect(() => {
-    calculateTotal();
-  }, [formData.U_VlNormal, formData.U_StandByRate, formData.U_QtdDiariasNormal, formData.U_QtdDiariasStandBy, formData.U_NoturnoNor, formData.U_NoturnoNob, formData.U_HExtraDiu, formData.U_HExtraNot]);
-
-  const [rentalFormData, setRentalFormData] = useState({
+  const initialRentalForm = {
     U_DataInicial: new Date().toISOString().split('T')[0],
     U_DataFinal: new Date().toISOString().split('T')[0],
     U_Recurso: '',
@@ -3144,7 +3843,38 @@ function CostsView() {
     U_HENor: 0,
     U_HENob: 0,
     U_Total: 0
-  });
+  };
+
+  const [formData, setFormData] = useState(initialPersForm);
+  const [rentalFormData, setRentalFormData] = useState(initialRentalForm);
+
+  const calculateTotal = () => {
+    const H = Number(formData.U_VlNormal);
+    const I = H * 0.5; // Auto-calculate Stand-by Rate (50%)
+    const J = Number(formData.U_QtdDiariasNormal);
+    const K = Number(formData.U_QtdDiariasStandBy);
+    const L = Number(formData.U_NoturnoNor);
+    const M = Number(formData.U_NoturnoNob);
+    const N = Number(formData.U_HExtraDiu);
+    const O = Number(formData.U_HExtraNot);
+
+    const total = (J * H) + 
+                (I * K) + 
+                (L * H * 0.08) + 
+                (L * H) + 
+                (M * I) + 
+                ((H / 12 * 1.5) * N) + 
+                ((H / 12 * O) * 0.08) + 
+                ((H / 12 * 1.5) * O);
+                
+    if (formData.U_StandByRate !== I || formData.U_Total !== total) {
+      setFormData(prev => ({ ...prev, U_StandByRate: I, U_Total: total }));
+    }
+  };
+
+  useEffect(() => {
+    calculateTotal();
+  }, [formData.U_VlNormal, formData.U_StandByRate, formData.U_QtdDiariasNormal, formData.U_QtdDiariasStandBy, formData.U_NoturnoNor, formData.U_NoturnoNob, formData.U_HExtraDiu, formData.U_HExtraNot]);
 
   const calculateRentalTotal = () => {
     const total = (Number(rentalFormData.U_ValorBase) * (Number(rentalFormData.U_HorasNor) + Number(rentalFormData.U_HorasNob))) + 
@@ -3155,7 +3885,7 @@ function CostsView() {
 
   useEffect(() => {
     calculateRentalTotal();
-  }, [rentalFormData.U_ValorBase, rentalFormData.U_HorasNor, rentalFormData.U_HorasNob, rentalFormData.HENor, rentalFormData.HENob]);
+  }, [rentalFormData.U_ValorBase, rentalFormData.U_HorasNor, rentalFormData.U_HorasNob, rentalFormData.U_HENor, rentalFormData.U_HENob]);
 
   useEffect(() => {
     fetchCosts();
@@ -3181,23 +3911,17 @@ function CostsView() {
     e.preventDefault();
     setIsSubmitLoading(true);
     try {
-      await sapService.createPersonnelCost(formData);
-      toast.success('Custo de pessoal registrado com sucesso!');
+      if (editingId) {
+        await sapService.updatePersonnelCost(editingId, formData);
+        toast.success('Custo de pessoal atualizado com sucesso!');
+      } else {
+        await sapService.createPersonnelCost(formData);
+        toast.success('Custo de pessoal registrado com sucesso!');
+      }
       fetchCosts();
-      setFormData({
-        U_DataInicial: new Date().toISOString().split('T')[0],
-        U_DataFinal: new Date().toISOString().split('T')[0],
-        U_Colaborador: '',
-        U_VlNormal: 0,
-        U_StandByRate: 0,
-        U_QtdDiariasNormal: 0,
-        U_QtdDiariasStandBy: 0,
-        U_NoturnoNor: 0,
-        U_NoturnoNob: 0,
-        U_HExtraDiu: 0,
-        U_HExtraNot: 0,
-        U_Total: 0
-      });
+      setIsPersDialogOpen(false);
+      setFormData(initialPersForm);
+      setEditingId(null);
     } catch (error) {
       toast.error('Erro ao salvar registro de custo.');
     } finally {
@@ -3209,24 +3933,78 @@ function CostsView() {
     e.preventDefault();
     setIsSubmitLoading(true);
     try {
-      await sapService.createRentalCost(rentalFormData);
-      toast.success('Custo de locação registrado com sucesso!');
+      if (editingId) {
+        await sapService.updateRentalCost(editingId, rentalFormData);
+        toast.success('Custo de locação atualizado com sucesso!');
+      } else {
+        await sapService.createRentalCost(rentalFormData);
+        toast.success('Custo de locação registrado com sucesso!');
+      }
       fetchCosts();
-      setRentalFormData({
-        U_DataInicial: new Date().toISOString().split('T')[0],
-        U_DataFinal: new Date().toISOString().split('T')[0],
-        U_Recurso: '',
-        U_ValorBase: 0,
-        U_HorasNor: 0,
-        U_HorasNob: 0,
-        U_HENor: 0,
-        U_HENob: 0,
-        U_Total: 0
-      });
+      setIsRentalDialogOpen(false);
+      setRentalFormData(initialRentalForm);
+      setEditingId(null);
     } catch (error) {
       toast.error('Erro ao salvar registro de locação.');
     } finally {
       setIsSubmitLoading(false);
+    }
+  };
+
+  const handleEditPers = (item: any) => {
+    setFormData({
+      U_DataInicial: item.U_DataInicial?.split('T')[0] || '',
+      U_DataFinal: item.U_DataFinal?.split('T')[0] || '',
+      U_Colaborador: item.U_Colaborador || '',
+      U_VlNormal: item.U_VlNormal || 0,
+      U_StandByRate: item.U_StandByRate || 0,
+      U_QtdDiariasNormal: item.U_QtdDiariasNormal || 0,
+      U_QtdDiariasStandBy: item.U_QtdDiariasStandBy || 0,
+      U_NoturnoNor: item.U_NoturnoNor || 0,
+      U_NoturnoNob: item.U_NoturnoNob || 0,
+      U_HExtraDiu: item.U_HExtraDiu || 0,
+      U_HExtraNot: item.U_HExtraNot || 0,
+      U_Total: item.U_Total || 0
+    });
+    setEditingId(item.DocEntry);
+    setIsPersDialogOpen(true);
+  };
+
+  const handleEditRental = (item: any) => {
+    setRentalFormData({
+      U_DataInicial: item.U_DataInicial?.split('T')[0] || '',
+      U_DataFinal: item.U_DataFinal?.split('T')[0] || '',
+      U_Recurso: item.U_Recurso || '',
+      U_ValorBase: item.U_ValorBase || 0,
+      U_HorasNor: item.U_HorasNor || 0,
+      U_HorasNob: item.U_HorasNob || 0,
+      U_HENor: item.U_HENor || 0,
+      U_HENob: item.U_HENob || 0,
+      U_Total: item.U_Total || 0
+    });
+    setEditingId(item.DocEntry);
+    setIsRentalDialogOpen(true);
+  };
+
+  const handleDeletePers = async (id: number) => {
+    if (!window.confirm('Tem certeza que deseja excluir este registro de pessoal?')) return;
+    try {
+      await sapService.deletePersonnelCost(id);
+      toast.success('Registro excluído com sucesso');
+      fetchCosts();
+    } catch (error) {
+      toast.error('Erro ao excluir registro');
+    }
+  };
+
+  const handleDeleteRental = async (id: number) => {
+    if (!window.confirm('Tem certeza que deseja excluir este registro de locação?')) return;
+    try {
+      await sapService.deleteRentalCost(id);
+      toast.success('Registro excluído com sucesso');
+      fetchCosts();
+    } catch (error) {
+      toast.error('Erro ao excluir registro');
     }
   };
 
@@ -3244,11 +4022,20 @@ function CostsView() {
         </div>
 
         <div className="flex gap-4">
-          <Dialog>
-            <DialogTrigger render={<Button className="evo-button-primary shadow-xl">Novo Custo Pessoal</Button>} />
-            <DialogContent className="max-w-4xl rounded-none">
+          <Dialog open={isPersDialogOpen} onOpenChange={open => {
+            setIsPersDialogOpen(open);
+            if (!open) {
+              setEditingId(null);
+              setFormData(initialPersForm);
+            }
+          }}>
+            <DialogTrigger render={<Button className="evo-button-primary shadow-xl" onClick={() => {
+                setEditingId(null);
+                setFormData(initialPersForm);
+              }} />}>Novo Custo Pessoal</DialogTrigger>
+            <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
-                <DialogTitle className="uppercase tracking-tight font-black">Registro de Custo Pessoal (CUSTOSPESSOAL)</DialogTitle>
+                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Custo Pessoal' : 'Registro de Custo Pessoal (CustosPessoal)'}</DialogTitle>
                 <CardDescription className="text-[10px] uppercase tracking-widest">Lançamento de diárias e horas extras para controle de projetos</CardDescription>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-6 py-4">
@@ -3279,9 +4066,9 @@ function CostsView() {
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Stand-by Rate (R$)</Label>
-                        <Input type="number" step="0.01" value={formData.U_StandByRate} onChange={e => setFormData({...formData, U_StandByRate: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                      <div className="space-y-1.5 opacity-60">
+                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Stand-by Rate (R$) - Automático</Label>
+                        <Input type="number" step="0.01" value={formData.U_StandByRate} readOnly className="rounded-none h-10 border-evo-bg bg-evo-bg/50 cursor-not-allowed" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
@@ -3322,20 +4109,29 @@ function CostsView() {
                 </div>
 
                 <DialogFooter>
-                  <DialogClose render={<Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>} />
+                  <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
                   <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none px-10">
-                    {isSubmitLoading ? 'Gravando...' : 'Gravar Custo'}
+                    {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Custo' : 'Gravar Custo'}
                   </Button>
                 </DialogFooter>
               </form>
             </DialogContent>
           </Dialog>
 
-          <Dialog>
-            <DialogTrigger render={<Button variant="outline" className="rounded-none h-12 uppercase text-[10px] font-black tracking-widest border-evo-dark hover:bg-evo-dark hover:text-white transition-all px-8">Novo Custo Locação</Button>} />
-            <DialogContent className="max-w-4xl rounded-none">
+          <Dialog open={isRentalDialogOpen} onOpenChange={open => {
+            setIsRentalDialogOpen(open);
+            if (!open) {
+              setEditingId(null);
+              setRentalFormData(initialRentalForm);
+            }
+          }}>
+            <DialogTrigger render={<Button variant="outline" className="rounded-none h-12 uppercase text-[10px] font-black tracking-widest border-evo-dark hover:bg-evo-dark hover:text-white transition-all px-8" onClick={() => {
+                setEditingId(null);
+                setRentalFormData(initialRentalForm);
+              }} />}>Novo Custo Locação</DialogTrigger>
+            <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
-                <DialogTitle className="uppercase tracking-tight font-black">Registro de Custo de Locação (CUSTOSLOCACAO)</DialogTitle>
+                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Custo de Locação' : 'Registro de Custo de Locação (CustosLoc)'}</DialogTitle>
                 <CardDescription className="text-[10px] uppercase tracking-widest">Controle de custos de equipamentos e recursos externos</CardDescription>
               </DialogHeader>
               <form onSubmit={handleRentalSubmit} className="space-y-6 py-4">
@@ -3393,9 +4189,9 @@ function CostsView() {
                 </div>
 
                 <DialogFooter>
-                  <DialogClose render={<Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>} />
+                  <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
                   <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none px-10">
-                    {isSubmitLoading ? 'Gravando...' : 'Gravar Locação'}
+                    {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Locação' : 'Gravar Locação'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -3411,22 +4207,33 @@ function CostsView() {
           </CardHeader>
           <Table>
             <TableHeader className="bg-evo-bg/50">
-              <TableRow className="border-evo-bg">
+              <TableRow className="border-evo-bg hover:bg-transparent">
                 <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Data</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Colaborador</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6 text-right">Total (R$)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Total (R$)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6 text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
               ) : personnel.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
               ) : personnel.map((p, i) => (
                 <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                   <TableCell className="px-6 py-4 text-[10px] font-bold">{p.U_DataInicial ? new Date(p.U_DataInicial).toLocaleDateString('pt-BR') : '-'}</TableCell>
                   <TableCell className="px-6 py-4 uppercase font-black text-[10px] text-evo-dark">{p.U_Colaborador || p.U_Colaborador_Nome}</TableCell>
-                  <TableCell className="px-6 py-4 text-right font-black text-xs text-evo-teal">R$ {Number(p.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-6 py-4 font-black text-xs text-evo-teal">R$ {Number(p.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                       <button onClick={() => handleEditPers(p)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
+                         <Edit className="w-3.5 h-3.5" />
+                       </button>
+                       <button onClick={() => handleDeletePers(p.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
+                         <Trash2 className="w-3.5 h-3.5" />
+                       </button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -3439,22 +4246,33 @@ function CostsView() {
           </CardHeader>
           <Table>
             <TableHeader className="bg-evo-bg/50">
-              <TableRow className="border-evo-bg">
+              <TableRow className="border-evo-bg hover:bg-transparent">
                 <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Recurso/Locado</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Valor Base</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6 text-right">Total (R$)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Total (R$)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest px-6 text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
               ) : rental.length === 0 ? (
-                <TableRow><TableCell colSpan={3} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
               ) : rental.map((r, i) => (
                 <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                   <TableCell className="px-6 py-4 uppercase font-black text-[10px] text-evo-dark">{r.U_Recurso || 'LOCAÇÃO EQUIP.'}</TableCell>
                   <TableCell className="px-6 py-4 text-[10px] font-bold text-evo-dark/40">R$ {Number(r.U_ValorBase || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
-                  <TableCell className="px-6 py-4 text-right font-black text-xs text-evo-teal">R$ {Number(r.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-6 py-4 font-black text-xs text-evo-teal">R$ {Number(r.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                       <button onClick={() => handleEditRental(r)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
+                         <Edit className="w-3.5 h-3.5" />
+                       </button>
+                       <button onClick={() => handleDeleteRental(r.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
+                         <Trash2 className="w-3.5 h-3.5" />
+                       </button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -3465,10 +4283,1496 @@ function CostsView() {
   );
 }
 
+function QuotationsView() {
+  const [quotations, setQuotations] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedQuote, setSelectedQuote] = useState<any>(null);
+  const [isOrderLoading, setIsOrderLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  // States for Costs sub-modals
+  const [isPersCostModalOpen, setIsPersCostModalOpen] = useState(false);
+  const [isRentalCostModalOpen, setIsRentalCostModalOpen] = useState(false);
+  const [activeLineIndex, setActiveLineIndex] = useState<number | null>(null);
+  const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
+  const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
+
+  const fetchQuotations = async () => {
+    setIsLoading(true);
+    try {
+      const data = await sapService.getQuotations();
+      setQuotations(data || []);
+    } catch (error) {
+      toast.error('Erro ao buscar cotações.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQuotations();
+  }, []);
+
+  const filteredQuotations = quotations.filter(q => {
+    const matchesSearch = (q.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          q.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          q.DocEntry.toString().includes(searchTerm));
+    
+    const isOpen = q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O';
+    const matchesStatus = statusFilter === 'all' || 
+                         (statusFilter === 'open' && isOpen) || 
+                         (statusFilter === 'closed' && !isOpen);
+    
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleCreateNew = () => {
+    setSelectedQuote({
+      CardCode: '',
+      DocDueDate: new Date().toISOString().split('T')[0],
+      Comments: '',
+      DocumentLines: [
+        { ItemCode: '', Quantity: 1, Price: 0, U_nITEM: '', U_ItemLoc: '' }
+      ]
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleEdit = async (quote: any) => {
+    try {
+      const fullQuote = await sapService.getQuotation(quote.DocEntry);
+      setSelectedQuote(fullQuote);
+      setIsModalOpen(true);
+    } catch (error) {
+      toast.error('Erro ao carregar detalhes da cotação.');
+    }
+  };
+
+  const handleSaveQuotation = async () => {
+    if (!selectedQuote) return;
+    setIsOrderLoading(true);
+    try {
+      let savedQuote;
+      if (selectedQuote.DocEntry) {
+        await sapService.updateQuotation(selectedQuote.DocEntry, selectedQuote);
+        savedQuote = await sapService.getQuotation(selectedQuote.DocEntry);
+        toast.success('Cotação atualizada com sucesso!');
+      } else {
+        savedQuote = await sapService.createQuotation(selectedQuote);
+        toast.success('Cotação criada com sucesso!');
+      }
+      
+      // Attempt automatic conversion to order after saving if quote is valid
+      if (savedQuote && savedQuote.DocEntry) {
+        try {
+          toast.info('Iniciando geração automática do Pedido de Venda...');
+          await sapService.createOrderFromQuotation(savedQuote);
+          toast.success('Pedido de Venda criado e Cotação encerrada com sucesso!');
+        } catch (orderErr) {
+          console.warn('Erro na conversão automática para Pedido de Venda:', orderErr);
+          toast.warning('Cotação salva, porém não foi possível converter em Pedido automaticamente.');
+        }
+      }
+      
+      fetchQuotations();
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('Erro ao salvar cotação.');
+    } finally {
+      setIsOrderLoading(false);
+    }
+  };
+
+  const handleGenerateOrder = async () => {
+    if (!selectedQuote?.DocEntry) return;
+    setIsOrderLoading(true);
+    try {
+      await sapService.createOrderFromQuotation(selectedQuote);
+      toast.success('Pedido de Venda criado com sucesso! Cotação encerrada.');
+      fetchQuotations();
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('Erro ao gerar pedido.');
+    } finally {
+      setIsOrderLoading(false);
+    }
+  };
+
+  const handleAddLine = () => {
+    setSelectedQuote({
+      ...selectedQuote,
+      DocumentLines: [
+        ...selectedQuote.DocumentLines,
+        { ItemCode: '', Quantity: 1, Price: 0, U_nITEM: '', U_ItemLoc: '' }
+      ]
+    });
+  };
+
+  const updateLine = (index: number, field: string, value: any) => {
+    const newLines = [...selectedQuote.DocumentLines];
+    newLines[index] = { ...newLines[index], [field]: value };
+    setSelectedQuote({ ...selectedQuote, DocumentLines: newLines });
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-8"
+    >
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-8 border-l-4 border-evo-teal shadow-sm gap-6">
+        <div>
+          <h2 className="text-3xl font-black tracking-tighter text-evo-dark uppercase">Cotações de Venda</h2>
+          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de ofertas e integração de custos</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+          <div className="relative flex-1 md:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/20" />
+            <Input 
+              placeholder="PESQUISAR CLIENTE OU ID..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 rounded-none border-evo-bg focus:border-evo-teal uppercase text-[10px] font-bold tracking-widest h-12"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-40 rounded-none border-evo-bg h-12 uppercase text-[10px] font-bold tracking-widest">
+              {statusFilter === 'all' ? 'TODOS STATUS' : statusFilter === 'open' ? 'ABERTAS' : 'FECHADAS'}
+            </SelectTrigger>
+            <SelectContent className="rounded-none">
+              <SelectItem value="all" className="uppercase text-[10px] font-bold">TODOS STATUS</SelectItem>
+              <SelectItem value="open" className="uppercase text-[10px] font-bold">ABERTAS</SelectItem>
+              <SelectItem value="closed" className="uppercase text-[10px] font-bold">FECHADAS</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">Nova Cotação</Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        <Card className="evo-card border-none overflow-hidden">
+          <Table>
+            <TableHeader className="bg-evo-dark">
+              <TableRow className="border-none hover:bg-transparent">
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">DocEntry</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Cód. Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Nome do Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Vencimento</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Total</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Status</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP...</TableCell></TableRow>
+              ) : filteredQuotations.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
+              ) : filteredQuotations.map((q) => (
+                <TableRow key={q.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{q.DocEntry}</TableCell>
+                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{q.CardCode}</TableCell>
+                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{q.CardName || "N/A"}</TableCell>
+                  <TableCell className="px-8 py-5 text-[10px] font-bold">{new Date(q.DocDueDate).toLocaleDateString('pt-BR')}</TableCell>
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-teal">R$ {Number(q.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-8 py-5">
+                    <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
+                      {q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-8 py-5 text-right">
+                    <button onClick={() => handleEdit(q)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg">
+                      <Edit className="w-4 h-4" />
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      </div>
+
+      {/* Main Quotation Modal */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-6xl w-[95vw] h-[90vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
+          <DialogHeader className="bg-evo-dark p-8 text-white relative shrink-0">
+            <div className="absolute top-0 right-0 p-6 flex items-center gap-4 z-10">
+              {selectedQuote?.DocEntry && (selectedQuote.DocumentStatus === 'bost_Open' || selectedQuote.DocumentStatus === 'O') && (
+                <Button 
+                  onClick={handleGenerateOrder} 
+                  disabled={isOrderLoading}
+                  className="bg-evo-teal hover:bg-evo-teal/80 text-evo-dark font-black uppercase text-[10px] tracking-widest px-8 rounded-none h-10 shadow-lg"
+                >
+                  {isOrderLoading ? 'Processando...' : 'Gerar Pedido (Copy To)'}
+                  <Zap className="ml-2 w-3 h-3 text-evo-dark" />
+                </Button>
+              )}
+              <DialogClose render={<Button variant="ghost" className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none" />}>
+                <X className="w-6 h-6" />
+              </DialogClose>
+            </div>
+            <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
+              {selectedQuote?.DocEntry ? `Cotação #${selectedQuote.DocEntry}` : 'Nova Cotação'}
+            </DialogTitle>
+            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Detalhamento e Vinculação de Custos Financeiros</p>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
+            {selectedQuote && (
+              <div className="space-y-10">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 bg-white p-8 border border-evo-bg shadow-sm">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
+                    <Input 
+                      value={selectedQuote.CardCode}
+                      onChange={(e) => setSelectedQuote({ ...selectedQuote, CardCode: e.target.value })}
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Nome do Cliente</label>
+                    <Input 
+                      value={selectedQuote.CardName || ""}
+                      readOnly
+                      disabled
+                      placeholder="Nome Automático via SAP"
+                      className="rounded-none border-2 border-evo-dark/5 bg-gray-50 h-11 font-bold italic"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
+                    <Input 
+                      type="date"
+                      value={selectedQuote.DocDueDate ? selectedQuote.DocDueDate.split('T')[0] : ""}
+                      onChange={(e) => setSelectedQuote({ ...selectedQuote, DocDueDate: e.target.value })}
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between items-end px-2">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-widest">Linhas da Cotação</h3>
+                      <p className="text-[9px] font-bold text-evo-dark/30 uppercase tracking-widest">Total de Itens: {selectedQuote.DocumentLines?.length || 0}</p>
+                    </div>
+                    <Button onClick={handleAddLine} variant="outline" size="sm" className="rounded-none uppercase text-[9px] font-black border-2 h-9 px-6 hover:bg-evo-dark hover:text-white transition-all">Adicionar Item</Button>
+                  </div>
+                  
+                  <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
+                    <Table className="min-w-[800px]">
+                      <TableHeader className="bg-evo-dark">
+                        <TableRow className="border-none hover:bg-transparent">
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Cód. Item</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-28 text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-36 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Vinculação de Custos (Pessoal / Locação)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 text-right">Total Linha</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedQuote.DocumentLines.map((line: any, idx: number) => (
+                          <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
+                            <TableCell className="px-6 py-4">
+                              <div className="space-y-1">
+                                <div className="flex gap-1">
+                                  <Input 
+                                    value={line.ItemCode}
+                                    onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
+                                    className="h-10 rounded-none text-xs border-evo-bg bg-transparent font-bold focus:bg-white flex-1"
+                                    placeholder="EX: ITEM-001"
+                                  />
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="h-10 w-10 p-0 rounded-none border-evo-bg"
+                                    onClick={() => {
+                                      setLineIndexForLookup(idx);
+                                      setIsItemLookupOpen(true);
+                                    }}
+                                  >
+                                    <Search className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                                {(line.ItemDescription || line.ItemName) && (
+                                  <p className="text-[10px] font-black text-evo-teal uppercase tracking-tight truncate max-w-[250px] mt-1 bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal">
+                                    {line.ItemDescription || line.ItemName}
+                                  </p>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4 py-4">
+                              <Input 
+                                type="number"
+                                value={line.Quantity}
+                                onChange={(e) => updateLine(idx, 'Quantity', Number(e.target.value))}
+                                className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                              />
+                            </TableCell>
+                            <TableCell className="px-4 py-4">
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-evo-dark/30">R$</span>
+                                <Input 
+                                  type="number"
+                                  value={line.Price}
+                                  onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
+                                  className="h-10 rounded-none text-xs border-evo-bg pl-8 text-right font-bold"
+                                />
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-6 py-4">
+                              <div className="flex items-center gap-6">
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                  <div className="flex items-center gap-2">
+                                    <Button 
+                                      size="sm" 
+                                      variant="ghost" 
+                                      className={`h-8 w-8 p-0 border rounded-none transition-all ${line.U_nITEM ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                      onClick={() => {
+                                        setActiveLineIndex(idx);
+                                        setIsPersCostModalOpen(true);
+                                      }}
+                                    >
+                                      <User className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <span className={`text-[9px] font-black uppercase ${line.U_nITEM ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                      {line.U_nITEM ? `#${line.U_nITEM}` : 'PENDENTE'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="w-[1px] h-8 bg-evo-bg" />
+
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                  <div className="flex items-center gap-2">
+                                    <Button 
+                                      size="sm" 
+                                      variant="ghost" 
+                                      className={`h-8 w-8 p-0 border rounded-none transition-all ${line.U_ItemLoc ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                      onClick={() => {
+                                        setActiveLineIndex(idx);
+                                        setIsRentalCostModalOpen(true);
+                                      }}
+                                    >
+                                      <Truck className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <span className={`text-[9px] font-black uppercase ${line.U_ItemLoc ? 'text-evo-teal' : 'text-indigo-400'}`}>
+                                      {line.U_ItemLoc ? `#${line.U_ItemLoc}` : 'PENDENTE'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-6 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10">
+                              R$ {(line.Quantity * line.Price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações</label>
+                  <textarea 
+                    value={selectedQuote.Comments || ""}
+                    onChange={(e) => setSelectedQuote({ ...selectedQuote, Comments: e.target.value })}
+                    className="w-full min-h-[100px] p-4 rounded-none border-2 border-evo-dark/10 focus:border-evo-teal transition-colors text-sm"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
+            <Button variant="outline" onClick={() => setIsModalOpen(false)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
+            <Button 
+              onClick={handleSaveQuotation}
+              disabled={isOrderLoading}
+              className="evo-button-primary rounded-none px-12 h-12 shadow-lg"
+            >
+              {isOrderLoading ? 'Gravando e Gerando Pedido...' : 'Gravar e Gerar Pedido'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Item Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isItemLookupOpen}
+        onClose={() => setIsItemLookupOpen(false)}
+        title="Pesquisar Item"
+        placeholder="Digite o código ou nome do item..."
+        onSelect={(item) => {
+          if (lineIndexForLookup !== null) {
+            const newLines = [...selectedQuote.DocumentLines];
+            newLines[lineIndexForLookup] = { 
+              ...newLines[lineIndexForLookup], 
+              ItemCode: item.ItemCode, 
+              ItemDescription: item.ItemName 
+            };
+            setSelectedQuote({ ...selectedQuote, DocumentLines: newLines });
+          }
+          setIsItemLookupOpen(false);
+        }}
+        searchFn={sapService.getItems}
+        renderItem={(item) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs">{item.ItemCode}</span>
+            <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{item.ItemName}</span>
+          </div>
+        )}
+      />
+
+      {/* Personnel Cost Sub-Modal */}
+      <PersonnelCostModal 
+        isOpen={isPersCostModalOpen} 
+        onClose={() => setIsPersCostModalOpen(false)}
+        docEntry={selectedQuote?.DocEntry}
+        lineIndex={activeLineIndex}
+        onSaved={(id) => {
+          if (activeLineIndex !== null) {
+            updateLine(activeLineIndex, 'U_nITEM', id.toString());
+          }
+          setIsPersCostModalOpen(false);
+        }}
+      />
+
+      {/* Rental Cost Sub-Modal */}
+      <RentalCostModal 
+        isOpen={isRentalCostModalOpen} 
+        onClose={() => setIsRentalCostModalOpen(false)}
+        docEntry={selectedQuote?.DocEntry}
+        lineIndex={activeLineIndex}
+        onSaved={(id) => {
+          if (activeLineIndex !== null) {
+            updateLine(activeLineIndex, 'U_ItemLoc', id.toString());
+          }
+          setIsRentalCostModalOpen(false);
+        }}
+      />
+    </motion.div>
+  );
+}
+
+function SalesOrdersView() {
+  const [orders, setOrders] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const [costCenters, setCostCenters] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+
+  // Sub-modals & Lookups
+  const [isPersCostModalOpen, setIsPersCostModalOpen] = useState(false);
+  const [isRentalCostModalOpen, setIsRentalCostModalOpen] = useState(false);
+  const [activeLineIndex, setActiveLineIndex] = useState<number | null>(null);
+  const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
+  const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
+  const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
+
+  const fetchOrders = async () => {
+    setIsLoading(true);
+    try {
+      const data = await sapService.getOrders();
+      setOrders(data || []);
+    } catch (error) {
+      toast.error('Erro ao buscar pedidos de venda.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadAuxData = async () => {
+    try {
+      const [ccData, projData] = await Promise.all([
+        sapService.getDistributionRules(),
+        sapService.getProjects()
+      ]);
+      setCostCenters(ccData || []);
+      setProjects(projData || []);
+    } catch (e) {
+      console.warn('Erro ao carregar centros de custo ou projetos:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+    loadAuxData();
+  }, []);
+
+  const filteredOrders = orders.filter(o => {
+    const matchesSearch = (o.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          o.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (o.DocEntry && o.DocEntry.toString().includes(searchTerm)));
+    
+    const isOpen = o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O';
+    const matchesStatus = statusFilter === 'all' || 
+                         (statusFilter === 'open' && isOpen) || 
+                         (statusFilter === 'closed' && !isOpen);
+    
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleCreateNew = () => {
+    setSelectedOrder({
+      CardCode: '',
+      CardName: '',
+      DocDueDate: new Date().toISOString().split('T')[0],
+      Comments: '',
+      BPL_IDAssignedToInvoice: 1,
+      DocumentLines: [
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+      ]
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleEdit = async (order: any) => {
+    try {
+      const fullOrder = await sapService.getOrder(order.DocEntry);
+      setSelectedOrder(fullOrder);
+      setIsModalOpen(true);
+    } catch (error) {
+      toast.error('Erro ao carregar detalhes do pedido de venda.');
+    }
+  };
+
+  const handleSaveOrder = async () => {
+    if (!selectedOrder) return;
+    if (!selectedOrder.CardCode) {
+      toast.error('Selecione o código do cliente.');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      if (selectedOrder.DocEntry) {
+        await sapService.updateOrder(selectedOrder.DocEntry, selectedOrder);
+        toast.success('Pedido de Venda atualizado!');
+      } else {
+        await sapService.createOrder(selectedOrder);
+        toast.success('Pedido de Venda criado com sucesso no SAP!');
+      }
+      fetchOrders();
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('Erro ao salvar pedido de venda.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteOrder = async () => {
+    if (!selectedOrder?.DocEntry) return;
+    if (!confirm('Deseja realmente cancelar este Pedido de Venda?')) return;
+    setIsSaving(true);
+    try {
+      await sapService.deleteOrder(selectedOrder.DocEntry);
+      toast.success('Pedido de Venda excluído/cancelado.');
+      fetchOrders();
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('Erro ao excluir pedido.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAddLine = () => {
+    setSelectedOrder({
+      ...selectedOrder,
+      DocumentLines: [
+        ...selectedOrder.DocumentLines,
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+      ]
+    });
+  };
+
+  const handleRemoveLine = (index: number) => {
+    const updated = selectedOrder.DocumentLines.filter((_: any, i: number) => i !== index);
+    setSelectedOrder({ ...selectedOrder, DocumentLines: updated });
+  };
+
+  const updateLine = (index: number, field: string, value: any) => {
+    const newLines = [...selectedOrder.DocumentLines];
+    newLines[index] = { ...newLines[index], [field]: value };
+    setSelectedOrder({ ...selectedOrder, DocumentLines: newLines });
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 p-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-8 border border-evo-bg shadow-sm">
+        <div>
+          <div className="flex items-center gap-3">
+            <ShoppingCart className="w-8 h-8 text-evo-teal" />
+            <h1 className="text-3xl font-black tracking-tighter uppercase text-evo-dark">Pedidos de Venda (Orders)</h1>
+          </div>
+          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas - SAP Business One Integration</p>
+        </div>
+        <Button onClick={handleCreateNew} className="evo-button-primary rounded-none px-8 h-12 text-xs uppercase tracking-widest font-black shadow-xl">
+          <Plus className="w-4 h-4 mr-2" /> Novo Pedido de Venda
+        </Button>
+      </div>
+
+      <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-6 border border-evo-bg shadow-sm">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
+          <Input 
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por cliente, código ou Nº do Pedido..."
+            className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
+          />
+        </div>
+        <div className="flex gap-2 w-full md:w-auto">
+          <Button 
+            variant={statusFilter === 'all' ? 'default' : 'outline'}
+            onClick={() => setStatusFilter('all')}
+            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'all' ? 'bg-evo-dark text-white' : ''}`}
+          >
+            Todos
+          </Button>
+          <Button 
+            variant={statusFilter === 'open' ? 'default' : 'outline'}
+            onClick={() => setStatusFilter('open')}
+            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'open' ? 'bg-evo-teal text-evo-dark' : ''}`}
+          >
+            Abertos
+          </Button>
+          <Button 
+            variant={statusFilter === 'closed' ? 'default' : 'outline'}
+            onClick={() => setStatusFilter('closed')}
+            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'closed' ? 'bg-gray-200 text-gray-700' : ''}`}
+          >
+            Fechados
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        <Card className="evo-card border-none overflow-hidden shadow-lg">
+          <Table>
+            <TableHeader className="bg-evo-dark">
+              <TableRow className="border-none hover:bg-transparent">
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nº Pedido (DocEntry)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Cód. Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nome do Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Data Vencimento</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Total Pedido</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Status</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4 text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={7} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP Orders...</TableCell></TableRow>
+              ) : filteredOrders.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
+              ) : filteredOrders.map((o) => (
+                <TableRow key={o.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{o.DocEntry}</TableCell>
+                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{o.CardCode}</TableCell>
+                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{o.CardName || "N/A"}</TableCell>
+                  <TableCell className="px-8 py-5 text-[10px] font-bold">{o.DocDueDate ? new Date(o.DocDueDate).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-teal">R$ {Number(o.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-8 py-5">
+                    <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal border-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
+                      {o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-8 py-5 text-right">
+                    <button onClick={() => handleEdit(o)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg" title="Editar/Visualizar">
+                      <Edit className="w-4 h-4" />
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      </div>
+
+      {/* Main Order Modal */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-6xl w-[95vw] h-[90vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
+          <DialogHeader className="bg-evo-dark p-8 text-white relative shrink-0">
+            <div className="absolute top-0 right-0 p-6 flex items-center gap-4 z-10">
+              {selectedOrder?.DocEntry && (
+                <Button 
+                  onClick={handleDeleteOrder} 
+                  disabled={isSaving}
+                  variant="destructive"
+                  className="rounded-none uppercase text-[9px] font-black px-6 h-10 tracking-widest"
+                >
+                  Excluir Pedido
+                </Button>
+              )}
+              <DialogClose render={<Button variant="ghost" className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none" />}>
+                <X className="w-6 h-6" />
+              </DialogClose>
+            </div>
+            <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
+              {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
+            </DialogTitle>
+            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda com Centro de Custos e Projetos por Linha</p>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
+            {selectedOrder && (
+              <div className="space-y-10">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 bg-white p-8 border border-evo-bg shadow-sm">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
+                    <div className="flex gap-1">
+                      <Input 
+                        value={selectedOrder.CardCode}
+                        onChange={(e) => setSelectedOrder({ ...selectedOrder, CardCode: e.target.value })}
+                        className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold flex-1"
+                        placeholder="EX: C20000"
+                      />
+                      <Button 
+                        type="button"
+                        variant="outline"
+                        className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10"
+                        onClick={() => setIsBPLookupOpen(true)}
+                      >
+                        <Search className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Nome do Cliente</label>
+                    <Input 
+                      value={selectedOrder.CardName || ""}
+                      onChange={(e) => setSelectedOrder({ ...selectedOrder, CardName: e.target.value })}
+                      placeholder="Nome do Cliente"
+                      className="rounded-none border-2 border-evo-dark/10 h-11 font-bold"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
+                    <Input 
+                      type="date"
+                      value={selectedOrder.DocDueDate ? selectedOrder.DocDueDate.split('T')[0] : ""}
+                      onChange={(e) => setSelectedOrder({ ...selectedOrder, DocDueDate: e.target.value })}
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between items-end px-2">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-widest">Itens e Linhas do Pedido</h3>
+                      <p className="text-[9px] font-bold text-evo-dark/30 uppercase tracking-widest">Total de Itens: {selectedOrder.DocumentLines?.length || 0}</p>
+                    </div>
+                    <Button onClick={handleAddLine} variant="outline" size="sm" className="rounded-none uppercase text-[9px] font-black border-2 h-9 px-6 hover:bg-evo-dark hover:text-white transition-all">
+                      Adicionar Item
+                    </Button>
+                  </div>
+                  
+                  <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
+                    <Table className="min-w-[1200px]">
+                      <TableHeader className="bg-evo-dark">
+                        <TableRow className="border-none hover:bg-transparent">
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Cód. Item</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-28 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Centro de Custo</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Projeto</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-12 text-center"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedOrder.DocumentLines.map((line: any, idx: number) => (
+                          <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
+                            <TableCell className="px-4 py-4">
+                              <div className="space-y-1">
+                                <div className="flex gap-1">
+                                  <Input 
+                                    value={line.ItemCode}
+                                    onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
+                                    className="h-10 rounded-none text-xs border-evo-bg bg-transparent font-bold focus:bg-white flex-1 min-w-[120px]"
+                                    placeholder="EX: ITEM-001"
+                                  />
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="h-10 w-10 p-0 rounded-none border-evo-bg shrink-0"
+                                    onClick={() => {
+                                      setLineIndexForLookup(idx);
+                                      setIsItemLookupOpen(true);
+                                    }}
+                                  >
+                                    <Search className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                                {(line.ItemDescription || line.ItemName) && (
+                                  <p className="text-[10px] font-black text-evo-teal uppercase tracking-tight truncate max-w-[200px] mt-1 bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal">
+                                    {line.ItemDescription || line.ItemName}
+                                  </p>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-2 py-4">
+                              <Input 
+                                type="number"
+                                value={line.Quantity}
+                                onChange={(e) => updateLine(idx, 'Quantity', Number(e.target.value))}
+                                className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                              />
+                            </TableCell>
+                            <TableCell className="px-2 py-4">
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[8px] font-black text-evo-dark/30">R$</span>
+                                <Input 
+                                  type="number"
+                                  value={line.Price || line.UnitPrice || 0}
+                                  onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
+                                  className="h-10 rounded-none text-xs border-evo-bg pl-6 text-right font-bold"
+                                />
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4 py-4">
+                              <select 
+                                value={line.CostingCode || ''}
+                                onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                              >
+                                <option value="">Nenhum Centro de Custo</option>
+                                {costCenters.map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                              </select>
+                            </TableCell>
+                            <TableCell className="px-4 py-4">
+                              <select 
+                                value={line.ProjectCode || ''}
+                                onChange={(e) => updateLine(idx, 'ProjectCode', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                              >
+                                <option value="">Nenhum Projeto</option>
+                                {projects.map((p) => (
+                                  <option key={p.Code} value={p.Code}>
+                                    {p.Code} - {p.Name}
+                                  </option>
+                                ))}
+                              </select>
+                            </TableCell>
+                            <TableCell className="px-4 py-4">
+                              <div className="flex items-center gap-4">
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <Button 
+                                      size="sm" 
+                                      variant="ghost" 
+                                      className={`h-7 w-7 p-0 border rounded-none transition-all ${line.U_nITEM ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                      onClick={() => {
+                                        setActiveLineIndex(idx);
+                                        setIsPersCostModalOpen(true);
+                                      }}
+                                    >
+                                      <User className="w-3 h-3" />
+                                    </Button>
+                                    <span className={`text-[8px] font-black uppercase ${line.U_nITEM ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                      {line.U_nITEM ? `#${line.U_nITEM}` : 'S/ CUSTO'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="w-[1px] h-7 bg-evo-bg" />
+
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <Button 
+                                      size="sm" 
+                                      variant="ghost" 
+                                      className={`h-7 w-7 p-0 border rounded-none transition-all ${line.U_ItemLoc ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                      onClick={() => {
+                                        setActiveLineIndex(idx);
+                                        setIsRentalCostModalOpen(true);
+                                      }}
+                                    >
+                                      <Truck className="w-3 h-3" />
+                                    </Button>
+                                    <span className={`text-[8px] font-black uppercase ${line.U_ItemLoc ? 'text-evo-teal' : 'text-indigo-400'}`}>
+                                      {line.U_ItemLoc ? `#${line.U_ItemLoc}` : 'S/ CUSTO'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10">
+                              R$ {(line.Quantity * (line.Price || line.UnitPrice || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell className="px-2 py-4 text-center">
+                              {selectedOrder.DocumentLines.length > 1 && (
+                                <button onClick={() => handleRemoveLine(idx)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-none transition-colors" title="Remover Linha">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações do Pedido</label>
+                  <textarea 
+                    value={selectedOrder.Comments || ""}
+                    onChange={(e) => setSelectedOrder({ ...selectedOrder, Comments: e.target.value })}
+                    className="w-full min-h-[100px] p-4 rounded-none border-2 border-evo-dark/10 focus:border-evo-teal transition-colors text-sm"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
+            <Button variant="outline" onClick={() => setIsModalOpen(false)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
+            <Button 
+              onClick={handleSaveOrder}
+              disabled={isSaving}
+              className="evo-button-primary rounded-none px-12 h-12 shadow-lg"
+            >
+              {isSaving ? 'Gravando Pedido...' : 'Salvar Pedido de Venda'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Customer Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isBPLookupOpen}
+        onClose={() => setIsBPLookupOpen(false)}
+        title="Pesquisar Cliente / Parceiro"
+        placeholder="Digite o código ou razão social..."
+        onSelect={(bp: any) => {
+          setSelectedOrder({
+            ...selectedOrder,
+            CardCode: bp.CardCode,
+            CardName: bp.CardName
+          });
+          setIsBPLookupOpen(false);
+        }}
+        searchFn={sapService.getBusinessPartners}
+        renderItem={(bp: any) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs">{bp.CardCode}</span>
+            <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{bp.CardName}</span>
+          </div>
+        )}
+      />
+
+      {/* Item Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isItemLookupOpen}
+        onClose={() => setIsItemLookupOpen(false)}
+        title="Pesquisar Item"
+        placeholder="Digite o código ou nome do item..."
+        onSelect={(item: any) => {
+          if (lineIndexForLookup !== null) {
+            const newLines = [...selectedOrder.DocumentLines];
+            newLines[lineIndexForLookup] = { 
+              ...newLines[lineIndexForLookup], 
+              ItemCode: item.ItemCode, 
+              ItemDescription: item.ItemName 
+            };
+            setSelectedOrder({ ...selectedOrder, DocumentLines: newLines });
+          }
+          setIsItemLookupOpen(false);
+        }}
+        searchFn={sapService.getItems}
+        renderItem={(item: any) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs">{item.ItemCode}</span>
+            <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{item.ItemName}</span>
+          </div>
+        )}
+      />
+
+      {/* Personnel Cost Sub-Modal */}
+      <PersonnelCostModal 
+        isOpen={isPersCostModalOpen} 
+        onClose={() => setIsPersCostModalOpen(false)}
+        docEntry={selectedOrder?.DocEntry}
+        lineIndex={activeLineIndex}
+        onSaved={(id) => {
+          if (activeLineIndex !== null) {
+            updateLine(activeLineIndex, 'U_nITEM', id.toString());
+          }
+          setIsPersCostModalOpen(false);
+        }}
+      />
+
+      {/* Rental Cost Sub-Modal */}
+      <RentalCostModal 
+        isOpen={isRentalCostModalOpen} 
+        onClose={() => setIsRentalCostModalOpen(false)}
+        docEntry={selectedOrder?.DocEntry}
+        lineIndex={activeLineIndex}
+        onSaved={(id) => {
+          if (activeLineIndex !== null) {
+            updateLine(activeLineIndex, 'U_ItemLoc', id.toString());
+          }
+          setIsRentalCostModalOpen(false);
+        }}
+      />
+    </motion.div>
+  );
+}
+
+// Reusable Lookup Dialog
+function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn, renderItem }: any) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [results, setResults] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSearch = async () => {
+    if (!searchTerm) return;
+    setIsLoading(true);
+    try {
+      const data = await searchFn(searchTerm);
+      setResults(data || []);
+    } catch (error) {
+      toast.error('Erro ao buscar dados.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchTerm('');
+      setResults([]);
+    }
+  }, [isOpen]);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md w-[95vw] rounded-none border-t-4 border-evo-teal">
+        <DialogHeader>
+          <DialogTitle className="uppercase tracking-tight font-black text-sm">{title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          <div className="flex gap-2">
+            <Input 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              placeholder={placeholder}
+              className="rounded-none h-10 border-evo-bg font-bold"
+            />
+            <Button onClick={handleSearch} disabled={isLoading} className="evo-button-primary h-10 rounded-none px-4">
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            </Button>
+          </div>
+          
+          <div className="max-h-[300px] overflow-y-auto border border-evo-bg divide-y divide-evo-bg">
+            {results.length === 0 ? (
+              <div className="p-8 text-center text-[10px] font-bold text-evo-dark/30 uppercase tracking-widest">
+                {searchTerm ? 'Nenhum resultado encontrado' : 'Digite para pesquisar'}
+              </div>
+            ) : results.map((item, idx) => (
+              <button 
+                key={idx}
+                type="button"
+                onClick={() => onSelect(item)}
+                className="w-full p-4 text-left hover:bg-evo-teal/5 transition-colors flex items-center"
+              >
+                {renderItem(item)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Sub-components for linking costs
+function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  onSaved: (id: number) => void,
+  docEntry?: number,
+  lineIndex: number | null
+}) {
+  const [formData, setFormData] = useState({
+    U_DataInicial: new Date().toISOString().split('T')[0],
+    U_DataFinal: new Date().toISOString().split('T')[0],
+    U_Colaborador: '',
+    U_VlNormal: 0,
+    U_StandBy: 0,
+    U_QtdDiarias: 0,
+    U_QtdDiariasSt: 0,
+    U_NotNor: 0,
+    U_NotNob: 0,
+    U_HExtraDiu: 0,
+    U_HExtraNot: 0,
+    U_Total: 0
+  });
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
+
+  const calculateTotal = () => {
+    const H = Number(formData.U_VlNormal);
+    const I = H * 0.5; // Auto-calculate Stand-by Rate (50%)
+    const J = Number(formData.U_QtdDiarias);
+    const K = Number(formData.U_QtdDiariasSt);
+    const L = Number(formData.U_NotNor);
+    const M = Number(formData.U_NotNob);
+    const N = Number(formData.U_HExtraDiu);
+    const O = Number(formData.U_HExtraNot);
+
+    const total = (J * H) + 
+                (I * K) + 
+                (L * H * 0.08) + 
+                (L * H) + 
+                (M * I) + 
+                ((H / 12 * 1.5) * N) + 
+                ((H / 12 * O) * 0.08) + 
+                ((H / 12 * 1.5) * O);
+                
+    if (formData.U_StandBy !== I || formData.U_Total !== total) {
+      setFormData(prev => ({ ...prev, U_StandBy: I, U_Total: total }));
+    }
+  };
+
+  useEffect(() => {
+    calculateTotal();
+  }, [formData.U_VlNormal, formData.U_QtdDiarias, formData.U_QtdDiariasSt, formData.U_NotNor, formData.U_NotNob, formData.U_HExtraDiu, formData.U_HExtraNot]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      const code = `${docEntry}-${(lineIndex || 0) + 1}`;
+      const payload = {
+        ...formData,
+        Code: code,
+        Name: code
+      };
+      
+      console.log('Gravando custo pessoal:', payload);
+      const response = await sapService.createPersonnelCost(payload);
+      toast.success('Custo Pessoal vinculado!');
+      onSaved(response.DocEntry || response.AbsoluteEntry || 0);
+    } catch (error: any) {
+      console.error('Falha ao salvar custo pessoal:', error.response?.data || error);
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo.';
+      toast.error(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
+        <DialogHeader>
+          <DialogTitle className="uppercase tracking-tight font-black">Vincular Custo Pessoal</DialogTitle>
+          <DialogDescription className="text-[10px] uppercase tracking-widest">Lançamento de diárias e horas extras para esta linha</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-6 py-4">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador</Label>
+                <div className="flex gap-1">
+                  <Input 
+                    value={formData.U_Colaborador}
+                    onChange={(e) => setFormData({ ...formData, U_Colaborador: e.target.value })}
+                    className="rounded-none h-10 border-evo-bg flex-1 font-bold"
+                    placeholder="Selecione o Colaborador"
+                    required
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    className="rounded-none h-10 w-10 p-0 border-evo-bg"
+                    onClick={() => setIsCollabLookupOpen(true)}
+                  >
+                    <Search className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <LookupDialog 
+                  isOpen={isCollabLookupOpen}
+                  onClose={() => setIsCollabLookupOpen(false)}
+                  title="Pesquisar Colaborador (CO)"
+                  placeholder="Nome ou código..."
+                  onSelect={(collab: any) => {
+                    setFormData({ ...formData, U_Colaborador: collab.CardName || collab.CardCode });
+                    setIsCollabLookupOpen(false);
+                  }}
+                  searchFn={sapService.getCollaborators}
+                  renderItem={(collab: any) => (
+                    <div className="flex justify-between items-center w-full">
+                      <span className="font-black text-xs">{collab.CardCode}</span>
+                      <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{collab.CardName}</span>
+                    </div>
+                  )}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
+                  <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
+                  <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 border-t border-evo-bg pt-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Normal (R$)</Label>
+                  <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({...formData, U_VlNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
+                  <Input type="number" step="0.5" value={formData.U_QtdDiarias} onChange={e => setFormData({...formData, U_QtdDiarias: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5 opacity-60">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Stand-by Rate (R$) - Automático</Label>
+                  <Input type="number" step="0.01" value={formData.U_StandBy} readOnly className="rounded-none h-10 border-evo-bg bg-evo-bg/50 cursor-not-allowed" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
+                  <Input type="number" step="0.5" value={formData.U_QtdDiariasSt} onChange={e => setFormData({...formData, U_QtdDiariasSt: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
+                  <Input type="number" value={formData.U_NotNor} onChange={e => setFormData({...formData, U_NotNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Nob</Label>
+                  <Input type="number" value={formData.U_NotNob} onChange={e => setFormData({...formData, U_NotNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
+                  <Input type="number" value={formData.U_HExtraDiu} onChange={e => setFormData({...formData, U_HExtraDiu: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
+                  <Input type="number" value={formData.U_HExtraNot} onChange={e => setFormData({...formData, U_HExtraNot: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+
+              <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
+                <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
+                  R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </h3>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+            <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
+              {isLoading ? 'Gravando...' : 'Gravar e Vincular'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Rental Cost Sub-Modal
+function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  onSaved: (id: number) => void,
+  docEntry?: number,
+  lineIndex: number | null
+}) {
+  const [formData, setFormData] = useState({
+    U_DataInicial: new Date().toISOString().split('T')[0],
+    U_DataFinal: new Date().toISOString().split('T')[0],
+    U_Recurso: '',
+    U_ValorBase: 0,
+    U_HorasNor: 0,
+    U_HorasNob: 0,
+    U_HENor: 0,
+    U_HENob: 0,
+    U_Total: 0
+  });
+
+  const [isLoading, setIsLoading] = useState(false);
+
+  const calculateTotal = () => {
+    const total = (Number(formData.U_ValorBase) * (Number(formData.U_HorasNor) + Number(formData.U_HorasNob))) + 
+                (Number(formData.U_HENor) * (Number(formData.U_ValorBase) * 1.5)) + 
+                (Number(formData.U_HENob) * (Number(formData.U_ValorBase) * 2.0));
+    setFormData(prev => ({ ...prev, U_Total: total }));
+  };
+
+  useEffect(() => {
+    calculateTotal();
+  }, [formData.U_ValorBase, formData.U_HorasNor, formData.U_HorasNob, formData.U_HENor, formData.U_HENob]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      const code = `${docEntry}-${(lineIndex || 0) + 1}`;
+      const payload = {
+        ...formData,
+        Code: code,
+        Name: code
+      };
+      const response = await sapService.createRentalCost(payload);
+      toast.success('Custo Locação vinculado!');
+      onSaved(response.DocEntry || response.AbsoluteEntry || 0);
+    } catch (error: any) {
+      console.error('Falha ao salvar custo locação:', error.response?.data || error);
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo.';
+      toast.error(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
+        <DialogHeader>
+          <DialogTitle className="uppercase tracking-tight font-black">Vincular Custo Locação</DialogTitle>
+          <DialogDescription className="text-[10px] uppercase tracking-widest">Controle de custos de equipamentos e recursos externos</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-6 py-4">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso</Label>
+                <Input 
+                  value={formData.U_Recurso}
+                  onChange={(e) => setFormData({ ...formData, U_Recurso: e.target.value })}
+                  className="rounded-none h-10 border-evo-bg"
+                  placeholder="Descrição do Recurso"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
+                  <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
+                  <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+              <div className="space-y-1.5 border-t border-evo-bg pt-4">
+                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base (R$)</Label>
+                <Input 
+                  type="number" 
+                  step="0.01" 
+                  value={formData.U_ValorBase} 
+                  onChange={e => setFormData({...formData, U_ValorBase: parseFloat(e.target.value) || 0})} 
+                  className="rounded-none h-10 border-evo-bg" 
+                />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
+                  <Input type="number" value={formData.U_HorasNor} onChange={e => setFormData({...formData, U_HorasNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
+                  <Input type="number" value={formData.U_HorasNob} onChange={e => setFormData({...formData, U_HorasNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
+                  <Input type="number" value={formData.U_HENor} onChange={e => setFormData({...formData, U_HENor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
+                  <Input type="number" value={formData.U_HENob} onChange={e => setFormData({...formData, U_HENob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                </div>
+              </div>
+
+              <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
+                <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
+                  R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </h3>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+            <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
+              {isLoading ? 'Gravando...' : 'Gravar e Vincular'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CalibrationView() {
   const [calibrations, setCalibrations] = useState<any[]>([]);
   const [selectedCalibration, setSelectedCalibration] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const [formData, setFormData] = useState<any>({
+    U_Item: '',
+    U_Forn: '',
+    U_Verificador: '',
+    U_Fabricante: '',
+    U_Modelo: '',
+    U_CCusto: '',
+    QLT_CAL_DETCollection: [{
+      U_DtCalib: new Date().toISOString().split('T')[0],
+      U_DtVenc: '',
+      U_Certificado: '',
+      U_Lab: '',
+      U_StatusCal: 'Aprovado',
+      U_MaiorErro: '',
+      U_ErroEnc: '',
+      U_ErroAdm: '',
+      U_MaiorIncer: ''
+    }]
+  });
 
   useEffect(() => {
     fetchCalibrations();
@@ -3495,6 +5799,100 @@ function CalibrationView() {
     }
   };
 
+  const handleOpenNew = () => {
+    setFormData({
+      U_Item: '',
+      U_Forn: '',
+      U_Verificador: '',
+      U_Fabricante: '',
+      U_Modelo: '',
+      U_CCusto: '',
+      QLT_CAL_DETCollection: [{
+        U_DtCalib: new Date().toISOString().split('T')[0],
+        U_DtVenc: '',
+        U_Certificado: '',
+        U_Lab: '',
+        U_StatusCal: 'Aprovado',
+        U_MaiorErro: '',
+        U_ErroEnc: '',
+        U_ErroAdm: '',
+        U_MaiorIncer: ''
+      }]
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = () => {
+    if (!selectedCalibration) return;
+    setFormData({
+      ...selectedCalibration,
+      QLT_CAL_DETCollection: selectedCalibration.QLT_CAL_DETCollection || [{
+        U_DtCalib: new Date().toISOString().split('T')[0],
+        U_DtVenc: '',
+        U_Certificado: '',
+        U_Lab: '',
+        U_StatusCal: 'Aprovado'
+      }]
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      if (formData.DocEntry) {
+        await sapService.updateCalibrationRecord(formData.DocEntry, formData);
+        toast.success('Calibração atualizada com sucesso!');
+      } else {
+        await sapService.createCalibrationRecord(formData);
+        toast.success('Calibração criada com sucesso!');
+      }
+      setIsModalOpen(false);
+      fetchCalibrations();
+      if (formData.DocEntry) {
+        handleSelectCalibration(formData.DocEntry);
+      }
+    } catch (error) {
+      toast.error('Erro ao salvar calibração.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedCalibration || !window.confirm('Deseja realmente excluir este registro?')) return;
+    try {
+      await sapService.deleteCalibrationRecord(selectedCalibration.DocEntry);
+      toast.success('Registro excluído com sucesso!');
+      setSelectedCalibration(null);
+      fetchCalibrations();
+    } catch (error) {
+      toast.error('Erro ao excluir registro.');
+    }
+  };
+
+  const addLine = () => {
+    setFormData({
+      ...formData,
+      QLT_CAL_DETCollection: [
+        ...formData.QLT_CAL_DETCollection,
+        {
+          U_DtCalib: new Date().toISOString().split('T')[0],
+          U_DtVenc: '',
+          U_Certificado: '',
+          U_Lab: '',
+          U_StatusCal: 'Aprovado'
+        }
+      ]
+    });
+  };
+
+  const updateLine = (index: number, field: string, value: any) => {
+    const newLines = [...formData.QLT_CAL_DETCollection];
+    newLines[index] = { ...newLines[index], [field]: value };
+    setFormData({ ...formData, QLT_CAL_DETCollection: newLines });
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
@@ -3505,11 +5903,16 @@ function CalibrationView() {
         <div>
           <h1 className="text-3xl font-bold tracking-tighter text-evo-dark uppercase">Controle de Calibração</h1>
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
-          <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Gestão de certificados e validade de instrumentos</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Gestão de certificados e validade de instrumentos (QLT_CALIB)</p>
         </div>
-        <Button onClick={fetchCalibrations} variant="outline" size="sm" className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest">
-          Atualizar Lista
-        </Button>
+        <div className="flex gap-4">
+          <Button onClick={handleOpenNew} className="rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white text-[10px] font-black uppercase tracking-widest">
+            <Plus className="w-4 h-4 mr-2" /> Novo Registro
+          </Button>
+          <Button onClick={fetchCalibrations} variant="outline" size="sm" className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest">
+            Atualizar Lista
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
@@ -3540,8 +5943,8 @@ function CalibrationView() {
                     <TableCell className="px-6 py-4 text-[10px] font-black text-evo-dark opacity-40">#{cal.DocEntry}</TableCell>
                     <TableCell className="px-6 py-4">
                       <div className="flex flex-col">
-                        <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">{cal.U_DescEqui || cal.U_ItemName || 'N/A'}</span>
-                        <span className="text-[8px] font-bold text-evo-teal tracking-widest uppercase">SN: {cal.U_NumSerFab || cal.U_QT || '-'}</span>
+                        <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">{cal.U_DescEqui || cal.U_ItemName || cal.U_Item || 'N/A'}</span>
+                        <span className="text-[8px] font-bold text-evo-teal tracking-widest uppercase">{cal.U_Fabricante} - {cal.U_Modelo || '-'}</span>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -3559,13 +5962,23 @@ function CalibrationView() {
                 <div className="flex justify-between items-start">
                   <div>
                     <Badge className="rounded-none bg-evo-teal text-evo-dark text-[9px] font-black uppercase tracking-[0.2em] mb-2 px-3 py-1">
-                      Calibração #{selectedCalibration.U_NumCalib || selectedCalibration.DocEntry}
+                      Calibração #{selectedCalibration.DocNum || selectedCalibration.DocEntry}
                     </Badge>
-                    <h2 className="text-2xl font-black tracking-tighter uppercase">{selectedCalibration.U_DescEqui}</h2>
-                    <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{selectedCalibration.U_Fabricante} - {selectedCalibration.U_Modelo}</p>
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-2xl font-black tracking-tighter uppercase">{selectedCalibration.U_ItemName || selectedCalibration.U_Item}</h2>
+                      <div className="flex gap-2">
+                        <Button onClick={handleOpenEdit} size="icon" className="w-8 h-8 rounded-none bg-white/10 hover:bg-white/20 text-white">
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button onClick={handleDelete} size="icon" className="w-8 h-8 rounded-none bg-red-500/20 hover:bg-red-500/40 text-red-400">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{selectedCalibration.U_Fabricante || 'N/A'} - {selectedCalibration.U_Modelo || '-'}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Nº Interno</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-white/30">DocEntry</p>
                     <p className="text-xl font-black text-white">{selectedCalibration.DocEntry}</p>
                   </div>
                 </div>
@@ -3573,17 +5986,17 @@ function CalibrationView() {
                 <div className="grid grid-cols-3 gap-x-12 gap-y-6 mt-8 pt-8 border-t border-white/5">
                   <div>
                     <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Fornecedor</p>
-                    <p className="text-[10px] font-bold uppercase truncate">{selectedCalibration.U_NomForn || '-'}</p>
-                    <p className="text-[9px] text-evo-teal font-black">{selectedCalibration.U_CodForn}</p>
+                    <p className="text-[10px] font-bold uppercase truncate">{selectedCalibration.U_DesForn || '-'}</p>
+                    <p className="text-[9px] text-evo-teal font-black">{selectedCalibration.U_Forn}</p>
                   </div>
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Código do Item</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Item / Equipamento</p>
                     <p className="text-[10px] font-bold uppercase">{selectedCalibration.U_Item || '-'}</p>
                   </div>
                   <div>
                     <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Verificador</p>
-                    <p className="text-[10px] font-bold uppercase">{selectedCalibration.U_NomVerif || '-'}</p>
-                    <p className="text-[9px] text-evo-teal font-black">Cód: {selectedCalibration.U_CodVerif}</p>
+                    <p className="text-[10px] font-bold uppercase">{selectedCalibration.U_DescVerificador || '-'}</p>
+                    <p className="text-[9px] text-evo-teal font-black">Cód: {selectedCalibration.U_Verificador}</p>
                   </div>
                 </div>
               </div>
@@ -3613,11 +6026,11 @@ function CalibrationView() {
                         <TableRow key={idx} className="border-evo-bg">
                           <TableCell className="px-4 py-3 text-[10px] font-bold">{line.U_DtCalib ? new Date(line.U_DtCalib).toLocaleDateString('pt-BR') : '-'}</TableCell>
                           <TableCell className="px-4 py-3 text-[10px] font-bold text-evo-dark/60">{line.U_DtVenc ? new Date(line.U_DtVenc).toLocaleDateString('pt-BR') : '-'}</TableCell>
-                          <TableCell className="px-4 py-3 text-[10px] font-black uppercase text-evo-teal">{line.U_Certif}</TableCell>
-                          <TableCell className="px-4 py-3 text-[9px] font-bold uppercase text-evo-dark/40">{line.U_Laborat}</TableCell>
+                          <TableCell className="px-4 py-3 text-[10px] font-black uppercase text-evo-teal">{line.U_Certificado}</TableCell>
+                          <TableCell className="px-4 py-3 text-[9px] font-bold uppercase text-evo-dark/40">{line.U_Lab}</TableCell>
                           <TableCell className="px-4 py-3">
-                            <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${line.U_Result?.toLowerCase().includes('ok') || line.U_Result?.toLowerCase().includes('usavel') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {line.U_Result || 'N/A'}
+                            <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${line.U_StatusCal?.toLowerCase().includes('ok') || line.U_StatusCal?.toLowerCase().includes('aprovado') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {line.U_StatusCal || 'N/A'}
                             </Badge>
                           </TableCell>
                         </TableRow>
@@ -3629,19 +6042,19 @@ function CalibrationView() {
                 <div className="grid grid-cols-4 gap-4 mt-8">
                   <div className="bg-evo-bg p-4 flex flex-col items-center justify-center border-l-2 border-evo-teal">
                     <p className="text-[8px] font-black uppercase tracking-widest text-evo-dark/40 mb-1">Maior Erro</p>
-                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_MaiorErr || '-'}</p>
+                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_MaiorErro || '-'}</p>
                   </div>
                   <div className="bg-evo-bg p-4 flex flex-col items-center justify-center border-l-2 border-evo-teal">
                     <p className="text-[8px] font-black uppercase tracking-widest text-evo-dark/40 mb-1">M. Incerteza</p>
-                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_MaiIncert || '-'}</p>
+                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_MaiorIncer || '-'}</p>
                   </div>
                   <div className="bg-evo-bg p-4 flex flex-col items-center justify-center border-l-2 border-evo-teal">
                     <p className="text-[8px] font-black uppercase tracking-widest text-evo-dark/40 mb-1">Erro Encont.</p>
-                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_ErrEncont || '-'}</p>
+                    <p className="text-sm font-black text-evo-dark">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_ErroEnc || '-'}</p>
                   </div>
                   <div className="bg-evo-bg p-4 flex flex-col items-center justify-center border-l-2 border-red-500">
                     <p className="text-[8px] font-black uppercase tracking-widest text-red-500/40 mb-1">Erro Admiss.</p>
-                    <p className="text-sm font-black text-red-600">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_ErrAdmiss || '-'}</p>
+                    <p className="text-sm font-black text-red-600">{selectedCalibration.QLT_CAL_DETCollection?.[0]?.U_ErroAdm || '-'}</p>
                   </div>
                 </div>
               </div>
@@ -3659,6 +6072,208 @@ function CalibrationView() {
           )}
         </Card>
       </div>
+
+      {/* CRUD Modal */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-none border-evo-dark">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-black uppercase tracking-tight">
+              {formData.DocEntry ? 'Editar Calibração' : 'Nova Calibração'}
+            </DialogTitle>
+            <DialogDescription className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40">
+              Preencha os dados do instrumento e do certificado de calibração.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-2 gap-6 py-6">
+            <div className="space-y-4">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal border-b border-evo-bg pb-2">Informações do Instrumento</h3>
+              
+              <div className="space-y-1">
+                <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Código do Item (U_Item)</Label>
+                <Input 
+                  value={formData.U_Item} 
+                  onChange={(e) => setFormData({...formData, U_Item: e.target.value})}
+                  className="rounded-none border-evo-bg focus:border-evo-teal transition-colors text-xs font-bold"
+                  placeholder="Ex: I000392"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Fabricante</Label>
+                  <Input 
+                    value={formData.U_Fabricante} 
+                    onChange={(e) => setFormData({...formData, U_Fabricante: e.target.value})}
+                    className="rounded-none border-evo-bg text-xs font-bold"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Modelo</Label>
+                  <Input 
+                    value={formData.U_Modelo} 
+                    onChange={(e) => setFormData({...formData, U_Modelo: e.target.value})}
+                    className="rounded-none border-evo-bg text-xs font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Centro de Custo (U_CCusto)</Label>
+                <Input 
+                  value={formData.U_CCusto} 
+                  onChange={(e) => setFormData({...formData, U_CCusto: e.target.value})}
+                  className="rounded-none border-evo-bg text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal border-b border-evo-bg pb-2">Identificação Adicional</h3>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Cód Fornecedor (U_Forn)</Label>
+                  <Input 
+                    value={formData.U_Forn} 
+                    onChange={(e) => setFormData({...formData, U_Forn: e.target.value})}
+                    className="rounded-none border-evo-bg text-xs font-bold"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Cód Verificador (U_Verificador)</Label>
+                  <Input 
+                    value={formData.U_Verificador} 
+                    onChange={(e) => setFormData({...formData, U_Verificador: e.target.value})}
+                    className="rounded-none border-evo-bg text-xs font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Nome Fornecedor (U_DesForn)</Label>
+                <Input 
+                  value={formData.U_DesForn} 
+                  onChange={(e) => setFormData({...formData, U_DesForn: e.target.value})}
+                  className="rounded-none border-evo-bg text-xs font-bold opacity-70"
+                  disabled
+                  placeholder="Preenchido via OData futuramente"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-evo-bg pb-2">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal">Detalhamento da Calibração (Certificado)</h3>
+              <Button onClick={addLine} variant="ghost" size="sm" className="h-6 px-3 text-[8px] font-black uppercase tracking-widest hover:bg-evo-teal/10 text-evo-teal">
+                + Adicionar Certificado
+              </Button>
+            </div>
+
+            {formData.QLT_CAL_DETCollection.map((line: any, idx: number) => (
+              <div key={idx} className="bg-evo-bg/30 p-4 space-y-4 border border-evo-bg">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Data Calibração</Label>
+                    <Input 
+                      type="date"
+                      value={line.U_DtCalib} 
+                      onChange={(e) => updateLine(idx, 'U_DtCalib', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Vencimento</Label>
+                    <Input 
+                      type="date"
+                      value={line.U_DtVenc} 
+                      onChange={(e) => updateLine(idx, 'U_DtVenc', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Status</Label>
+                    <Select value={line.U_StatusCal} onValueChange={(val) => updateLine(idx, 'U_StatusCal', val)}>
+                      <SelectTrigger className="rounded-none border-evo-bg text-xs font-bold h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-none">
+                        <SelectItem value="Aprovado">Aprovado</SelectItem>
+                        <SelectItem value="Reprovado">Reprovado</SelectItem>
+                        <SelectItem value="Restrito">Restrito</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Certificado</Label>
+                    <Input 
+                      value={line.U_Certificado} 
+                      onChange={(e) => updateLine(idx, 'U_Certificado', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Laboratório</Label>
+                    <Input 
+                      value={line.U_Lab} 
+                      onChange={(e) => updateLine(idx, 'U_Lab', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Maior Erro</Label>
+                    <Input 
+                      value={line.U_MaiorErro} 
+                      onChange={(e) => updateLine(idx, 'U_MaiorErro', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Erro Enc</Label>
+                    <Input 
+                      value={line.U_ErroEnc} 
+                      onChange={(e) => updateLine(idx, 'U_ErroEnc', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">Erro Adm</Label>
+                    <Input 
+                      value={line.U_ErroAdm} 
+                      onChange={(e) => updateLine(idx, 'U_ErroAdm', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-black uppercase tracking-widest opacity-50">M. Incerteza</Label>
+                    <Input 
+                      value={line.U_MaiorIncer} 
+                      onChange={(e) => updateLine(idx, 'U_MaiorIncer', e.target.value)}
+                      className="rounded-none border-evo-bg text-xs font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <DialogFooter className="mt-8 gap-4">
+            <Button onClick={() => setIsModalOpen(false)} variant="outline" className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest">
+              Cancelar
+            </Button>
+            <Button onClick={handleSave} disabled={isSaving} className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-evo-dark text-[10px] font-black uppercase tracking-widest">
+              {isSaving ? 'Salvando...' : (formData.DocEntry ? 'Atualizar Registro' : 'Criar Registro')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 }

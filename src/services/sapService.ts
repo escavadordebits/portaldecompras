@@ -18,6 +18,10 @@ api.interceptors.request.use((config) => {
       console.error('Error parsing SAP config from localStorage', e);
     }
   }
+  const currentCompany = localStorage.getItem('sap_portal_company');
+  if (currentCompany) {
+    config.headers['X-SAP-Company'] = currentCompany;
+  }
   return config;
 });
 
@@ -31,6 +35,9 @@ export const sapService = {
   login: async (email: string, companyDB: string) => {
     try {
       const response = await api.post('/login', { email, companyDB });
+      if (companyDB) {
+        localStorage.setItem('sap_portal_company', companyDB);
+      }
       return response.data;
     } catch (error) {
       return handleApiError(error, 'login');
@@ -48,8 +55,7 @@ export const sapService = {
 
   getPurchaseRequests: async () => {
     try {
-      // Removed orderby to troubleshoot proxy errors in some SL versions
-      const response = await api.get('/sap/PurchaseRequests?$top=20');
+      const response = await api.get('/sap/CustosPessoal?$top=20');
       return response.data.value;
     } catch (error) {
       return handleApiError(error, 'getPurchaseRequests');
@@ -85,7 +91,7 @@ export const sapService = {
 
   getPurchaseRequest: async (docEntry: number) => {
     try {
-      const response = await api.get(`/sap/PurchaseRequests(${docEntry})`);
+      const response = await api.get(`/sap/CustosPessoal(${docEntry})`);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'getPurchaseRequest');
@@ -121,7 +127,11 @@ export const sapService = {
           Usage: line.Usage
         }))
       };
-      const response = await api.post('/sap/PurchaseOrders', formattedData);
+      const response = await api.post('/sap/PurchaseOrders', formattedData, {
+        headers: {
+          'B1S-EnableApprovalWorkflow': 'true'
+        }
+      });
       return response.data;
     } catch (error) {
       return handleApiError(error, 'createPurchaseOrder');
@@ -151,7 +161,11 @@ export const sapService = {
           Usage: line.Usage
         }))
       };
-      const response = await api.post('/sap/PurchaseRequests', formattedData);
+      const response = await api.post('/sap/CustosPessoal', formattedData, {
+        headers: {
+          'B1S-EnableApprovalWorkflow': 'true'
+        }
+      });
       return response.data;
     } catch (error) {
       return handleApiError(error, 'createPurchaseRequest');
@@ -199,7 +213,11 @@ export const sapService = {
           Usage: line.Usage
         }))
       };
-      const response = await api.post('/sap/PurchaseQuotations', formattedData);
+      const response = await api.post('/sap/PurchaseQuotations', formattedData, {
+        headers: {
+          'B1S-EnableApprovalWorkflow': 'true'
+        }
+      });
       return response.data;
     } catch (error) {
       return handleApiError(error, 'createPurchaseQuotation');
@@ -228,7 +246,11 @@ export const sapService = {
           Usage: line.Usage
         }))
       };
-      const response = await api.post('/sap/PurchaseDownPayments', formattedData);
+      const response = await api.post('/sap/PurchaseDownPayments', formattedData, {
+        headers: {
+          'B1S-EnableApprovalWorkflow': 'true'
+        }
+      });
       return response.data;
     } catch (error) {
       return handleApiError(error, 'createPurchaseDownPayment');
@@ -298,6 +320,20 @@ export const sapService = {
       return response.data;
     } catch (error) {
       return handleApiError(error, 'getBusinessPartner');
+    }
+  },
+
+  getCollaborators: async (name?: string) => {
+    try {
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName&$top=50";
+      let filter = "(CardType eq 'cSupplier' or CardType eq 'S') and startswith(CardCode, 'CO')";
+      if (name) {
+        filter += ` and (contains(CardName, '${name}') or contains(CardCode, '${name}'))`;
+      }
+      const response = await api.get(`${url}&$filter=${filter}`);
+      return response.data.value;
+    } catch (error) {
+      return handleApiError(error, 'getCollaborators');
     }
   },
 
@@ -544,31 +580,42 @@ export const sapService = {
   getQualityRecords: async () => {
     try {
       const response = await api.get('/sap/U_QLT_QLDADE?$top=50');
-      return response.data.value;
+      return response.data.value || [];
     } catch (error) {
-      return handleApiError(error, 'getQualityRecords');
+      try {
+        const response2 = await api.get('/sap/QLT_QLDADE?$top=50');
+        return response2.data.value || [];
+      } catch (err2) {
+        console.warn('Quality records endpoint not found in SAP, returning empty list');
+        return [];
+      }
     }
   },
 
   createQualityRecord: async (data: any) => {
+    // Calculate IPF before sending (sum of all scores)
+    const ipf = (Number(data.U_Atendimento) || 0) + 
+                (Number(data.U_Prazo) || 0) + 
+                (Number(data.U_Quantidade) || 0) + 
+                (Number(data.U_Documentacao) || 0) + 
+                (Number(data.U_Qualidade) || 0);
+    
+    const formattedData = {
+      ...data,
+      U_IPF: ipf,
+      U_Aviso_IPF: ipf < 10 ? 'Fornecedor Crítico' : 'Desempenho Adequado'
+    };
+
     try {
-      // Calculate IPF before sending (sum of all scores)
-      const ipf = (Number(data.U_Atendimento) || 0) + 
-                  (Number(data.U_Prazo) || 0) + 
-                  (Number(data.U_Quantidade) || 0) + 
-                  (Number(data.U_Documentacao) || 0) + 
-                  (Number(data.U_Qualidade) || 0);
-      
-      const formattedData = {
-        ...data,
-        U_IPF: ipf,
-        U_Aviso_IPF: ipf < 10 ? 'Fornecedor Crítico' : 'Desempenho Adequado'
-      };
-      
       const response = await api.post('/sap/U_QLT_QLDADE', formattedData);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'createQualityRecord');
+      try {
+        const response2 = await api.post('/sap/QLT_QLDADE', formattedData);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'createQualityRecord');
+      }
     }
   },
 
@@ -576,9 +623,15 @@ export const sapService = {
   getMaintenanceRecords: async () => {
     try {
       const response = await api.get('/sap/U_QLT_CAB?$top=50');
-      return response.data.value;
+      return response.data.value || [];
     } catch (error) {
-      return handleApiError(error, 'getMaintenanceRecords');
+      try {
+        const response2 = await api.get('/sap/QLT_CAB?$top=50');
+        return response2.data.value || [];
+      } catch (err2) {
+        console.warn('Maintenance records endpoint not found in SAP, returning empty list');
+        return [];
+      }
     }
   },
 
@@ -587,14 +640,19 @@ export const sapService = {
       const response = await api.post('/sap/U_QLT_CAB', data);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'createMaintenanceRecord');
+      try {
+        const response2 = await api.post('/sap/QLT_CAB', data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'createMaintenanceRecord');
+      }
     }
   },
 
-  // Calibration Records (QLT_CAL_CAB & DET)
+  // Calibration Records (QLT_CALIB)
   getCalibrationRecords: async () => {
     try {
-      const response = await api.get('/sap/U_QLT_CAL_CAB?$top=50&$orderby=DocEntry desc');
+      const response = await api.get('/sap/QLT_CALIB?$top=50&$orderby=DocEntry desc');
       return response.data.value;
     } catch (error) {
       return handleApiError(error, 'getCalibrationRecords');
@@ -603,47 +661,355 @@ export const sapService = {
 
   getCalibrationDetail: async (docEntry: number) => {
     try {
-      const response = await api.get(`/sap/U_QLT_CAL_CAB(${docEntry})`);
+      const response = await api.get(`/sap/QLT_CALIB(${docEntry})`);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'getCalibrationDetail');
     }
   },
 
-  // Cost Management (CUSTOSPESSOAL & CUSTOSLOCACAO)
+  createCalibrationRecord: async (data: any) => {
+    try {
+      const response = await api.post('/sap/QLT_CALIB', data);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'createCalibrationRecord');
+    }
+  },
+
+  updateCalibrationRecord: async (docEntry: number, data: any) => {
+    try {
+      const response = await api.patch(`/sap/QLT_CALIB(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updateCalibrationRecord');
+    }
+  },
+
+  deleteCalibrationRecord: async (docEntry: number) => {
+    try {
+      await api.delete(`/sap/QLT_CALIB(${docEntry})`);
+      return true;
+    } catch (error) {
+      return handleApiError(error, 'deleteCalibrationRecord');
+    }
+  },
+
+  // Cost Management (CustosPessoal & CustosLoc)
   getPersonnelCosts: async () => {
     try {
-      const response = await api.get('/sap/U_CUSTOSPESSOAL?$top=50');
-      return response.data.value;
+      const response = await api.get('/sap/CustosPessoal?$top=50');
+      return response.data.value || [];
     } catch (error) {
-      return handleApiError(error, 'getPersonnelCosts');
+      try {
+        const response2 = await api.get('/sap/U_CustosPessoal?$top=50');
+        return response2.data.value || [];
+      } catch (err2) {
+        console.warn('Personnel costs endpoint not found in SAP, returning empty list');
+        return [];
+      }
     }
   },
 
   getRentalCosts: async () => {
     try {
-      const response = await api.get('/sap/U_CUSTOSLOCACAO?$top=50');
-      return response.data.value;
+      const response = await api.get('/sap/CustosLoc?$top=50');
+      return response.data.value || [];
     } catch (error) {
-      return handleApiError(error, 'getRentalCosts');
+      try {
+        const response2 = await api.get('/sap/U_CustosLoc?$top=50');
+        return response2.data.value || [];
+      } catch (err2) {
+        console.warn('Rental costs endpoint not found in SAP, returning empty list');
+        return [];
+      }
     }
   },
 
   createPersonnelCost: async (data: any) => {
     try {
-      const response = await api.post('/sap/U_CUSTOSPESSOAL', data);
+      const response = await api.post('/sap/CustosPessoal', data);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'createPersonnelCost');
+      try {
+        const response2 = await api.post('/sap/U_CustosPessoal', data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'createPersonnelCost');
+      }
+    }
+  },
+
+  updatePersonnelCost: async (docEntry: number, data: any) => {
+    try {
+      const response = await api.patch(`/sap/CustosPessoal(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      try {
+        const response2 = await api.patch(`/sap/U_CustosPessoal(${docEntry})`, data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'updatePersonnelCost');
+      }
+    }
+  },
+
+  deletePersonnelCost: async (docEntry: number) => {
+    try {
+      const response = await api.delete(`/sap/CustosPessoal(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      try {
+        const response2 = await api.delete(`/sap/U_CustosPessoal(${docEntry})`);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'deletePersonnelCost');
+      }
     }
   },
 
   createRentalCost: async (data: any) => {
     try {
-      const response = await api.post('/sap/U_CUSTOSLOCACAO', data);
+      const response = await api.post('/sap/CustosLoc', data);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'createRentalCost');
+      try {
+        const response2 = await api.post('/sap/U_CustosLoc', data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'createRentalCost');
+      }
+    }
+  },
+
+  updateRentalCost: async (docEntry: number, data: any) => {
+    try {
+      const response = await api.patch(`/sap/CustosLoc(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      try {
+        const response2 = await api.patch(`/sap/U_CustosLoc(${docEntry})`, data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'updateRentalCost');
+      }
+    }
+  },
+
+  deleteRentalCost: async (docEntry: number) => {
+    try {
+      const response = await api.delete(`/sap/CustosLoc(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      try {
+        const response2 = await api.delete(`/sap/U_CustosLoc(${docEntry})`);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'deleteRentalCost');
+      }
+    }
+  },
+
+  // Quotations (SalesQuotations)
+  getQuotations: async () => {
+    try {
+      const response = await api.get('/sap/Quotations?$top=50&$orderby=DocEntry desc');
+      return response.data.value;
+    } catch (error) {
+      return handleApiError(error, 'getQuotations');
+    }
+  },
+
+  getQuotation: async (docEntry: number) => {
+    try {
+      const response = await api.get(`/sap/Quotations(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'getQuotation');
+    }
+  },
+
+  createQuotation: async (data: any) => {
+    try {
+      // Fix for Brazilian localization mandatory field
+      const sanitizeData = (obj: any) => {
+        const sanitized = { ...obj };
+        if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
+          sanitized.U_B1SYS_RevenueInd2 = '1';
+        }
+        // Force BPL_IDAssignedToInvoice to 1 for all sales documents
+        sanitized.BPL_IDAssignedToInvoice = 1;
+
+        if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
+          sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => ({
+            ...line,
+            U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+            BPL_IDAssignedToInvoice: 1
+          }));
+        }
+        return sanitized;
+      };
+
+      const response = await api.post('/sap/Quotations', sanitizeData(data));
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'createQuotation');
+    }
+  },
+
+  updateQuotation: async (docEntry: number, data: any) => {
+    try {
+      // Fix for Brazilian localization mandatory field
+      const sanitizeData = (obj: any) => {
+        const sanitized = { ...obj };
+        if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
+          sanitized.U_B1SYS_RevenueInd2 = '1';
+        }
+        // Force BPL_IDAssignedToInvoice to 1 for all sales documents
+        sanitized.BPL_IDAssignedToInvoice = 1;
+
+        if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
+          sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => ({
+            ...line,
+            U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+            BPL_IDAssignedToInvoice: 1
+          }));
+        }
+        return sanitized;
+      };
+
+      const response = await api.patch(`/sap/Quotations(${docEntry})`, sanitizeData(data));
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updateQuotation');
+    }
+  },
+
+  deleteQuotation: async (docEntry: number) => {
+    try {
+      const response = await api.delete(`/sap/Quotations(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'deleteQuotation');
+    }
+  },
+
+  // Orders (SalesOrders)
+  getOrders: async () => {
+    try {
+      const response = await api.get('/sap/Orders?$orderby=DocEntry desc&$top=50');
+      return response.data.value;
+    } catch (error) {
+      return handleApiError(error, 'getOrders');
+    }
+  },
+
+  getOrder: async (docEntry: number) => {
+    try {
+      const response = await api.get(`/sap/Orders(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'getOrder');
+    }
+  },
+
+  createOrder: async (data: any) => {
+    try {
+      const sanitizeData = (obj: any) => {
+        const sanitized = { ...obj };
+        if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
+          sanitized.U_B1SYS_RevenueInd2 = '1';
+        }
+        sanitized.BPL_IDAssignedToInvoice = 1;
+
+        if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
+          sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => ({
+            ...line,
+            U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+            BPL_IDAssignedToInvoice: 1
+          }));
+        }
+        return sanitized;
+      };
+
+      const response = await api.post('/sap/Orders', sanitizeData(data));
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'createOrder');
+    }
+  },
+
+  updateOrder: async (docEntry: number, data: any) => {
+    try {
+      const sanitizeData = (obj: any) => {
+        const sanitized = { ...obj };
+        if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
+          sanitized.U_B1SYS_RevenueInd2 = '1';
+        }
+        sanitized.BPL_IDAssignedToInvoice = 1;
+
+        if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
+          sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => ({
+            ...line,
+            U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+            BPL_IDAssignedToInvoice: 1
+          }));
+        }
+        return sanitized;
+      };
+
+      const response = await api.patch(`/sap/Orders(${docEntry})`, sanitizeData(data));
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updateOrder');
+    }
+  },
+
+  deleteOrder: async (docEntry: number) => {
+    try {
+      const response = await api.delete(`/sap/Orders(${docEntry})`);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'deleteOrder');
+    }
+  },
+
+  // Orders (SalesOrders) - Copy To from Quotation
+  createOrderFromQuotation: async (quotationData: any) => {
+    try {
+      let fullQuote = quotationData;
+      if (quotationData?.DocEntry) {
+        try {
+          const fresh = await api.get(`/sap/Quotations(${quotationData.DocEntry})`);
+          if (fresh?.data) {
+            fullQuote = fresh.data;
+          }
+        } catch (e) {
+          console.warn('Could not re-fetch quotation before creating order, using passed object');
+        }
+      }
+
+      const lines = (fullQuote.DocumentLines || []).map((line: any, idx: number) => ({
+        BaseType: 23, // Quotations
+        BaseEntry: fullQuote.DocEntry,
+        BaseLine: line.LineNum !== undefined && line.LineNum !== null ? line.LineNum : idx,
+        Quantity: line.Quantity,
+        U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+        BPL_IDAssignedToInvoice: 1
+      }));
+
+      const orderData = {
+        CardCode: fullQuote.CardCode,
+        DocDueDate: fullQuote.DocDueDate ? fullQuote.DocDueDate.split('T')[0] : new Date().toISOString().split('T')[0],
+        BPL_IDAssignedToInvoice: 1,
+        U_B1SYS_RevenueInd2: fullQuote.U_B1SYS_RevenueInd2 || '1',
+        DocumentLines: lines
+      };
+
+      const response = await api.post('/sap/Orders', orderData);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'createOrderFromQuotation');
     }
   }
 };
