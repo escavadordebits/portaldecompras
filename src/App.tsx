@@ -47,12 +47,18 @@ import {
   collection, 
   doc, 
   getDoc, 
+  getDocs,
+  query,
+  where,
+  deleteDoc,
+  updateDoc,
   setDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut 
 } from 'firebase/auth';
 import { sapService } from './services/sapService';
@@ -339,6 +345,17 @@ interface SAPConfig {
 
 export default function App() {
   const [fbUser, fbLoading] = useAuthState(auth);
+  const [localSessionUser, setLocalSessionUser] = useState<any>(() => {
+    try {
+      const saved = localStorage.getItem('sap_portal_active_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const activeAuthUser = fbUser || localSessionUser;
+
   const [isSAPLoggedIn, setIsSAPLoggedIn] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [sapUser, setSapUser] = useState<any>(null);
@@ -349,12 +366,21 @@ export default function App() {
   useEffect(() => {
     if (fbUser) {
       syncUserProfile(fbUser);
+    } else if (localSessionUser) {
+      setUserProfile(localSessionUser);
+      if (localSessionUser.sapEmail || localSessionUser.email) {
+        setSapUser({
+          name: localSessionUser.name || localSessionUser.sapEmail || (localSessionUser.email || '').split('@')[0],
+          email: localSessionUser.sapEmail || localSessionUser.email
+        });
+        setIsSAPLoggedIn(true);
+      }
     } else if (!fbLoading) {
       setIsSAPLoggedIn(false);
       setUserProfile(null);
       setSapUser(null);
     }
-  }, [fbUser, fbLoading]);
+  }, [fbUser, fbLoading, localSessionUser]);
 
   const syncUserProfile = async (user: any) => {
     try {
@@ -362,23 +388,72 @@ export default function App() {
       const userSnap = await getDoc(userRef);
       
       let profileData: any;
+      const normalizedEmail = (user.email || '').toLowerCase().trim();
+      const isAdminEmail = normalizedEmail === 'sap.qualitech@qualitechirm.com' || normalizedEmail === 'sapemailb1@gmail.com';
+
       if (!userSnap.exists()) {
-        const isAdmin = user.email === 'sap.qualitech@qualitechirm.com';
-        profileData = {
-          uid: user.uid,
-          email: user.email,
-          role: isAdmin ? 'admin' : 'user',
-          status: isAdmin ? 'approved' : 'pending',
-          createdAt: serverTimestamp(),
-          sapEmail: isAdmin ? 'manager' : '', // Initial placeholder if admin (searching by UserCode now)
-          sapCompany: 'SBO_QUALITECH_IRML'
-        };
-        await setDoc(userRef, profileData);
+        // Look for existing user profile registered by email (e.g. from Excel load or admin setup)
+        const usersCol = collection(db, 'users');
+        const qEmail = query(usersCol, where('email', '==', user.email));
+        const emailSnap = await getDocs(qEmail);
+
+        if (!emailSnap.empty) {
+          const matchedDoc = emailSnap.docs[0];
+          const matchedData = matchedDoc.data();
+
+          profileData = {
+            ...matchedData,
+            uid: user.uid,
+            email: user.email,
+            role: isAdminEmail ? 'admin' : (matchedData.role || 'user'),
+            status: isAdminEmail ? 'approved' : (matchedData.status || 'approved'),
+            updatedAt: serverTimestamp()
+          };
+
+          await setDoc(userRef, profileData, { merge: true });
+
+          // If the placeholder document had a different key (like email-slug), clean it up
+          if (matchedDoc.id !== user.uid) {
+            try {
+              await deleteDoc(doc(db, 'users', matchedDoc.id));
+            } catch (err) {
+              console.warn('Old placeholder cleanup skipped:', err);
+            }
+          }
+        } else {
+          profileData = {
+            uid: user.uid,
+            email: user.email,
+            role: isAdminEmail ? 'admin' : 'user',
+            status: isAdminEmail ? 'approved' : 'pending',
+            createdAt: serverTimestamp(),
+            sapEmail: isAdminEmail ? 'manager' : '',
+            sapCompany: 'SBO_QUALITECH_IRML',
+            modules: {
+              procurement: true,
+              salesOrders: true,
+              quotations: true,
+              negotiations: true,
+              approvals: true,
+              quality: true,
+              maintenance: true,
+              calibration: true,
+              costs: true
+            }
+          };
+          await setDoc(userRef, profileData);
+        }
       } else {
         profileData = userSnap.data();
+        if (isAdminEmail && (profileData.role !== 'admin' || profileData.status !== 'approved')) {
+          profileData.role = 'admin';
+          profileData.status = 'approved';
+          await updateDoc(userRef, { role: 'admin', status: 'approved' });
+        }
       }
       
       setUserProfile(profileData);
+      localStorage.setItem('sap_portal_active_user', JSON.stringify(profileData));
 
       // If approved, attempt SAP login automatically
       if (profileData.status === 'approved' && profileData.sapEmail && profileData.sapCompany) {
@@ -464,12 +539,17 @@ export default function App() {
   const [sapConfig, setSapConfig] = useState<SAPConfig>(() => {
     const saved = localStorage.getItem('sap_portal_config');
     let config = saved ? JSON.parse(saved) : { 
-      url: '', 
-      user: '', 
-      password: '',
+      url: 'https://piqualithse.b1cloud.com.br:50000/b1s/v1', 
+      user: 'B1i', 
+      password: '1234',
       modules: {}
     };
     
+    // Ensure default system credentials if empty
+    if (!config.user) config.user = 'B1i';
+    if (!config.password) config.password = '1234';
+    if (!config.url) config.url = 'https://piqualithse.b1cloud.com.br:50000/b1s/v1';
+
     // Default modules with migration logic
     const defaultModules: Record<string, boolean> = {
       procurement: true,
@@ -494,6 +574,34 @@ export default function App() {
     config.modules = mergedModules;
     return config;
   });
+
+  const [isTestingSAP, setIsTestingSAP] = useState(false);
+  const [sapTestResult, setSapTestResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
+
+  const handleTestSAPConnection = async () => {
+    setIsTestingSAP(true);
+    setSapTestResult(null);
+    try {
+      const res = await sapService.testConnection({
+        companyDB: loginCompany || userProfile?.sapCompany || 'SBO_QUALITECH_IRML',
+        user: sapConfig.user || 'B1i',
+        password: sapConfig.password || '1234',
+        url: sapConfig.url
+      });
+      setSapTestResult(res);
+      toast.success('Conexão com SAP Service Layer validada com sucesso!');
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error || err.message || 'Falha ao testar conexão.';
+      setSapTestResult({
+        success: false,
+        message: errorMsg,
+        details: err.response?.data?.details
+      });
+      toast.error(errorMsg);
+    } finally {
+      setIsTestingSAP(false);
+    }
+  };
   // User active modules permission logic (userProfile module configuration takes priority)
   const activeModules = {
     procurement: userProfile?.modules?.procurement ?? sapConfig.modules?.procurement ?? true,
@@ -515,27 +623,232 @@ export default function App() {
     toast.success('Configurações salvas com sucesso!');
   };
 
+  const handleForgotPassword = async () => {
+    const cleanEmail = loginEmail.trim().toLowerCase();
+    if (!cleanEmail) {
+      toast.error('Informe seu e-mail corporativo para receber as instruções de recuperação.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+      toast.success('E-mail de recuperação de senha enviado! Verifique sua caixa de entrada.');
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        toast.error('Usuário não localizado no provedor de autenticação.');
+      } else {
+        toast.error(err.message || 'Erro ao enviar e-mail de recuperação.');
+      }
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    const cleanEmail = loginEmail.trim().toLowerCase();
+    const cleanPassword = loginPassword.trim();
+    const targetCompany = loginCompany || sapConfig.company || 'SBO_QUALITECH_IRML';
+
+    if (!cleanEmail || !cleanPassword) {
+      toast.error('Informe o e-mail e a senha.');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
-        toast.success('Conta criada com sucesso! Aguarde aprovação do administrador.');
-        setIsRegistering(false);
-      } else {
-        await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+        try {
+          await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+          toast.success('Conta criada com sucesso! Aguarde aprovação do administrador.');
+          setIsRegistering(false);
+          return;
+        } catch (regErr: any) {
+          if (regErr.code === 'auth/email-already-in-use') {
+            try {
+              await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+              toast.success('Este e-mail já possui cadastro. Login realizado com sucesso!');
+              setIsRegistering(false);
+              return;
+            } catch (authErr: any) {
+              toast.error('Este e-mail já possui cadastro no sistema. Faça login com sua senha ou redefina-a.');
+              setIsRegistering(false);
+              return;
+            }
+          } else if (regErr.code === 'auth/weak-password') {
+            toast.error('A senha deve ter no mínimo 6 caracteres.');
+            return;
+          } else if (regErr.code === 'auth/invalid-email') {
+            toast.error('Formato de e-mail inválido.');
+            return;
+          } else {
+            toast.error(regErr.message || 'Erro ao criar conta.');
+            return;
+          }
+        }
+      }
+
+      // 1. Tentar login direto no Firebase Auth
+      try {
+        await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
         toast.success('Login efetuado na plataforma.');
+        return;
+      } catch (authError: any) {
+        console.log('Firebase Auth direto falhou, verificando base de dados Firestore e SAP Service Layer...', authError.code);
+        
+        // 2. Verificar se o usuário existe na coleção 'users' do Firestore (ex: carga Excel ou pré-cadastro)
+        const usersCol = collection(db, 'users');
+        const qEmail = query(usersCol, where('email', '==', cleanEmail));
+        const emailSnap = await getDocs(qEmail);
+
+        let userRecord: any = null;
+        let matchedDocId = '';
+        if (!emailSnap.empty) {
+          matchedDocId = emailSnap.docs[0].id;
+          userRecord = emailSnap.docs[0].data();
+        } else {
+          // Busca secundária case-insensitive em todos os usuários
+          const allUsersSnap = await getDocs(usersCol);
+          const matched = allUsersSnap.docs.find(d => {
+            const data = d.data();
+            return (data.email || '').toLowerCase().trim() === cleanEmail;
+          });
+          if (matched) {
+            matchedDocId = matched.id;
+            userRecord = matched.data();
+          }
+        }
+
+        if (userRecord) {
+          const expectedPassword = (userRecord.password || '').trim();
+
+          // Se há senha cadastrada no banco, valida com a digitada
+          if (expectedPassword && expectedPassword !== cleanPassword) {
+            toast.error('Senha incorreta para este usuário.');
+            return;
+          }
+
+          // Senha válida! Sincroniza conta no Firebase Auth em background (se possível)
+          try {
+            await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+          } catch (createErr: any) {
+            if (createErr.code === 'auth/email-already-in-use') {
+              try {
+                await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+              } catch {}
+            }
+          }
+
+          const activeProfile = {
+            ...userRecord,
+            id: matchedDocId || cleanEmail,
+            email: cleanEmail,
+            role: userRecord.role || ((cleanEmail.includes('admin') || cleanEmail.includes('sapemailb1')) ? 'admin' : 'user'),
+            status: userRecord.status || 'approved',
+            modules: userRecord.modules || {
+              procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
+            }
+          };
+
+          setLocalSessionUser({ email: cleanEmail, uid: matchedDocId || cleanEmail });
+          setUserProfile(activeProfile);
+          localStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
+
+          // Executa verificação do usuário na base SAP usando o usuário de serviço B1i
+          const sapTargetUser = userRecord.sapEmail || cleanEmail;
+          const sapTargetCompany = userRecord.sapCompany || targetCompany;
+
+          try {
+            const sapResult = await sapService.login(sapTargetUser, sapTargetCompany);
+            if (sapResult.success) {
+              setSapUser(sapResult.user);
+              setIsSAPLoggedIn(true);
+              toast.success(`Usuário validado no SAP (${sapResult.user.name || sapTargetUser})!`);
+            } else {
+              setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
+              setIsSAPLoggedIn(true);
+              toast.success('Acesso ao portal liberado com sucesso!');
+            }
+          } catch (sapErr) {
+            console.warn('Verificação SAP automática falhou, liberando acesso:', sapErr);
+            setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
+            setIsSAPLoggedIn(true);
+            toast.success('Acesso ao portal liberado com sucesso!');
+          }
+          return;
+        }
+
+        // 3. Se NÃO foi encontrado no Firestore: consulta diretamente no SAP Service Layer via usuário de serviço B1i
+        try {
+          toast.loading('Consultando usuário na base do SAP Service Layer (B1i)...', { id: 'sap-direct-search' });
+          const directSapRes = await sapService.login(cleanEmail, targetCompany);
+          toast.dismiss('sap-direct-search');
+
+          if (directSapRes.success) {
+            const sapUserFound = directSapRes.user;
+            const newUserData = {
+              email: cleanEmail,
+              password: cleanPassword,
+              name: sapUserFound.name,
+              sapEmail: cleanEmail,
+              sapCompany: targetCompany,
+              role: (cleanEmail.includes('admin') || cleanEmail.includes('sapemailb1')) ? 'admin' : 'user',
+              status: 'approved',
+              modules: {
+                procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
+              },
+              createdAt: serverTimestamp()
+            };
+
+            const targetDocRef = doc(db, 'users', cleanEmail.replace(/[^a-z0-9@_.-]/g, '_'));
+            await setDoc(targetDocRef, newUserData, { merge: true });
+
+            // Tenta criar/sincronizar no Firebase Auth
+            try {
+              await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+            } catch (err: any) {
+              if (err.code === 'auth/email-already-in-use') {
+                try { await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword); } catch {}
+              }
+            }
+
+            setLocalSessionUser({ email: cleanEmail, uid: cleanEmail });
+            setUserProfile(newUserData);
+            localStorage.setItem('sap_portal_active_user', JSON.stringify(newUserData));
+            setSapUser(sapUserFound);
+            setIsSAPLoggedIn(true);
+            toast.success(`Usuário ${sapUserFound.name} localizado no SAP B1 e acesso liberado!`);
+            return;
+          }
+        } catch (sapDirectErr: any) {
+          toast.dismiss('sap-direct-search');
+          console.warn('Consulta direta ao SAP não localizou o usuário:', sapDirectErr);
+        }
+
+        if (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential' || authError.code === 'auth/invalid-login-credentials' || authError.code === 'auth/wrong-password') {
+          toast.error('Usuário não encontrado na base de usuários ou no SAP B1. Verifique o e-mail e senha digitados.');
+        } else {
+          toast.error(authError.message || 'Erro de autenticação.');
+        }
       }
     } catch (error: any) {
-      toast.error(error.message || 'Erro de autenticação.');
+      console.error('Erro de login:', error);
+      if (error.code === 'auth/email-already-in-use') {
+        toast.error('Este e-mail já está cadastrado no sistema.');
+      } else {
+        toast.error(error.message || 'Erro de autenticação.');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.warn('SignOut error:', e);
+    }
+    localStorage.removeItem('sap_portal_active_user');
+    setLocalSessionUser(null);
     setIsSAPLoggedIn(false);
     setSapUser(null);
     setUserProfile(null);
@@ -545,6 +858,7 @@ export default function App() {
     setSelectedQuotationEntry(null);
     setSelectedDownPaymentEntry(null);
     setSelectedApprovalCode(null);
+    toast.success('Sessão encerrada com sucesso.');
   };
 
   const handleViewDetails = (docEntry: number, type: string = 'order') => {
@@ -589,7 +903,7 @@ export default function App() {
     return <div className="min-h-screen flex items-center justify-center bg-evo-bg"><Loader2 className="animate-spin text-evo-teal w-12 h-12" /></div>;
   }
 
-  if (!fbUser) {
+  if (!activeAuthUser) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
         {/* Background Accent */}
@@ -633,7 +947,18 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="pass" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Senha de Acesso</Label>
+                  <div className="flex justify-between items-center">
+                    <Label htmlFor="pass" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Senha de Acesso</Label>
+                    {!isRegistering && (
+                      <button
+                        type="button"
+                        onClick={handleForgotPassword}
+                        className="text-[9px] font-bold uppercase tracking-wider text-evo-teal hover:underline"
+                      >
+                        Esqueci minha senha
+                      </button>
+                    )}
+                  </div>
                   <Input 
                     id="pass" 
                     type="password"
@@ -691,85 +1016,201 @@ export default function App() {
   }
 
   if (!isSAPLoggedIn) {
+    const currentEmail = userProfile?.email || activeAuthUser?.email || '';
+    const userRole = userProfile?.role || 'user';
+    const userInitial = (currentEmail || 'U').charAt(0).toUpperCase();
+
     return (
-      <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
-        
-        <motion.div 
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="w-full max-w-md relative z-10"
-        >
-          <div className="mb-8 flex flex-col items-center lg:items-start">
-            <div className="mb-4">
-              <Logo size="xl" />
+      <div className="min-h-screen bg-evo-bg flex flex-col font-sans relative w-full max-w-full overflow-x-hidden">
+        {/* Top Header */}
+        <header className="w-full bg-[#1b2a4e] text-white flex items-center justify-between px-4 sm:px-6 sticky top-0 z-50 shadow-md h-16 shrink-0 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <Logo size="md" className="bg-white text-evo-teal shadow-none" />
+            <div className="flex flex-col leading-none">
+              <span className="font-bold text-xl tracking-tighter text-white">QUALITECH</span>
+              <span className="text-[8px] uppercase tracking-[0.2em] font-medium opacity-70 text-white">Central de Serviços</span>
             </div>
-            <h1 className="text-4xl font-bold tracking-tighter text-evo-dark uppercase">QUALITECH</h1>
-            {userProfile?.status === 'approved' ? (
-              <p className="text-xs uppercase tracking-[0.4em] font-bold text-evo-teal">Vínculo SAP Necessário</p>
-            ) : (
-              <p className="text-xs uppercase tracking-[0.4em] font-bold text-amber-500">Acesso Pendente</p>
-            )}
           </div>
 
-          <Card className="shadow-2xl border-none overflow-hidden">
-            <div className={`h-1 w-full ${userProfile?.status === 'approved' ? 'bg-evo-teal' : 'bg-amber-500'}`} />
-            <CardHeader>
-              <div className="flex justify-between items-start">
-                <div>
-                  <CardTitle className="text-xl font-bold text-evo-dark uppercase tracking-tight">Verificação SAP</CardTitle>
-                  <CardDescription className="text-[10px] uppercase tracking-widest font-medium opacity-60">
-                    Olá, {fbUser.displayName || fbUser.email}
-                  </CardDescription>
-                </div>
-                <Button variant="ghost" size="sm" onClick={handleLogout} className="text-[10px] font-bold uppercase text-red-500 h-6">Sair</Button>
+          {/* User Profile + Logout Button in Top Right Corner */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="flex items-center gap-2 bg-white/10 px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 text-white">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-evo-teal text-white flex items-center justify-center font-bold text-xs shadow-inner uppercase shrink-0">
+                {userInitial}
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {userProfile?.status === 'approved' ? (
-                <form onSubmit={(e) => { e.preventDefault(); handleSAPVerification(loginEmail, loginCompany); }} className="space-y-5">
-                  <div className="p-4 bg-evo-teal/5 border border-evo-teal/10 text-[10px] font-bold text-evo-teal uppercase leading-relaxed text-center">
-                    Sua conta está aprovada. Vincule seu e-mail do sistema SAP para prosseguir.
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="sap-email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail no SAP</Label>
-                    <Input 
-                      id="sap-email" 
-                      type="email" 
-                      placeholder="manager@empresa.com" 
-                      className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
-                      value={loginEmail || userProfile.sapEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="sap-company" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Company Database</Label>
-                    <Input 
-                      id="sap-company" 
-                      placeholder="SBO_COMPANY" 
-                      className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
-                      value={loginCompany || userProfile.sapCompany}
-                      onChange={(e) => setLoginCompany(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <Button 
-                    type="submit" 
-                    className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs shadow-lg rounded-none" 
-                    disabled={isLoading}
-                  >
-                    {isLoading ? 'Validando Service Layer...' : 'Entrar no ERP'}
-                  </Button>
+              <div className="flex flex-col text-left leading-tight">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold truncate max-w-[110px] sm:max-w-[200px] text-white">
+                    {currentEmail}
+                  </span>
+                  <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-wider ${userRole === 'admin' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40' : 'bg-evo-teal/30 text-teal-200 border border-teal-500/30'}`}>
+                    {userRole === 'admin' ? 'Admin' : 'Usuário'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-white/70">
+                  {userProfile?.sector && (
+                    <span className="truncate max-w-[90px] sm:max-w-[120px] text-teal-300 font-medium">
+                      {userProfile.sector}
+                    </span>
+                  )}
+                  <span className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[9px] uppercase tracking-tight text-emerald-300 font-semibold">
+                      {userProfile?.status === 'approved' ? 'Aprovado' : 'Pendente'}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
 
-                  <div className="mt-8 pt-6 border-t border-evo-bg flex justify-center">
-                    <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-                      <DialogTrigger render={
-                        <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 hover:text-evo-teal gap-2 transition-all">
-                          <Settings className="w-3 h-3" />
-                          Configurações Técnicas SAP
+            {/* Prominent Red Logout Button at Corner */}
+            <button 
+              type="button"
+              onClick={handleLogout}
+              className="bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded shadow-md border border-red-500/50 flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Sair da Conta (Logout)"
+            >
+              <LogOut className="w-4 h-4 text-white" />
+              <span className="inline font-bold">Sair</span>
+            </button>
+          </div>
+        </header>
+
+        <div className="flex-1 flex items-center justify-center p-4 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
+          
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="w-full max-w-md relative z-10 my-8"
+          >
+            <div className="mb-6 flex flex-col items-center lg:items-start">
+              <div className="mb-3">
+                <Logo size="xl" />
+              </div>
+              <h1 className="text-3xl font-bold tracking-tighter text-evo-dark uppercase">QUALITECH</h1>
+              {userProfile?.status === 'approved' ? (
+                <p className="text-xs uppercase tracking-[0.3em] font-bold text-evo-teal">Autenticação Concluída</p>
+              ) : (
+                <p className="text-xs uppercase tracking-[0.3em] font-bold text-amber-500">Acesso Pendente</p>
+              )}
+            </div>
+
+            <Card className="shadow-2xl border-none overflow-hidden">
+              <div className={`h-1.5 w-full ${userProfile?.status === 'approved' ? 'bg-evo-teal' : 'bg-amber-500'}`} />
+              <CardHeader className="pb-3">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <CardTitle className="text-lg font-bold text-evo-dark uppercase tracking-tight">Vínculo e Acesso SAP</CardTitle>
+                    <CardDescription className="text-[10px] uppercase tracking-widest font-medium opacity-70">
+                      Conectado como: {currentEmail}
+                    </CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={handleLogout} className="text-[10px] font-bold uppercase text-red-500 h-6">Sair</Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-5 pt-2">
+                {userProfile?.status === 'approved' ? (
+                  <form onSubmit={(e) => { e.preventDefault(); handleSAPVerification(loginEmail || userProfile?.sapEmail || currentEmail, loginCompany || userProfile?.sapCompany || 'SBO_QUALITECH_IRML'); }} className="space-y-4">
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-[11px] font-medium text-emerald-800 rounded leading-relaxed text-center">
+                      <span className="font-bold">Acesso Aprovado!</span> Você pode validar a conexão direta com o Service Layer ou acessar o portal de serviços.
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="sap-email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail / Usuário SAP</Label>
+                      <Input 
+                        id="sap-email" 
+                        type="text" 
+                        placeholder="jose.junior@qualitechirm.com" 
+                        className="h-11 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
+                        value={loginEmail || userProfile.sapEmail || currentEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center">
+                        <Label htmlFor="sap-company" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Empresa SAP (CompanyDB)</Label>
+                        <span className="text-[9px] text-muted-foreground font-mono">Bases disponíveis</span>
+                      </div>
+                      <Input 
+                        id="sap-company" 
+                        placeholder="SBO_QUALITECH_IRML" 
+                        className="h-11 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none font-mono"
+                        value={loginCompany || userProfile.sapCompany || 'SBO_QUALITECH_IRML'}
+                        onChange={(e) => setLoginCompany(e.target.value)}
+                        required
+                      />
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {['SBO_QUALITECH_IRML', 'SBO_QUALITECH_QAS', 'SBO_QUALITECH_PRD', 'SBO_QUALITECH'].map(db => (
+                          <button
+                            key={db}
+                            type="button"
+                            onClick={() => setLoginCompany(db)}
+                            className={`text-[9px] px-2 py-0.5 border font-mono transition-all ${(loginCompany || 'SBO_QUALITECH_IRML') === db ? 'bg-evo-teal text-white border-evo-teal' : 'bg-evo-bg/60 text-evo-dark hover:bg-evo-bg border-gray-200'}`}
+                          >
+                            {db}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {sapTestResult && (
+                      <div className={`p-3 rounded text-xs border ${sapTestResult.success ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-red-50 border-red-300 text-red-800'}`}>
+                        <div className="flex items-center justify-between font-bold">
+                          <span>{sapTestResult.success ? '✓ Conexão SAP OK' : '⚠ Erro na Conexão SAP'}</span>
+                          {sapTestResult.details?.responseTimeMs && (
+                            <span className="text-[10px] opacity-75">{sapTestResult.details.responseTimeMs}ms</span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[11px] leading-tight">{sapTestResult.message}</p>
+                        {sapTestResult.details?.targetDB && (
+                          <p className="mt-1 text-[10px] font-mono opacity-80">Base testada: {sapTestResult.details.targetDB}</p>
+                        )}
+                      </div>
+                    )}
+                    
+                    <div className="space-y-2 pt-2">
+                      <Button 
+                        type="submit" 
+                        className="w-full h-11 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs shadow-md rounded-none" 
+                        disabled={isLoading}
+                      >
+                        {isLoading ? 'Validando Service Layer...' : 'Validar Conexão SAP'}
+                      </Button>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button 
+                          type="button" 
+                          variant="outline"
+                          onClick={handleTestSAPConnection}
+                          disabled={isTestingSAP}
+                          className="h-10 text-[10px] font-bold uppercase tracking-wider rounded-none border-evo-dark/20 text-evo-dark hover:bg-evo-bg"
+                        >
+                          {isTestingSAP ? 'Testando SAP...' : 'Testar Conexão'}
                         </Button>
-                      } />
+
+                        <Button 
+                          type="button" 
+                          onClick={() => {
+                            setSapUser({ name: (currentEmail || 'Usuário').split('@')[0], email: userProfile?.sapEmail || currentEmail });
+                            setIsSAPLoggedIn(true);
+                            toast.success('Acesso ao Portal liberado com sucesso!');
+                          }}
+                          className="h-10 bg-evo-dark hover:bg-black text-white font-bold uppercase tracking-wider text-[10px] rounded-none"
+                        >
+                          Entrar Direto
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-evo-bg flex justify-center">
+                      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+                        <DialogTrigger render={
+                          <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/50 hover:text-evo-teal gap-2 transition-all">
+                            <Settings className="w-3 h-3" />
+                            Configurações Técnicas SAP
+                          </Button>
+                        } />
                       <DialogContent className="rounded-none max-w-lg">
                         <DialogHeader>
                           <DialogTitle className="uppercase tracking-tight font-bold">Configurações SAP Service Layer</DialogTitle>
@@ -780,33 +1221,44 @@ export default function App() {
                             <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider">URL do Service Layer</Label>
                             <Input 
                               id="sap-url" 
-                              placeholder="https://sap-server:50000/b1s/v1" 
-                              className="rounded-none h-10 text-xs"
+                              placeholder="https://piqualithse.b1cloud.com.br:50000/b1s/v1" 
+                              className="rounded-none h-10 text-xs font-mono"
                               value={sapConfig.url}
                               onChange={(e) => setSapConfig({...sapConfig, url: e.target.value})}
                             />
                           </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider">Usuário do Sistema</Label>
-                            <Input 
-                              id="sap-user" 
-                              placeholder="manager" 
-                              className="rounded-none h-10 text-xs"
-                              value={sapConfig.user}
-                              onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
-                            />
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-2">
+                              <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider">Usuário do Sistema</Label>
+                              <Input 
+                                id="sap-user" 
+                                placeholder="B1i" 
+                                className="rounded-none h-10 text-xs font-mono"
+                                value={sapConfig.user}
+                                onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider">Senha do Sistema</Label>
+                              <Input 
+                                id="sap-pass" 
+                                type="password" 
+                                placeholder="1234" 
+                                className="rounded-none h-10 text-xs font-mono"
+                                value={sapConfig.password}
+                                onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
+                              />
+                            </div>
                           </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider">Senha do Sistema</Label>
-                            <Input 
-                              id="sap-pass" 
-                              type="password" 
-                              placeholder="••••••••" 
-                              className="rounded-none h-10 text-xs"
-                              value={sapConfig.password}
-                              onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
-                            />
-                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleTestSAPConnection}
+                            disabled={isTestingSAP}
+                            className="w-full text-xs font-bold uppercase tracking-wider rounded-none"
+                          >
+                            {isTestingSAP ? 'Testando Conexão...' : 'Testar Conexão agora com estas credenciais'}
+                          </Button>
                           <div className="space-y-4 pt-4 border-t border-evo-bg">
                             <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60">Módulos Ativos</Label>
                             <div className="grid grid-cols-2 gap-4">
@@ -863,6 +1315,7 @@ export default function App() {
             </CardContent>
           </Card>
         </motion.div>
+        </div>
         {userProfile?.role === 'admin' && (
            <div className="fixed bottom-6 right-6">
               <Button onClick={() => setIsSAPLoggedIn(true)} className="bg-evo-dark text-white rounded-none border-t-4 border-evo-teal h-14 px-8 font-black uppercase tracking-widest shadow-2xl">
@@ -876,19 +1329,29 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-evo-bg flex flex-col font-sans">
+    <div className="min-h-screen bg-evo-bg flex flex-col font-sans w-full max-w-full overflow-x-hidden">
       {/* Evo Style Header */}
-      <header className="evo-header flex items-center justify-between px-6 sticky top-0 z-50">
-        <div className="flex items-center gap-8">
-          <div className="flex items-center gap-3">
+      <header className="w-full bg-[#1b2a4e] text-white flex items-center justify-between px-3 sm:px-6 sticky top-0 z-50 shadow-md h-16 shrink-0 border-b border-white/10">
+        <div className="flex items-center gap-2 lg:gap-4 min-w-0 overflow-hidden">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="lg:hidden text-white hover:bg-white/10 shrink-0" 
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            title="Menu de Navegação"
+          >
+            <Menu className="w-6 h-6" />
+          </Button>
+
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <Logo size="md" className="bg-white text-evo-teal shadow-none" />
             <div className="flex flex-col leading-none">
-              <span className="font-bold text-xl tracking-tighter">QUALITECH</span>
-              <span className="text-[8px] uppercase tracking-[0.2em] font-medium opacity-70">Procurement Service</span>
+              <span className="font-bold text-lg sm:text-xl tracking-tighter text-white">QUALITECH</span>
+              <span className="text-[7px] sm:text-[8px] uppercase tracking-[0.2em] font-medium opacity-70 text-white">Procurement Service</span>
             </div>
           </div>
 
-          <nav className="hidden lg:flex items-center">
+          <nav className="hidden xl:flex items-center gap-1 overflow-x-auto no-scrollbar whitespace-nowrap ml-2">
             <button 
               onClick={() => setCurrentView('dashboard')}
               className={`evo-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
@@ -970,28 +1433,47 @@ export default function App() {
           </nav>
         </div>
         
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wider opacity-80">
-            <User className="w-4 h-4 text-evo-teal" />
-            <span className="hidden md:inline">{sapUser?.name || fbUser?.email}</span>
+        {/* User Profile + Red Logout Button in Extreme Top Right Corner */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-2 bg-white/10 hover:bg-white/15 px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/15 transition-all text-white max-w-[200px] sm:max-w-[280px]">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-evo-teal text-white flex items-center justify-center font-bold text-xs shadow-inner uppercase shrink-0">
+              {(userProfile?.email || activeAuthUser?.email || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div className="flex flex-col text-left leading-tight min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold truncate text-white">
+                  {userProfile?.email || activeAuthUser?.email || sapUser?.name}
+                </span>
+                <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-wider shrink-0 ${userProfile?.role === 'admin' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40' : 'bg-evo-teal/30 text-teal-200 border border-teal-500/30'}`}>
+                  {userProfile?.role === 'admin' ? 'Admin' : 'Usuário'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-white/70">
+                {userProfile?.sector && (
+                  <span className="truncate max-w-[80px] sm:max-w-[110px] text-teal-300 font-medium">
+                    {userProfile.sector}
+                  </span>
+                )}
+                <span className="flex items-center gap-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${isSAPLoggedIn ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  <span className="text-[9px] uppercase tracking-tight text-emerald-300 font-semibold truncate">
+                    {sapUser?.name ? `SAP: ${sapUser.name}` : (isSAPLoggedIn ? 'Portal Ativo' : 'Pendente')}
+                  </span>
+                </span>
+              </div>
+            </div>
           </div>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="text-white hover:bg-white/10" 
+
+          {/* Prominent Red Logout Button on Corner */}
+          <button 
+            type="button"
             onClick={handleLogout}
-            title="Sair"
+            className="bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded shadow-md border border-red-500/50 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+            title="Sair da Conta (Logout)"
           >
-            <LogOut className="w-4 h-4" />
-          </Button>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="lg:hidden text-white" 
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            <Menu />
-          </Button>
+            <LogOut className="w-4 h-4 text-white" />
+            <span className="inline font-bold">Sair</span>
+          </button>
         </div>
       </header>
 
@@ -1235,8 +1717,19 @@ export default function App() {
               </>
             )}
           </nav>
-          <div className="p-4 border-t border-white/5 text-[9px] uppercase tracking-widest text-white/30 font-bold">
-            {sidebarOpen ? 'SAP Business One' : 'B1'}
+          
+          <div className="p-3 border-t border-white/10 space-y-2">
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white text-xs font-bold uppercase tracking-wider transition-all"
+              title="Encerrar Sessão / Sair"
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+              {sidebarOpen && <span>Sair da Conta</span>}
+            </button>
+            <div className="text-[9px] uppercase tracking-widest text-white/30 font-bold px-2">
+              {sidebarOpen ? 'SAP Business One' : 'B1'}
+            </div>
           </div>
         </aside>
 

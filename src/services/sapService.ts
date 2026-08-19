@@ -51,6 +51,15 @@ export const sapService = {
     }
   },
 
+  testConnection: async (params?: { companyDB?: string; user?: string; password?: string; url?: string }) => {
+    try {
+      const response = await api.post('/sap/test-connection', params || {});
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'testConnection');
+    }
+  },
+
   getPurchaseOrders: async () => {
     try {
       const response = await api.get('/sap/PurchaseOrders?$orderby=DocEntry desc&$top=20');

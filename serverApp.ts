@@ -106,62 +106,124 @@ apiRouter.post('/login', async (req, res) => {
   }
 
   const loginWithRetry = async (retries = 3) => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        return await axios.post(`${sapConfig.baseUrl}/Login`, {
-          CompanyDB: companyDB,
-          UserName: sapConfig.user,
-          Password: sapConfig.password
-        }, {
-          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-          headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'SAP-Portal-Client/1.0'
-          },
-          timeout: 30000
-        });
-      } catch (error: any) {
-        if (error.response?.status === 502 && i < retries - 1) {
-          console.warn(`Attempt ${i + 1} failed with 502. Retrying in ${1000 * (i + 1)}ms...`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
-          continue;
+    // Try primary user (B1i or configured user), then fallback to manager if 401
+    const usersToTry = [sapConfig.user];
+    if (sapConfig.user.toLowerCase() === 'b1i') {
+      usersToTry.push('manager');
+    } else if (sapConfig.user.toLowerCase() === 'manager') {
+      usersToTry.push('B1i');
+    }
+
+    let lastError: any = null;
+
+    for (const testUser of usersToTry) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          console.log(`Authenticating with SAP Service Layer as user '${testUser}' on '${companyDB}'...`);
+          return await axios.post(`${sapConfig.baseUrl}/Login`, {
+            CompanyDB: companyDB,
+            UserName: testUser,
+            Password: sapConfig.password
+          }, {
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            headers: { 
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'User-Agent': 'SAP-Portal-Client/1.0'
+            },
+            timeout: 30000
+          });
+        } catch (error: any) {
+          lastError = error;
+          if (error.response?.status === 401) {
+            // If 401, break retry loop to try next user in usersToTry
+            break;
+          }
+          if (error.response?.status === 502 && i < retries - 1) {
+            console.warn(`Attempt ${i + 1} failed with 502. Retrying in ${1000 * (i + 1)}ms...`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
     }
+    throw lastError;
   };
 
   try {
     console.log(`Attempting SAP Login for ${email} on ${companyDB} using ${sapConfig.baseUrl}...`);
     
-    // 1. Login with system user to the specified database with retry
+    // 1. Login with system user (B1i / manager) to the specified database with retry
     const loginResponse: any = await loginWithRetry();
 
     const sessionId = loginResponse.data.SessionId;
     const cookies = loginResponse.headers['set-cookie'] || [];
     const routeId = cookies.find(c => c.includes('ROUTEID'))?.split(';')[0];
 
-    console.log('Login successful, checking user existence...');
+    console.log('Login successful with service user, checking user existence in SAP...');
 
-    // 2. Check if the user exists in SAP (search by email, UserCode, or UserName)
+    // 2. Check if the user exists in SAP (search in Users table)
     const emailPrefix = email.split('@')[0];
-    const filter = `eMail eq '${email}' or UserCode eq '${email}' or UserName eq '${email}' or UserCode eq '${emailPrefix}'`;
+    const filterUsers = `eMail eq '${email}' or UserCode eq '${email}' or UserName eq '${email}' or UserCode eq '${emailPrefix}'`;
     
-    console.log(`Searching for user in SAP with filter: ${filter}`);
+    console.log(`Searching for user in SAP Users table: ${filterUsers}`);
     
-    const usersResponse = await axios.get(`${sapConfig.baseUrl}/Users?$filter=${encodeURIComponent(filter)}`, {
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-      headers: {
-        'Cookie': `B1SESSION=${sessionId}; ${routeId || ''}`,
-        'Accept': 'application/json'
-      },
-      timeout: 30000
-    });
+    let foundSapUser: any = null;
 
-    if (usersResponse.data.value && usersResponse.data.value.length > 0) {
-      const sapUser = usersResponse.data.value[0];
-      
+    try {
+      const usersResponse = await axios.get(`${sapConfig.baseUrl}/Users?$filter=${encodeURIComponent(filterUsers)}`, {
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        headers: {
+          'Cookie': `B1SESSION=${sessionId}; ${routeId || ''}`,
+          'Accept': 'application/json'
+        },
+        timeout: 30000
+      });
+
+      if (usersResponse.data.value && usersResponse.data.value.length > 0) {
+        foundSapUser = {
+          name: usersResponse.data.value[0].UserName,
+          email: usersResponse.data.value[0].eMail || email,
+          internalKey: usersResponse.data.value[0].InternalKey,
+          userCode: usersResponse.data.value[0].UserCode,
+          source: 'Users'
+        };
+      }
+    } catch (usersErr: any) {
+      console.warn('Error querying /Users table:', usersErr.message);
+    }
+
+    // 3. If not found in Users table, check EmployeesInfo (Colaboradores / Funcionários)
+    if (!foundSapUser) {
+      try {
+        const filterEmployees = `eMail eq '${email}' or FirstName eq '${emailPrefix}' or LastName eq '${emailPrefix}'`;
+        console.log(`Searching for user in SAP EmployeesInfo: ${filterEmployees}`);
+        const empResponse = await axios.get(`${sapConfig.baseUrl}/EmployeesInfo?$filter=${encodeURIComponent(filterEmployees)}`, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: {
+            'Cookie': `B1SESSION=${sessionId}; ${routeId || ''}`,
+            'Accept': 'application/json'
+          },
+          timeout: 30000
+        });
+
+        if (empResponse.data.value && empResponse.data.value.length > 0) {
+          const emp = empResponse.data.value[0];
+          foundSapUser = {
+            name: `${emp.FirstName || ''} ${emp.LastName || ''}`.trim() || emp.eMail || email,
+            email: emp.eMail || email,
+            internalKey: emp.EmployeeID,
+            userCode: String(emp.EmployeeID),
+            source: 'EmployeesInfo'
+          };
+        }
+      } catch (empErr: any) {
+        console.warn('Error querying /EmployeesInfo table:', empErr.message);
+      }
+    }
+
+    if (foundSapUser) {
       // Set session cookies in the browser
       const cookieOptions: any = { 
         httpOnly: true, 
@@ -176,21 +238,16 @@ apiRouter.post('/login', async (req, res) => {
         res.cookie(name, value, cookieOptions);
       }
       
-      console.log(`User ${email} verified and logged in. (InternalKey: ${sapUser.InternalKey}, UserCode: ${sapUser.UserCode})`);
+      console.log(`User ${email} verified and logged in. (${foundSapUser.source}: ${foundSapUser.userCode} / ${foundSapUser.name})`);
       return res.json({ 
         success: true, 
-        user: {
-          name: sapUser.UserName,
-          email: sapUser.eMail,
-          internalKey: sapUser.InternalKey,
-          userCode: sapUser.UserCode
-        }
+        user: foundSapUser
       });
     } else {
-      console.warn(`User verification failed: ${email} not found in SBO Users table for company ${companyDB}`);
+      console.warn(`User verification failed: ${email} not found in SBO Users or EmployeesInfo for company ${companyDB}`);
       return res.status(401).json({ 
         error: 'Usuário não encontrado ou não autorizado no SAP.',
-        details: `O e-mail ou código de usuário '${email}' não foi localizado na tabela de usuários do banco ${companyDB}. Verifique se o cadastro no SAP utiliza este e-mail ou o código '${emailPrefix}'.`
+        details: `O e-mail ou código de usuário '${email}' não foi localizado nas tabelas de Usuários (Users) ou Colaboradores (EmployeesInfo) do banco '${companyDB}'. Verifique se o cadastro no SAP utiliza este e-mail ou o código '${emailPrefix}'.`
       });
     }
   } catch (error: any) {
@@ -227,6 +284,66 @@ apiRouter.post('/login', async (req, res) => {
       error: 'Erro ao conectar com o SAP Service Layer.',
       details: sapErrorMessage,
       sapRaw: isHtml ? 'HTML_ERROR' : errorData
+    });
+  }
+});
+
+// Diagnostic SAP connection test endpoint
+apiRouter.post('/sap/test-connection', async (req, res) => {
+  const { companyDB, user, password, url } = req.body;
+  const targetUrl = (url || config.sap.baseUrl).replace(/\/$/, '');
+  const targetCompany = companyDB || config.sap.defaultCompany;
+  const targetUser = user || config.sap.systemUser;
+  const targetPassword = password || config.sap.systemPassword;
+
+  console.log(`[Diagnostic] Testing connection to ${targetUrl} for DB: ${targetCompany} as ${targetUser}...`);
+
+  try {
+    const startTime = Date.now();
+    const loginResponse = await axios.post(`${targetUrl}/Login`, {
+      CompanyDB: targetCompany,
+      UserName: targetUser,
+      Password: targetPassword
+    }, {
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'SAP-Portal-Client/1.0'
+      },
+      timeout: 30000
+    });
+
+    const elapsed = Date.now() - startTime;
+    const version = loginResponse.data.Version;
+    const sessionId = loginResponse.data.SessionId;
+
+    res.json({
+      success: true,
+      message: `Conexão com SAP Service Layer estabelecida com sucesso! (${elapsed}ms)`,
+      details: {
+        serverUrl: targetUrl,
+        companyDB: targetCompany,
+        user: targetUser,
+        version: version || 'OK',
+        sessionActive: !!sessionId,
+        responseTimeMs: elapsed
+      }
+    });
+  } catch (err: any) {
+    const status = err.response?.status;
+    const errorData = err.response?.data;
+    const sapErrorMessage = errorData?.error?.message?.value || errorData?.error?.message || err.message;
+
+    res.status(status || 500).json({
+      success: false,
+      error: `Falha na conexão com SAP Service Layer (Status ${status || 'ERR'}): ${sapErrorMessage}`,
+      details: {
+        serverUrl: targetUrl,
+        companyDB: targetCompany,
+        user: targetUser,
+        sapRaw: typeof errorData === 'string' && errorData.includes('<html') ? 'HTML_ERROR' : errorData
+      }
     });
   }
 });
