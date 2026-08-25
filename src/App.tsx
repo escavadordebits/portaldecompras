@@ -21,6 +21,10 @@ import {
   X,
   Loader2,
   ChevronRight,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
+  RotateCw,
   FileText,
   Settings,
   Paperclip,
@@ -62,6 +66,8 @@ import {
   signOut 
 } from 'firebase/auth';
 import { sapService } from './services/sapService';
+import { calculatePersonnelCost } from './utils/costCalculations';
+import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
 import { Button } from '@/components/ui/button';
 
@@ -347,7 +353,9 @@ export default function App() {
   const [fbUser, fbLoading] = useAuthState(auth);
   const [localSessionUser, setLocalSessionUser] = useState<any>(() => {
     try {
-      const saved = localStorage.getItem('sap_portal_active_user');
+      // Clear any legacy localStorage user to prevent unauthorized auto-login across browser restarts
+      localStorage.removeItem('sap_portal_active_user');
+      const saved = sessionStorage.getItem('sap_portal_active_user');
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
@@ -361,6 +369,31 @@ export default function App() {
   const [sapUser, setSapUser] = useState<any>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [portalDocEntry, setPortalDocEntry] = useState<number | null>(null);
+
+  // Inactivity auto-logout (15 minutes of inactivity)
+  useEffect(() => {
+    if (!activeAuthUser && !isSAPLoggedIn) return;
+
+    const INACTIVITY_LIMIT_MS = 15 * 60 * 1000; // 15 minutos
+    let inactivityTimer: NodeJS.Timeout;
+
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        toast.error('Sessão encerrada por inatividade. Por motivos de segurança, realize o login novamente.', { duration: 7000 });
+        handleLogout();
+      }, INACTIVITY_LIMIT_MS);
+    };
+
+    const trackedEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
+    trackedEvents.forEach(evt => window.addEventListener(evt, resetInactivityTimer, { passive: true }));
+    resetInactivityTimer();
+
+    return () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      trackedEvents.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
+    };
+  }, [activeAuthUser, isSAPLoggedIn]);
 
   // Auth & Sync Logic
   useEffect(() => {
@@ -453,11 +486,21 @@ export default function App() {
       }
       
       setUserProfile(profileData);
-      localStorage.setItem('sap_portal_active_user', JSON.stringify(profileData));
+      sessionStorage.setItem('sap_portal_active_user', JSON.stringify(profileData));
+      if (profileData.sapCompany) {
+        sessionStorage.setItem('sap_portal_company', profileData.sapCompany);
+      }
 
-      // If approved, attempt SAP login automatically
-      if (profileData.status === 'approved' && profileData.sapEmail && profileData.sapCompany) {
-        handleSAPVerification(profileData.sapEmail, profileData.sapCompany);
+      // If approved, set logged in user and ensure SAP session is active
+      if (profileData.status === 'approved') {
+        setIsSAPLoggedIn(true);
+        setSapUser({
+          name: profileData.name || (profileData.email || '').split('@')[0],
+          email: profileData.sapEmail || profileData.email
+        });
+        if (profileData.sapEmail && profileData.sapCompany) {
+          handleSAPVerification(profileData.sapEmail, profileData.sapCompany);
+        }
       }
     } catch (error) {
       console.error('Error syncing profile:', error);
@@ -750,7 +793,11 @@ export default function App() {
 
           setLocalSessionUser({ email: cleanEmail, uid: matchedDocId || cleanEmail });
           setUserProfile(activeProfile);
-          localStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
+          sessionStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
+          localStorage.removeItem('sap_portal_active_user');
+          if (activeProfile.sapCompany) {
+            sessionStorage.setItem('sap_portal_company', activeProfile.sapCompany);
+          }
 
           // Executa verificação do usuário na base SAP usando o usuário de serviço B1i
           const sapTargetUser = userRecord.sapEmail || cleanEmail;
@@ -812,7 +859,8 @@ export default function App() {
 
             setLocalSessionUser({ email: cleanEmail, uid: cleanEmail });
             setUserProfile(newUserData);
-            localStorage.setItem('sap_portal_active_user', JSON.stringify(newUserData));
+            sessionStorage.setItem('sap_portal_active_user', JSON.stringify(newUserData));
+            localStorage.removeItem('sap_portal_active_user');
             setSapUser(sapUserFound);
             setIsSAPLoggedIn(true);
             toast.success(`Usuário ${sapUserFound.name} localizado no SAP B1 e acesso liberado!`);
@@ -847,6 +895,8 @@ export default function App() {
     } catch (e) {
       console.warn('SignOut error:', e);
     }
+    sessionStorage.removeItem('sap_portal_active_user');
+    sessionStorage.removeItem('sap_portal_company');
     localStorage.removeItem('sap_portal_active_user');
     setLocalSessionUser(null);
     setIsSAPLoggedIn(false);
@@ -1015,9 +1065,8 @@ export default function App() {
     );
   }
 
-  if (!isSAPLoggedIn) {
+  if (userProfile && userProfile.status === 'pending') {
     const currentEmail = userProfile?.email || activeAuthUser?.email || '';
-    const userRole = userProfile?.role || 'user';
     const userInitial = (currentEmail || 'U').charAt(0).toUpperCase();
 
     return (
@@ -1032,38 +1081,23 @@ export default function App() {
             </div>
           </div>
 
-          {/* User Profile + Logout Button in Top Right Corner */}
+          {/* User Profile + Logout Button */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <div className="flex items-center gap-2 bg-white/10 px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 text-white">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-evo-teal text-white flex items-center justify-center font-bold text-xs shadow-inner uppercase shrink-0">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-inner uppercase shrink-0">
                 {userInitial}
               </div>
               <div className="flex flex-col text-left leading-tight">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold truncate max-w-[110px] sm:max-w-[200px] text-white">
-                    {currentEmail}
-                  </span>
-                  <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-wider ${userRole === 'admin' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40' : 'bg-evo-teal/30 text-teal-200 border border-teal-500/30'}`}>
-                    {userRole === 'admin' ? 'Admin' : 'Usuário'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-[10px] text-white/70">
-                  {userProfile?.sector && (
-                    <span className="truncate max-w-[90px] sm:max-w-[120px] text-teal-300 font-medium">
-                      {userProfile.sector}
-                    </span>
-                  )}
-                  <span className="flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-[9px] uppercase tracking-tight text-emerald-300 font-semibold">
-                      {userProfile?.status === 'approved' ? 'Aprovado' : 'Pendente'}
-                    </span>
-                  </span>
-                </div>
+                <span className="text-xs font-bold truncate max-w-[140px] sm:max-w-[200px] text-white">
+                  {currentEmail}
+                </span>
+                <span className="text-[9px] uppercase tracking-tight text-amber-300 font-semibold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  Aguardando Aprovação
+                </span>
               </div>
             </div>
 
-            {/* Prominent Red Logout Button at Corner */}
             <button 
               type="button"
               onClick={handleLogout}
@@ -1080,249 +1114,39 @@ export default function App() {
           <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
           
           <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
             className="w-full max-w-md relative z-10 my-8"
           >
-            <div className="mb-6 flex flex-col items-center lg:items-start">
+            <div className="mb-6 flex flex-col items-center">
               <div className="mb-3">
                 <Logo size="xl" />
               </div>
               <h1 className="text-3xl font-bold tracking-tighter text-evo-dark uppercase">QUALITECH</h1>
-              {userProfile?.status === 'approved' ? (
-                <p className="text-xs uppercase tracking-[0.3em] font-bold text-evo-teal">Autenticação Concluída</p>
-              ) : (
-                <p className="text-xs uppercase tracking-[0.3em] font-bold text-amber-500">Acesso Pendente</p>
-              )}
+              <p className="text-xs uppercase tracking-[0.3em] font-bold text-amber-500">Acesso Pendente de Aprovação</p>
             </div>
 
-            <Card className="shadow-2xl border-none overflow-hidden">
-              <div className={`h-1.5 w-full ${userProfile?.status === 'approved' ? 'bg-evo-teal' : 'bg-amber-500'}`} />
-              <CardHeader className="pb-3">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle className="text-lg font-bold text-evo-dark uppercase tracking-tight">Vínculo e Acesso SAP</CardTitle>
-                    <CardDescription className="text-[10px] uppercase tracking-widest font-medium opacity-70">
-                      Conectado como: {currentEmail}
-                    </CardDescription>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={handleLogout} className="text-[10px] font-bold uppercase text-red-500 h-6">Sair</Button>
+            <Card className="shadow-2xl border-none overflow-hidden text-center">
+              <div className="h-1.5 w-full bg-amber-500" />
+              <CardContent className="space-y-6 py-8 px-6">
+                <div className="bg-amber-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-2 border border-amber-200">
+                  <Clock className="w-10 h-10 text-amber-500 animate-pulse" />
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-5 pt-2">
-                {userProfile?.status === 'approved' ? (
-                  <form onSubmit={(e) => { e.preventDefault(); handleSAPVerification(loginEmail || userProfile?.sapEmail || currentEmail, loginCompany || userProfile?.sapCompany || 'SBO_QUALITECH_IRML'); }} className="space-y-4">
-                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-[11px] font-medium text-emerald-800 rounded leading-relaxed text-center">
-                      <span className="font-bold">Acesso Aprovado!</span> Você pode validar a conexão direta com o Service Layer ou acessar o portal de serviços.
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="sap-email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail / Usuário SAP</Label>
-                      <Input 
-                        id="sap-email" 
-                        type="text" 
-                        placeholder="jose.junior@qualitechirm.com" 
-                        className="h-11 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none"
-                        value={loginEmail || userProfile.sapEmail || currentEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="sap-company" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Empresa SAP (CompanyDB)</Label>
-                        <span className="text-[9px] text-muted-foreground font-mono">Bases disponíveis</span>
-                      </div>
-                      <Input 
-                        id="sap-company" 
-                        placeholder="SBO_QUALITECH_IRML" 
-                        className="h-11 border-evo-bg bg-evo-bg/50 focus:bg-white text-sm rounded-none font-mono"
-                        value={loginCompany || userProfile.sapCompany || 'SBO_QUALITECH_IRML'}
-                        onChange={(e) => setLoginCompany(e.target.value)}
-                        required
-                      />
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {['SBO_QUALITECH_IRML', 'SBO_QUALITECH_QAS', 'SBO_QUALITECH_PRD', 'SBO_QUALITECH'].map(db => (
-                          <button
-                            key={db}
-                            type="button"
-                            onClick={() => setLoginCompany(db)}
-                            className={`text-[9px] px-2 py-0.5 border font-mono transition-all ${(loginCompany || 'SBO_QUALITECH_IRML') === db ? 'bg-evo-teal text-white border-evo-teal' : 'bg-evo-bg/60 text-evo-dark hover:bg-evo-bg border-gray-200'}`}
-                          >
-                            {db}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {sapTestResult && (
-                      <div className={`p-3 rounded text-xs border ${sapTestResult.success ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-red-50 border-red-300 text-red-800'}`}>
-                        <div className="flex items-center justify-between font-bold">
-                          <span>{sapTestResult.success ? '✓ Conexão SAP OK' : '⚠ Erro na Conexão SAP'}</span>
-                          {sapTestResult.details?.responseTimeMs && (
-                            <span className="text-[10px] opacity-75">{sapTestResult.details.responseTimeMs}ms</span>
-                          )}
-                        </div>
-                        <p className="mt-1 text-[11px] leading-tight">{sapTestResult.message}</p>
-                        {sapTestResult.details?.targetDB && (
-                          <p className="mt-1 text-[10px] font-mono opacity-80">Base testada: {sapTestResult.details.targetDB}</p>
-                        )}
-                      </div>
-                    )}
-                    
-                    <div className="space-y-2 pt-2">
-                      <Button 
-                        type="submit" 
-                        className="w-full h-11 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs shadow-md rounded-none" 
-                        disabled={isLoading}
-                      >
-                        {isLoading ? 'Validando Service Layer...' : 'Validar Conexão SAP'}
-                      </Button>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button 
-                          type="button" 
-                          variant="outline"
-                          onClick={handleTestSAPConnection}
-                          disabled={isTestingSAP}
-                          className="h-10 text-[10px] font-bold uppercase tracking-wider rounded-none border-evo-dark/20 text-evo-dark hover:bg-evo-bg"
-                        >
-                          {isTestingSAP ? 'Testando SAP...' : 'Testar Conexão'}
-                        </Button>
-
-                        <Button 
-                          type="button" 
-                          onClick={() => {
-                            setSapUser({ name: (currentEmail || 'Usuário').split('@')[0], email: userProfile?.sapEmail || currentEmail });
-                            setIsSAPLoggedIn(true);
-                            toast.success('Acesso ao Portal liberado com sucesso!');
-                          }}
-                          className="h-10 bg-evo-dark hover:bg-black text-white font-bold uppercase tracking-wider text-[10px] rounded-none"
-                        >
-                          Entrar Direto
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 pt-4 border-t border-evo-bg flex justify-center">
-                      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-                        <DialogTrigger render={
-                          <Button variant="ghost" size="sm" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/50 hover:text-evo-teal gap-2 transition-all">
-                            <Settings className="w-3 h-3" />
-                            Configurações Técnicas SAP
-                          </Button>
-                        } />
-                      <DialogContent className="rounded-none max-w-lg">
-                        <DialogHeader>
-                          <DialogTitle className="uppercase tracking-tight font-bold">Configurações SAP Service Layer</DialogTitle>
-                          <CardDescription className="text-[10px] uppercase tracking-widest">Ajustes de infraestrutura e conexão</CardDescription>
-                        </DialogHeader>
-                        <div className="space-y-4 py-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="sap-url" className="text-[10px] font-bold uppercase tracking-wider">URL do Service Layer</Label>
-                            <Input 
-                              id="sap-url" 
-                              placeholder="https://piqualithse.b1cloud.com.br:50000/b1s/v1" 
-                              className="rounded-none h-10 text-xs font-mono"
-                              value={sapConfig.url}
-                              onChange={(e) => setSapConfig({...sapConfig, url: e.target.value})}
-                            />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-2">
-                              <Label htmlFor="sap-user" className="text-[10px] font-bold uppercase tracking-wider">Usuário do Sistema</Label>
-                              <Input 
-                                id="sap-user" 
-                                placeholder="B1i" 
-                                className="rounded-none h-10 text-xs font-mono"
-                                value={sapConfig.user}
-                                onChange={(e) => setSapConfig({...sapConfig, user: e.target.value})}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="sap-pass" className="text-[10px] font-bold uppercase tracking-wider">Senha do Sistema</Label>
-                              <Input 
-                                id="sap-pass" 
-                                type="password" 
-                                placeholder="1234" 
-                                className="rounded-none h-10 text-xs font-mono"
-                                value={sapConfig.password}
-                                onChange={(e) => setSapConfig({...sapConfig, password: e.target.value})}
-                              />
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={handleTestSAPConnection}
-                            disabled={isTestingSAP}
-                            className="w-full text-xs font-bold uppercase tracking-wider rounded-none"
-                          >
-                            {isTestingSAP ? 'Testando Conexão...' : 'Testar Conexão agora com estas credenciais'}
-                          </Button>
-                          <div className="space-y-4 pt-4 border-t border-evo-bg">
-                            <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60">Módulos Ativos</Label>
-                            <div className="grid grid-cols-2 gap-4">
-                              {[
-                                { id: 'procurement', label: 'Compras / Suprimentos' },
-                                { id: 'approvals', label: 'Centro de Aprovações' },
-                                { id: 'quotations', label: 'Ofertas de Compras' },
-                                { id: 'quality', label: 'Qualidade (QLDADE)' },
-                                { id: 'maintenance', label: 'Manutenção (CAB)' },
-                                { id: 'calibration', label: 'Calibração' },
-                                { id: 'costs', label: 'Gestão de Custos' }
-                              ].map((mod) => (
-                                <div key={mod.id} className="flex items-center space-x-2">
-                                  <input 
-                                    type="checkbox" 
-                                    id={`module-${mod.id}`}
-                                    checked={!!sapConfig.modules?.[mod.id]}
-                                    onChange={(e) => setSapConfig({
-                                      ...sapConfig, 
-                                      modules: { ...sapConfig.modules, [mod.id]: e.target.checked }
-                                    })}
-                                    className="w-4 h-4 rounded border-gray-300 text-evo-teal focus:ring-evo-teal transition-all cursor-pointer"
-                                  />
-                                  <Label htmlFor={`module-${mod.id}`} className="text-[10px] font-black uppercase tracking-tight cursor-pointer">
-                                    {mod.label}
-                                  </Label>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                        <DialogFooter>
-                          <Button variant="outline" className="rounded-none text-xs uppercase tracking-widest" onClick={() => setIsSettingsOpen(false)}>Fechar</Button>
-                          <Button onClick={saveSapConfig} className="bg-evo-teal hover:bg-evo-teal-dark rounded-none text-xs uppercase tracking-widest font-bold">Salvar Configurações</Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-6 py-10 text-center">
-                  <div className="bg-amber-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Clock className="w-10 h-10 text-amber-500 animate-pulse" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black uppercase text-evo-dark tracking-tighter">Aguardando Aprovação</h3>
-                    <p className="text-[10px] text-gray-500 font-medium mt-2 px-10 leading-relaxed">
-                      Seu cadastro foi recebido com sucesso. Um administrador irá revisar seu acesso em breve.
-                    </p>
-                  </div>
-                  <Button variant="outline" onClick={handleLogout} className="rounded-none border-evo-bg uppercase text-[10px] font-black tracking-widest px-10">Tentar outra conta</Button>
+                <div>
+                  <h3 className="text-base font-black uppercase text-evo-dark tracking-tight">Cadastro em Análise</h3>
+                  <p className="text-xs text-gray-500 font-medium mt-2 px-4 leading-relaxed">
+                    Seu cadastro foi registrado com sucesso para <span className="font-bold text-evo-dark">{currentEmail}</span>. Um administrador irá aprovar seu perfil e liberar seus módulos de acesso ao sistema em breve.
+                  </p>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
+                <div className="pt-2">
+                  <Button variant="outline" onClick={handleLogout} className="rounded-none border-evo-bg uppercase text-[10px] font-black tracking-widest px-8">
+                    Trocar de Conta / Sair
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
         </div>
-        {userProfile?.role === 'admin' && (
-           <div className="fixed bottom-6 right-6">
-              <Button onClick={() => setIsSAPLoggedIn(true)} className="bg-evo-dark text-white rounded-none border-t-4 border-evo-teal h-14 px-8 font-black uppercase tracking-widest shadow-2xl">
-                 Bypass SAP (Admin Mode)
-              </Button>
-           </div>
-        )}
         <Toaster position="top-right" />
       </div>
     );
@@ -1449,8 +1273,11 @@ export default function App() {
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[10px] text-white/70">
+                <span className="bg-white/10 text-emerald-300 text-[8px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wider font-bold truncate max-w-[120px]" title={`Base SAP vinculada: ${userProfile?.sapCompany || 'SBO_QUALITECH_IRML'}`}>
+                  {userProfile?.sapCompany || 'SBO_QUALITECH_IRML'}
+                </span>
                 {userProfile?.sector && (
-                  <span className="truncate max-w-[80px] sm:max-w-[110px] text-teal-300 font-medium">
+                  <span className="truncate max-w-[80px] sm:max-w-[100px] text-teal-300 font-medium">
                     {userProfile.sector}
                   </span>
                 )}
@@ -2288,8 +2115,8 @@ function DashboardView({ onViewDetails, activeModules = {} }: { key?: string, on
                                   {isOrder ? <ShoppingCart className="w-3.5 h-3.5" /> : <ClipboardList className="w-3.5 h-3.5" />}
                                 </div>
                                 <div>
-                                  <p className="text-xs font-black uppercase text-evo-dark">{doc.CardName || `Cliente #${doc.CardCode || doc.DocEntry}`}</p>
-                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isOrder ? 'Pedido de Venda' : 'Cotação de Venda'} #{doc.DocEntry}</p>
+                                  <p className="text-xs font-black uppercase text-evo-dark">{doc.CardName || `Cliente #${doc.CardCode || doc.DocNum || doc.DocEntry}`}</p>
+                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isOrder ? 'Pedido de Venda' : 'Cotação de Venda'} #{doc.DocNum || doc.DocEntry}</p>
                                 </div>
                               </div>
                               <div className="text-right">
@@ -2360,7 +2187,7 @@ function DashboardView({ onViewDetails, activeModules = {} }: { key?: string, on
                           <FileText className="w-4 h-4 text-evo-dark/40 group-hover:text-evo-teal" />
                         </div>
                         <div>
-                          <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">Ref. #{activity.DocEntry}</p>
+                          <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">Ref. #{activity.DocNum || activity.DocEntry}</p>
                           <p className="text-[9px] font-bold text-evo-teal/60 uppercase tracking-widest truncate max-w-[200px]">
                             {activity.CardName || activity.RequesterName || activity.U_NomeColaborador || activity.U_Imovel || '-'}
                           </p>
@@ -3232,13 +3059,17 @@ function ListOrdersView({
   onBack: () => void, 
   onViewDetails: (id: number) => void,
   title?: string,
-  fetchOrders?: () => Promise<any[]>,
+  fetchOrders?: (options?: any) => Promise<any[]>,
   fetchOrderDetail?: (id: number) => Promise<any>,
   userEmail?: string
 }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [hasMore, setHasMore] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
@@ -3282,15 +3113,17 @@ function ListOrdersView({
     }
   };
 
-  useEffect(() => {
-    handleFetchOrders();
-  }, [fetchOrders]);
-
-  const handleFetchOrders = async () => {
+  const handleFetchOrders = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
-      const data = await fetchOrders();
-      setOrders(data);
+      const data = await fetchOrders({
+        skip: targetPage * targetPageSize,
+        top: targetPageSize,
+        search: searchTarget
+      });
+      const orderList = Array.isArray(data) ? data : [];
+      setOrders(orderList);
+      setHasMore(orderList.length >= targetPageSize);
     } catch (error) {
       toast.error('Erro ao carregar registros.');
     } finally {
@@ -3298,10 +3131,45 @@ function ListOrdersView({
     }
   };
 
-  const filteredOrders = orders.filter(o => 
-    o.DocEntry.toString().includes(searchTerm) || 
-    (o.CardName && o.CardName.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  useEffect(() => {
+    setPage(0);
+    handleFetchOrders(0, appliedSearch, pageSize);
+  }, [fetchOrders]);
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPage(0);
+    setAppliedSearch(searchTerm);
+    handleFetchOrders(0, searchTerm, pageSize);
+  };
+
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setPage(0);
+    handleFetchOrders(0, '', pageSize);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 0) return;
+    setPage(newPage);
+    handleFetchOrders(newPage, appliedSearch, pageSize);
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setPage(0);
+    handleFetchOrders(0, appliedSearch, newSize);
+  };
+
+  const filteredOrders = orders.filter(o => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (o.DocNum && o.DocNum.toString().includes(term)) ||
+      (o.DocEntry && o.DocEntry.toString().includes(term)) || 
+      (o.CardName && o.CardName.toLowerCase().includes(term)) ||
+      (o.CardCode && o.CardCode.toLowerCase().includes(term));
+  });
 
   if (selectedOrder || isDetailLoading) {
     return (
@@ -3325,7 +3193,7 @@ function ListOrdersView({
           </Button>
           <div>
             <h1 className="text-3xl font-black tracking-tighter text-evo-dark uppercase">
-              {isDetailLoading ? 'CARREGANDO...' : `${title.includes('Solicita') ? 'Solicitação' : title.includes('Cota') ? 'Cotação' : title.includes('Adiantamento') ? 'Adiantamento' : 'Pedido'} #${selectedOrder?.DocEntry}`}
+              {isDetailLoading ? 'CARREGANDO...' : `${title.includes('Solicita') ? 'Solicitação' : title.includes('Cota') ? 'Cotação' : title.includes('Adiantamento') ? 'Adiantamento' : 'Pedido'} #${selectedOrder?.DocNum || selectedOrder?.DocEntry}`}
             </h1>
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Protocolo Gerado via Service Layer</p>
           </div>
@@ -3453,7 +3321,7 @@ function ListOrdersView({
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Visão analítica dos registros integrados</p>
         </div>
-        <div className="flex gap-4">
+        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3">
           <div className="relative w-full md:w-80">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-evo-dark/30 w-4 h-4" />
             <Input 
@@ -3463,15 +3331,25 @@ function ListOrdersView({
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <Button onClick={handleFetchOrders} variant="outline" className="h-11 rounded-none border-none bg-white shadow-sm font-bold uppercase text-[10px] tracking-widest px-8">Atualizar</Button>
-        </div>
+          <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
+            Buscar
+          </Button>
+          {appliedSearch && (
+            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-none bg-white shadow-sm font-bold uppercase text-[10px] tracking-widest px-4">
+              Limpar
+            </Button>
+          )}
+          <Button type="button" onClick={() => handleFetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-none bg-white shadow-sm font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
+            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+        </form>
       </div>
 
       <Card className="evo-card border-none overflow-hidden">
         <Table>
           <TableHeader className="bg-evo-dark">
             <TableRow className="border-none hover:bg-transparent">
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Identificador</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Nº Documento</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Data Emissão</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Entidade SAP</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Valor Consolidado</TableHead>
@@ -3492,7 +3370,7 @@ function ListOrdersView({
                 className="border-evo-bg transition-colors hover:bg-evo-teal/5 group cursor-pointer"
                 onClick={() => onViewDetails(order.DocEntry)}
               >
-                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{order.DocEntry}</TableCell>
+                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{order.DocNum || order.DocEntry}</TableCell>
                 <TableCell className="px-6 py-5 text-[10px] font-bold uppercase text-evo-dark/60 tracking-wider">
                   {order.DocDate ? new Date(order.DocDate).toLocaleDateString('pt-BR') : '-'}
                 </TableCell>
@@ -3532,6 +3410,59 @@ function ListOrdersView({
             )}
           </TableBody>
         </Table>
+
+        {/* Pagination bar */}
+        <div className="p-4 bg-white border-t border-evo-bg flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4 text-xs font-bold text-evo-dark/60">
+            <span>Página {page + 1} ({orders.length} registros nesta página)</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
+              <select 
+                value={pageSize} 
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
+              >
+                <option value={20}>20 por página</option>
+                <option value={50}>50 por página</option>
+                <option value={100}>100 por página</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => handlePageChange(0)} 
+              disabled={page === 0 || isLoading}
+              className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
+              title="Primeira Página"
+            >
+              <ChevronsLeft className="w-3.5 h-3.5" />
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => handlePageChange(page - 1)} 
+              disabled={page === 0 || isLoading}
+              className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" /> Anterior
+            </Button>
+            <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
+              {page + 1}
+            </span>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => handlePageChange(page + 1)} 
+              disabled={!hasMore || orders.length < pageSize || isLoading}
+              className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+            >
+              Próxima <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
       </Card>
     </motion.div>
   );
@@ -3976,7 +3907,7 @@ function QualityView() {
               </TableRow>
             ) : records.map((rec, i) => (
               <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{rec.DocEntry || i+1}</TableCell>
+                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{rec.DocNum || rec.DocEntry || i+1}</TableCell>
                 <TableCell className="px-6 py-5 font-black text-xl text-evo-teal tracking-tighter">{Number(rec.U_IPF || 0).toFixed(2)}</TableCell>
                 <TableCell className="px-6 py-5">
                   <Badge className="bg-evo-dark text-white rounded-none text-[9px] font-black px-2 py-0.5">{rec.U_Status}</Badge>
@@ -4352,33 +4283,36 @@ function CostsView() {
   const [formData, setFormData] = useState(initialPersForm);
   const [rentalFormData, setRentalFormData] = useState(initialRentalForm);
 
-  const calculateTotal = () => {
-    const H = Number(formData.U_VlNormal);
-    const I = H * 0.5; // Auto-calculate Stand-by Rate (50%)
-    const J = Number(formData.U_QtdDiariasNormal);
-    const K = Number(formData.U_QtdDiariasStandBy);
-    const L = Number(formData.U_NoturnoNor);
-    const M = Number(formData.U_NoturnoNob);
-    const N = Number(formData.U_HExtraDiu);
-    const O = Number(formData.U_HExtraNot);
-
-    const total = (J * H) + 
-                (I * K) + 
-                (L * H * 0.08) + 
-                (L * H) + 
-                (M * I) + 
-                ((H / 12 * 1.5) * N) + 
-                ((H / 12 * O) * 0.08) + 
-                ((H / 12 * 1.5) * O);
-                
-    if (formData.U_StandByRate !== I || formData.U_Total !== total) {
-      setFormData(prev => ({ ...prev, U_StandByRate: I, U_Total: total }));
-    }
-  };
+  // Computa o breakdown de custos fiel à planilha Excel e ao SAP
+  const currentPersBreakdown = calculatePersonnelCost({
+    valorNormal: formData.U_VlNormal,
+    qtdDiariasNormal: formData.U_QtdDiariasNormal,
+    qtdDiariasStandBy: formData.U_QtdDiariasStandBy,
+    noturnoNormal: formData.U_NoturnoNor,
+    noturnoNob: formData.U_NoturnoNob,
+    hExtraDiurna: formData.U_HExtraDiu,
+    hExtraNoturna: formData.U_HExtraNot
+  });
 
   useEffect(() => {
-    calculateTotal();
-  }, [formData.U_VlNormal, formData.U_StandByRate, formData.U_QtdDiariasNormal, formData.U_QtdDiariasStandBy, formData.U_NoturnoNor, formData.U_NoturnoNob, formData.U_HExtraDiu, formData.U_HExtraNot]);
+    if (formData.U_StandByRate !== currentPersBreakdown.standByRate || formData.U_Total !== currentPersBreakdown.totalGeral) {
+      setFormData(prev => ({ 
+        ...prev, 
+        U_StandByRate: currentPersBreakdown.standByRate, 
+        U_Total: currentPersBreakdown.totalGeral 
+      }));
+    }
+  }, [
+    formData.U_VlNormal, 
+    formData.U_QtdDiariasNormal, 
+    formData.U_QtdDiariasStandBy, 
+    formData.U_NoturnoNor, 
+    formData.U_NoturnoNob, 
+    formData.U_HExtraDiu, 
+    formData.U_HExtraNot,
+    currentPersBreakdown.standByRate,
+    currentPersBreakdown.totalGeral
+  ]);
 
   const calculateRentalTotal = () => {
     const total = (Number(rentalFormData.U_ValorBase) * (Number(rentalFormData.U_HorasNor) + Number(rentalFormData.U_HorasNob))) + 
@@ -4603,11 +4537,49 @@ function CostsView() {
                       </div>
                     </div>
 
-                    <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
-                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Calculado</p>
-                      <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
-                        R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </h3>
+                    <div className="p-4 bg-evo-dark text-white rounded-none mt-2 space-y-2 border-l-4 border-evo-teal">
+                      <div className="flex justify-between items-center text-[10px] uppercase text-white/60 font-semibold border-b border-white/10 pb-1">
+                        <span>Detalhamento dos Cálculos (Excel / SAP)</span>
+                        <span>Multiplicadores</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        <div className="flex justify-between text-white/80">
+                          <span>Diárias Normais:</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalDiariasNormal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-white/80">
+                          <span>Diárias Stand-by (50%):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalDiariasStandBy.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-white/80">
+                          <span>Noturno Normal (8%):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalNoturnoNormal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-white/80">
+                          <span>Noturno Dobrado:</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalNoturnoNob.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-white/80">
+                          <span>H.E. Diurna (1.5x):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalHExtraDiurna.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-white/80">
+                          <span>H.E. Noturna (1.5x + 8%):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalHExtraNoturna.toFixed(2)}</span>
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
+                          <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
+                            R$ {currentPersBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </h3>
+                        </div>
+                        <div className="text-right text-[9px] text-white/60">
+                          <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentPersBreakdown.taxasNoturnas.toFixed(2)}</span></div>
+                          <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentPersBreakdown.valorHora.toFixed(2)}</span></div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -4794,7 +4766,11 @@ function QuotationsView() {
   const [selectedQuote, setSelectedQuote] = useState<any>(null);
   const [isOrderLoading, setIsOrderLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [hasMore, setHasMore] = useState(true);
 
   // States for Costs sub-modals
   const [isPersCostModalOpen, setIsPersCostModalOpen] = useState(false);
@@ -4803,11 +4779,17 @@ function QuotationsView() {
   const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
 
-  const fetchQuotations = async () => {
+  const fetchQuotations = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
-      const data = await sapService.getQuotations();
-      setQuotations(data || []);
+      const data = await sapService.getQuotations({
+        skip: targetPage * targetPageSize,
+        top: targetPageSize,
+        search: searchTarget
+      });
+      const quoteList = Array.isArray(data) ? data : [];
+      setQuotations(quoteList);
+      setHasMore(quoteList.length >= targetPageSize);
     } catch (error) {
       toast.error('Erro ao buscar cotações.');
     } finally {
@@ -4816,13 +4798,41 @@ function QuotationsView() {
   };
 
   useEffect(() => {
-    fetchQuotations();
+    setPage(0);
+    fetchQuotations(0, appliedSearch, pageSize);
   }, []);
 
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPage(0);
+    setAppliedSearch(searchTerm);
+    fetchQuotations(0, searchTerm, pageSize);
+  };
+
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setPage(0);
+    fetchQuotations(0, '', pageSize);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 0) return;
+    setPage(newPage);
+    fetchQuotations(newPage, appliedSearch, pageSize);
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setPage(0);
+    fetchQuotations(0, appliedSearch, newSize);
+  };
+
   const filteredQuotations = quotations.filter(q => {
-    const matchesSearch = (q.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = !searchTerm || (q.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           q.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          q.DocEntry.toString().includes(searchTerm));
+                          (q.DocNum && q.DocNum.toString().includes(searchTerm)) ||
+                          (q.DocEntry && q.DocEntry.toString().includes(searchTerm)));
     
     const isOpen = q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O';
     const matchesStatus = statusFilter === 'all' || 
@@ -4931,7 +4941,7 @@ function QuotationsView() {
           <h2 className="text-3xl font-black tracking-tighter text-evo-dark uppercase">Cotações de Venda</h2>
           <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de ofertas e integração de custos</p>
         </div>
-        <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-4 w-full md:w-auto">
           <div className="relative flex-1 md:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/20" />
             <Input 
@@ -4941,6 +4951,14 @@ function QuotationsView() {
               className="pl-10 rounded-none border-evo-bg focus:border-evo-teal uppercase text-[10px] font-bold tracking-widest h-12"
             />
           </div>
+          <Button type="submit" className="h-12 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
+            Buscar
+          </Button>
+          {appliedSearch && (
+            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-12 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
+              Limpar
+            </Button>
+          )}
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-40 rounded-none border-evo-bg h-12 uppercase text-[10px] font-bold tracking-widest">
               {statusFilter === 'all' ? 'TODOS STATUS' : statusFilter === 'open' ? 'ABERTAS' : 'FECHADAS'}
@@ -4951,8 +4969,11 @@ function QuotationsView() {
               <SelectItem value="closed" className="uppercase text-[10px] font-bold">FECHADAS</SelectItem>
             </SelectContent>
           </Select>
-          <Button onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">Nova Cotação</Button>
-        </div>
+          <Button type="button" onClick={() => fetchQuotations(page, appliedSearch, pageSize)} variant="outline" className="h-12 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
+            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+          <Button type="button" onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">Nova Cotação</Button>
+        </form>
       </div>
 
       <div className="grid grid-cols-1 gap-6">
@@ -4960,7 +4981,7 @@ function QuotationsView() {
           <Table>
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">DocEntry</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Nº Cotação</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Cód. Cliente</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Nome do Cliente</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Vencimento</TableHead>
@@ -4971,12 +4992,12 @@ function QuotationsView() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP...</TableCell></TableRow>
               ) : filteredQuotations.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
               ) : filteredQuotations.map((q) => (
                 <TableRow key={q.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{q.DocEntry}</TableCell>
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{q.DocNum || q.DocEntry}</TableCell>
                   <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{q.CardCode}</TableCell>
                   <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{q.CardName || "N/A"}</TableCell>
                   <TableCell className="px-8 py-5 text-[10px] font-bold">{new Date(q.DocDueDate).toLocaleDateString('pt-BR')}</TableCell>
@@ -4995,6 +5016,59 @@ function QuotationsView() {
               ))}
             </TableBody>
           </Table>
+
+          {/* Pagination bar */}
+          <div className="p-4 bg-white border-t border-evo-bg flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4 text-xs font-bold text-evo-dark/60">
+              <span>Página {page + 1} ({quotations.length} cotações nesta página)</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
+                <select 
+                  value={pageSize} 
+                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                  className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
+                >
+                  <option value={20}>20 por página</option>
+                  <option value={50}>50 por página</option>
+                  <option value={100}>100 por página</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(0)} 
+                disabled={page === 0 || isLoading}
+                className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
+                title="Primeira Página"
+              >
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(page - 1)} 
+                disabled={page === 0 || isLoading}
+                className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" /> Anterior
+              </Button>
+              <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
+                {page + 1}
+              </span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(page + 1)} 
+                disabled={!hasMore || quotations.length < pageSize || isLoading}
+                className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+              >
+                Próxima <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
         </Card>
       </div>
 
@@ -5018,7 +5092,7 @@ function QuotationsView() {
               </DialogClose>
             </div>
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
-              {selectedQuote?.DocEntry ? `Cotação #${selectedQuote.DocEntry}` : 'Nova Cotação'}
+              {selectedQuote?.DocEntry ? `Cotação #${selectedQuote.DocNum || selectedQuote.DocEntry}` : 'Nova Cotação'}
             </DialogTitle>
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Detalhamento e Vinculação de Custos Financeiros</p>
           </DialogHeader>
@@ -5271,7 +5345,11 @@ function SalesOrdersView() {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [hasMore, setHasMore] = useState(true);
 
   const [costCenters, setCostCenters] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
@@ -5284,11 +5362,17 @@ function SalesOrdersView() {
   const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
-      const data = await sapService.getOrders();
-      setOrders(data || []);
+      const data = await sapService.getOrders({
+        skip: targetPage * targetPageSize,
+        top: targetPageSize,
+        search: searchTarget
+      });
+      const orderList = Array.isArray(data) ? data : [];
+      setOrders(orderList);
+      setHasMore(orderList.length >= targetPageSize);
     } catch (error) {
       toast.error('Erro ao buscar pedidos de venda.');
     } finally {
@@ -5310,13 +5394,41 @@ function SalesOrdersView() {
   };
 
   useEffect(() => {
-    fetchOrders();
+    setPage(0);
+    fetchOrders(0, appliedSearch, pageSize);
     loadAuxData();
   }, []);
 
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPage(0);
+    setAppliedSearch(searchTerm);
+    fetchOrders(0, searchTerm, pageSize);
+  };
+
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setPage(0);
+    fetchOrders(0, '', pageSize);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 0) return;
+    setPage(newPage);
+    fetchOrders(newPage, appliedSearch, pageSize);
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setPage(0);
+    fetchOrders(0, appliedSearch, newSize);
+  };
+
   const filteredOrders = orders.filter(o => {
-    const matchesSearch = (o.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = !searchTerm || (o.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           o.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (o.DocNum && o.DocNum.toString().includes(searchTerm)) ||
                           (o.DocEntry && o.DocEntry.toString().includes(searchTerm)));
     
     const isOpen = o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O';
@@ -5428,15 +5540,28 @@ function SalesOrdersView() {
       </div>
 
       <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-6 border border-evo-bg shadow-sm">
-        <div className="relative flex-1 w-full">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
-          <Input 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar por cliente, código ou Nº do Pedido..."
-            className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
-          />
-        </div>
+        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3 flex-1 w-full">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
+            <Input 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar por cliente, código ou Nº do Pedido..."
+              className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
+            />
+          </div>
+          <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
+            Buscar
+          </Button>
+          {appliedSearch && (
+            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
+              Limpar
+            </Button>
+          )}
+          <Button type="button" onClick={() => fetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
+            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+        </form>
         <div className="flex gap-2 w-full md:w-auto">
           <Button 
             variant={statusFilter === 'all' ? 'default' : 'outline'}
@@ -5467,7 +5592,7 @@ function SalesOrdersView() {
           <Table>
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nº Pedido (DocEntry)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nº Pedido</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Cód. Cliente</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nome do Cliente</TableHead>
                 <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Data Vencimento</TableHead>
@@ -5483,7 +5608,7 @@ function SalesOrdersView() {
                 <TableRow><TableCell colSpan={7} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
               ) : filteredOrders.map((o) => (
                 <TableRow key={o.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{o.DocEntry}</TableCell>
+                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{o.DocNum || o.DocEntry}</TableCell>
                   <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{o.CardCode}</TableCell>
                   <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{o.CardName || "N/A"}</TableCell>
                   <TableCell className="px-8 py-5 text-[10px] font-bold">{o.DocDueDate ? new Date(o.DocDueDate).toLocaleDateString('pt-BR') : '-'}</TableCell>
@@ -5502,6 +5627,59 @@ function SalesOrdersView() {
               ))}
             </TableBody>
           </Table>
+
+          {/* Pagination bar */}
+          <div className="p-4 bg-white border-t border-evo-bg flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4 text-xs font-bold text-evo-dark/60">
+              <span>Página {page + 1} ({orders.length} pedidos nesta página)</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
+                <select 
+                  value={pageSize} 
+                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                  className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
+                >
+                  <option value={20}>20 por página</option>
+                  <option value={50}>50 por página</option>
+                  <option value={100}>100 por página</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(0)} 
+                disabled={page === 0 || isLoading}
+                className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
+                title="Primeira Página"
+              >
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(page - 1)} 
+                disabled={page === 0 || isLoading}
+                className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" /> Anterior
+              </Button>
+              <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
+                {page + 1}
+              </span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handlePageChange(page + 1)} 
+                disabled={!hasMore || orders.length < pageSize || isLoading}
+                className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
+              >
+                Próxima <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
         </Card>
       </div>
 
@@ -5525,7 +5703,7 @@ function SalesOrdersView() {
               </DialogClose>
             </div>
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
-              {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
+              {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocNum || selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
             </DialogTitle>
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda com Centro de Custos e Projetos por Linha</p>
           </DialogHeader>
@@ -5938,33 +6116,36 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
   const [isLoading, setIsLoading] = useState(false);
   const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
 
-  const calculateTotal = () => {
-    const H = Number(formData.U_VlNormal);
-    const I = H * 0.5; // Auto-calculate Stand-by Rate (50%)
-    const J = Number(formData.U_QtdDiarias);
-    const K = Number(formData.U_QtdDiariasSt);
-    const L = Number(formData.U_NotNor);
-    const M = Number(formData.U_NotNob);
-    const N = Number(formData.U_HExtraDiu);
-    const O = Number(formData.U_HExtraNot);
-
-    const total = (J * H) + 
-                (I * K) + 
-                (L * H * 0.08) + 
-                (L * H) + 
-                (M * I) + 
-                ((H / 12 * 1.5) * N) + 
-                ((H / 12 * O) * 0.08) + 
-                ((H / 12 * 1.5) * O);
-                
-    if (formData.U_StandBy !== I || formData.U_Total !== total) {
-      setFormData(prev => ({ ...prev, U_StandBy: I, U_Total: total }));
-    }
-  };
+  // Computa o breakdown de custos fiel à planilha Excel e ao SAP
+  const currentBreakdown = calculatePersonnelCost({
+    valorNormal: formData.U_VlNormal,
+    qtdDiariasNormal: formData.U_QtdDiarias,
+    qtdDiariasStandBy: formData.U_QtdDiariasSt,
+    noturnoNormal: formData.U_NotNor,
+    noturnoNob: formData.U_NotNob,
+    hExtraDiurna: formData.U_HExtraDiu,
+    hExtraNoturna: formData.U_HExtraNot
+  });
 
   useEffect(() => {
-    calculateTotal();
-  }, [formData.U_VlNormal, formData.U_QtdDiarias, formData.U_QtdDiariasSt, formData.U_NotNor, formData.U_NotNob, formData.U_HExtraDiu, formData.U_HExtraNot]);
+    if (formData.U_StandBy !== currentBreakdown.standByRate || formData.U_Total !== currentBreakdown.totalGeral) {
+      setFormData(prev => ({ 
+        ...prev, 
+        U_StandBy: currentBreakdown.standByRate, 
+        U_Total: currentBreakdown.totalGeral 
+      }));
+    }
+  }, [
+    formData.U_VlNormal, 
+    formData.U_QtdDiarias, 
+    formData.U_QtdDiariasSt, 
+    formData.U_NotNor, 
+    formData.U_NotNob, 
+    formData.U_HExtraDiu, 
+    formData.U_HExtraNot,
+    currentBreakdown.standByRate,
+    currentBreakdown.totalGeral
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -6092,11 +6273,49 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
                 </div>
               </div>
 
-              <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
-                <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
-                  R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                </h3>
+              <div className="p-4 bg-evo-dark text-white rounded-none mt-2 space-y-2 border-l-4 border-evo-teal">
+                <div className="flex justify-between items-center text-[10px] uppercase text-white/60 font-semibold border-b border-white/10 pb-1">
+                  <span>Detalhamento dos Cálculos (Excel / SAP)</span>
+                  <span>Multiplicadores</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                  <div className="flex justify-between text-white/80">
+                    <span>Diárias Normais:</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasNormal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-white/80">
+                    <span>Diárias Stand-by (50%):</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasStandBy.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-white/80">
+                    <span>Noturno Normal (8%):</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNormal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-white/80">
+                    <span>Noturno Dobrado:</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNob.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-white/80">
+                    <span>H.E. Diurna (1.5x):</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraDiurna.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-white/80">
+                    <span>H.E. Noturna (1.5x + 8%):</span>
+                    <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraNoturna.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
+                    <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
+                      R$ {currentBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </h3>
+                  </div>
+                  <div className="text-right text-[9px] text-white/60">
+                    <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentBreakdown.taxasNoturnas.toFixed(2)}</span></div>
+                    <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentBreakdown.valorHora.toFixed(2)}</span></div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -6429,7 +6648,7 @@ function CalibrationView() {
             <Table>
               <TableHeader className="bg-evo-bg/50 sticky top-0 z-10">
                 <TableRow className="border-evo-bg">
-                  <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">ID</TableHead>
+                  <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Nº Doc</TableHead>
                   <TableHead className="text-[9px] font-black uppercase tracking-widest px-6">Equipamento</TableHead>
                 </TableRow>
               </TableHeader>
@@ -6444,7 +6663,7 @@ function CalibrationView() {
                     className={`border-evo-bg cursor-pointer transition-colors ${selectedCalibration?.DocEntry === cal.DocEntry ? 'bg-evo-teal/10' : 'hover:bg-evo-teal/5'}`}
                     onClick={() => handleSelectCalibration(cal.DocEntry)}
                   >
-                    <TableCell className="px-6 py-4 text-[10px] font-black text-evo-dark opacity-40">#{cal.DocEntry}</TableCell>
+                    <TableCell className="px-6 py-4 text-[10px] font-black text-evo-dark opacity-40">#{cal.DocNum || cal.DocEntry}</TableCell>
                     <TableCell className="px-6 py-4">
                       <div className="flex flex-col">
                         <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">{cal.U_DescEqui || cal.U_ItemName || cal.U_Item || 'N/A'}</span>
@@ -6482,8 +6701,8 @@ function CalibrationView() {
                     <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{selectedCalibration.U_Fabricante || 'N/A'} - {selectedCalibration.U_Modelo || '-'}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-white/30">DocEntry</p>
-                    <p className="text-xl font-black text-white">{selectedCalibration.DocEntry}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Nº Documento</p>
+                    <p className="text-xl font-black text-white">{selectedCalibration.DocNum || selectedCalibration.DocEntry}</p>
                   </div>
                 </div>
 

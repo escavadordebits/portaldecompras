@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { SAP_CONFIG } from '../config/sapConfig';
 
 const api = axios.create({
   baseURL: '/api',
@@ -8,17 +9,44 @@ const api = axios.create({
 // Add interceptor to include custom SAP configuration headers if they exist
 api.interceptors.request.use((config) => {
   const sapConfigStr = localStorage.getItem('sap_portal_config');
+  let currentUrl = SAP_CONFIG.baseUrl;
+  let currentUser = SAP_CONFIG.systemUser;
+  let currentPassword = SAP_CONFIG.systemPassword;
+
   if (sapConfigStr) {
     try {
-      const sapConfig = JSON.parse(sapConfigStr);
-      if (sapConfig.url) config.headers['X-SAP-URL'] = sapConfig.url;
-      if (sapConfig.user) config.headers['X-SAP-User'] = sapConfig.user;
-      if (sapConfig.password) config.headers['X-SAP-Password'] = sapConfig.password;
+      const parsedConfig = JSON.parse(sapConfigStr);
+      if (parsedConfig.url) currentUrl = parsedConfig.url;
+      if (parsedConfig.user) currentUser = parsedConfig.user;
+      if (parsedConfig.password) currentPassword = parsedConfig.password;
     } catch (e) {
       console.error('Error parsing SAP config from localStorage', e);
     }
   }
-  const currentCompany = localStorage.getItem('sap_portal_company');
+
+  if (currentUrl) config.headers['X-SAP-URL'] = currentUrl;
+  if (currentUser) config.headers['X-SAP-User'] = currentUser;
+  if (currentPassword) config.headers['X-SAP-Password'] = currentPassword;
+
+  // Add company header from active company or user profile in session/storage
+  let currentCompany = sessionStorage.getItem('sap_portal_company') || localStorage.getItem('sap_portal_company');
+  if (!currentCompany) {
+    try {
+      const activeUserStr = sessionStorage.getItem('sap_portal_active_user') || localStorage.getItem('sap_portal_active_user');
+      if (activeUserStr) {
+        const activeUser = JSON.parse(activeUserStr);
+        if (activeUser?.sapCompany) {
+          currentCompany = activeUser.sapCompany;
+          sessionStorage.setItem('sap_portal_company', currentCompany);
+        }
+      }
+    } catch (e) {
+      console.error('Error resolving active company from user profile', e);
+    }
+  }
+  if (!currentCompany) {
+    currentCompany = SAP_CONFIG.defaultCompany;
+  }
   if (currentCompany) {
     config.headers['X-SAP-Company'] = currentCompany;
   }
@@ -38,11 +66,62 @@ const handleApiError = (error: any, context: string) => {
   throw error;
 };
 
+export interface ODataQueryOptions {
+  skip?: number;
+  top?: number;
+  search?: string;
+  filter?: string;
+  orderby?: string;
+}
+
+export function buildODataQuery(
+  basePath: string, 
+  options?: number | ODataQueryOptions, 
+  defaultTop = 20, 
+  defaultOrderby = 'DocEntry desc'
+): string {
+  let skip = 0;
+  let top = defaultTop;
+  let search = '';
+  let customFilter = '';
+  let orderby = defaultOrderby;
+
+  if (typeof options === 'number') {
+    skip = options;
+  } else if (typeof options === 'object' && options !== null) {
+    if (options.skip !== undefined) skip = options.skip;
+    if (options.top !== undefined) top = options.top;
+    if (options.search) search = options.search.trim();
+    if (options.filter) customFilter = options.filter.trim();
+    if (options.orderby) orderby = options.orderby.trim();
+  }
+
+  const params: string[] = [];
+  if (orderby) params.push(`$orderby=${orderby}`);
+  params.push(`$top=${top}`);
+  if (skip > 0) params.push(`$skip=${skip}`);
+
+  if (customFilter) {
+    params.push(`$filter=${customFilter}`);
+  } else if (search) {
+    if (/^\d+$/.test(search)) {
+      params.push(`$filter=DocNum eq ${search} or DocEntry eq ${search} or contains(CardCode, '${search}') or contains(CardName, '${search}')`);
+    } else {
+      const safeSearch = search.replace(/'/g, "''");
+      params.push(`$filter=contains(CardCode, '${safeSearch}') or contains(CardName, '${safeSearch}')`);
+    }
+  }
+
+  const queryString = params.length > 0 ? `?${params.join('&')}` : '';
+  return `${basePath}${queryString}`;
+}
+
 export const sapService = {
   login: async (email: string, companyDB: string) => {
     try {
       const response = await api.post('/login', { email, companyDB });
       if (companyDB) {
+        sessionStorage.setItem('sap_portal_company', companyDB);
         localStorage.setItem('sap_portal_company', companyDB);
       }
       return response.data;
@@ -60,37 +139,59 @@ export const sapService = {
     }
   },
 
-  getPurchaseOrders: async () => {
+  getPurchaseOrders: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/PurchaseOrders?$orderby=DocEntry desc&$top=20');
-      return response.data.value;
+      const url = buildODataQuery('/sap/PurchaseOrders', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
+      if (typeof options === 'object' && options?.search) {
+        try {
+          const fallbackUrl = `/sap/PurchaseOrders?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
+          const response2 = await api.get(fallbackUrl);
+          return response2.data.value || [];
+        } catch {
+          return handleApiError(error, 'getPurchaseOrders');
+        }
+      }
       return handleApiError(error, 'getPurchaseOrders');
     }
   },
 
-  getPurchaseRequests: async () => {
+  getPurchaseRequests: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/CustosPessoal?$top=20');
-      return response.data.value;
+      const url = buildODataQuery('/sap/CustosPessoal', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
       return handleApiError(error, 'getPurchaseRequests');
     }
   },
 
-  getPurchaseQuotations: async () => {
+  getPurchaseQuotations: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/PurchaseQuotations?$orderby=DocEntry desc&$top=50');
-      return response.data.value;
+      const url = buildODataQuery('/sap/PurchaseQuotations', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
+      if (typeof options === 'object' && options?.search) {
+        try {
+          const fallbackUrl = `/sap/PurchaseQuotations?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
+          const response2 = await api.get(fallbackUrl);
+          return response2.data.value || [];
+        } catch {
+          return handleApiError(error, 'getPurchaseQuotations');
+        }
+      }
       return handleApiError(error, 'getPurchaseQuotations');
     }
   },
 
-  getPurchaseDownPayments: async () => {
+  getPurchaseDownPayments: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/PurchaseDownPayments?$orderby=DocEntry desc&$top=20');
-      return response.data.value;
+      const url = buildODataQuery('/sap/PurchaseDownPayments', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
       return handleApiError(error, 'getPurchaseDownPayments');
     }
@@ -665,49 +766,80 @@ export const sapService = {
     }
   },
 
-  // Calibration Records (QLT_CALIB)
+  // Calibration Records (QLT_CALIB / U_QLT_CALIB)
   getCalibrationRecords: async () => {
     try {
-      const response = await api.get('/sap/QLT_CALIB?$top=50&$orderby=DocEntry desc');
-      return response.data.value;
+      const response = await api.get('/sap/U_QLT_CALIB?$top=50&$orderby=DocEntry desc');
+      return response.data.value || [];
     } catch (error) {
-      return handleApiError(error, 'getCalibrationRecords');
+      try {
+        const response2 = await api.get('/sap/QLT_CALIB?$top=50&$orderby=DocEntry desc');
+        return response2.data.value || [];
+      } catch (err2) {
+        try {
+          const response3 = await api.get('/sap/U_QLT_CALIBRACAO?$top=50');
+          return response3.data.value || [];
+        } catch (err3) {
+          console.warn('Calibration records endpoint not found in SAP, returning empty list');
+          return [];
+        }
+      }
     }
   },
 
   getCalibrationDetail: async (docEntry: number) => {
     try {
-      const response = await api.get(`/sap/QLT_CALIB(${docEntry})`);
+      const response = await api.get(`/sap/U_QLT_CALIB(${docEntry})`);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'getCalibrationDetail');
+      try {
+        const response2 = await api.get(`/sap/QLT_CALIB(${docEntry})`);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'getCalibrationDetail');
+      }
     }
   },
 
   createCalibrationRecord: async (data: any) => {
     try {
-      const response = await api.post('/sap/QLT_CALIB', data);
+      const response = await api.post('/sap/U_QLT_CALIB', data);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'createCalibrationRecord');
+      try {
+        const response2 = await api.post('/sap/QLT_CALIB', data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'createCalibrationRecord');
+      }
     }
   },
 
   updateCalibrationRecord: async (docEntry: number, data: any) => {
     try {
-      const response = await api.patch(`/sap/QLT_CALIB(${docEntry})`, data);
+      const response = await api.patch(`/sap/U_QLT_CALIB(${docEntry})`, data);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'updateCalibrationRecord');
+      try {
+        const response2 = await api.patch(`/sap/QLT_CALIB(${docEntry})`, data);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'updateCalibrationRecord');
+      }
     }
   },
 
   deleteCalibrationRecord: async (docEntry: number) => {
     try {
-      await api.delete(`/sap/QLT_CALIB(${docEntry})`);
+      await api.delete(`/sap/U_QLT_CALIB(${docEntry})`);
       return true;
     } catch (error) {
-      return handleApiError(error, 'deleteCalibrationRecord');
+      try {
+        await api.delete(`/sap/QLT_CALIB(${docEntry})`);
+        return true;
+      } catch (err2) {
+        return handleApiError(error, 'deleteCalibrationRecord');
+      }
     }
   },
 
@@ -827,11 +959,21 @@ export const sapService = {
   },
 
   // Quotations (SalesQuotations)
-  getQuotations: async () => {
+  getQuotations: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/Quotations?$top=50&$orderby=DocEntry desc');
-      return response.data.value;
+      const url = buildODataQuery('/sap/Quotations', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
+      if (typeof options === 'object' && options?.search) {
+        try {
+          const fallbackUrl = `/sap/Quotations?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
+          const response2 = await api.get(fallbackUrl);
+          return response2.data.value || [];
+        } catch {
+          return handleApiError(error, 'getQuotations');
+        }
+      }
       return handleApiError(error, 'getQuotations');
     }
   },
@@ -911,11 +1053,21 @@ export const sapService = {
   },
 
   // Orders (SalesOrders)
-  getOrders: async () => {
+  getOrders: async (options?: number | ODataQueryOptions) => {
     try {
-      const response = await api.get('/sap/Orders?$orderby=DocEntry desc&$top=50');
-      return response.data.value;
+      const url = buildODataQuery('/sap/Orders', options, 20, 'DocEntry desc');
+      const response = await api.get(url);
+      return response.data.value || [];
     } catch (error) {
+      if (typeof options === 'object' && options?.search) {
+        try {
+          const fallbackUrl = `/sap/Orders?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
+          const response2 = await api.get(fallbackUrl);
+          return response2.data.value || [];
+        } catch {
+          return handleApiError(error, 'getOrders');
+        }
+      }
       return handleApiError(error, 'getOrders');
     }
   },

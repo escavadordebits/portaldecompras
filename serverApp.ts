@@ -28,8 +28,22 @@ const upload = multer({ storage: multer.memoryStorage() });
 // SAP Service Layer configuration
 const SAP_BASE_URL = config.sap.baseUrl.replace(/\/$/, ''); // Remove trailing slash if exists
 
-// Helper to get session from cookies
-const getSessionId = (req: express.Request) => req.cookies['B1SESSION'];
+// Session Cache to reuse authenticated sessions across requests and avoid cookie drops in iframes
+interface CachedSession {
+  sessionId: string;
+  routeId?: string;
+  cookieHeader: string;
+  companyDB: string;
+  user: string;
+  expiresAt: number;
+}
+
+const sessionCache = new Map<string, CachedSession>();
+
+// Helper to get session from cookies or headers
+const getSessionId = (req: express.Request) => {
+  return req.cookies['B1SESSION'] || (req.headers['x-b1session'] as string) || (req.headers['authorization']?.replace(/^Bearer\s+/i, ''));
+};
 
 // Helper to get SAP configuration from headers or defaults
 const getSapConfig = (req: express.Request) => {
@@ -44,48 +58,111 @@ const getSapConfig = (req: express.Request) => {
   };
 };
 
-// Helper for automatic SAP re-authentication
-const doSapLogin = async (req: express.Request, res: express.Response) => {
+// Helper for automatic SAP authentication with fallback user support and session cache
+const doSapLogin = async (req: express.Request, res?: express.Response, forceRefresh = false) => {
   const sapConfig = getSapConfig(req);
-  const companyDB = req.cookies['B1COMPANYDB'] || (req.headers['x-sap-company'] as string) || config.sap.defaultCompany;
+  const companyDB = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const cacheKey = `${sapConfig.baseUrl}_${companyDB}_${sapConfig.user}`;
 
-  console.log(`Auto-authenticating with SAP Service Layer for company '${companyDB}'...`);
-
-  const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
-    CompanyDB: companyDB,
-    UserName: sapConfig.user,
-    Password: sapConfig.password
-  }, {
-    httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'User-Agent': 'SAP-Portal-Client/1.0'
-    },
-    timeout: 30000
-  });
-
-  const sessionId = loginResponse.data.SessionId;
-  const cookies = loginResponse.headers['set-cookie'] || [];
-  const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
-
-  const cookieOptions: any = {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'none'
-  };
-
-  res.cookie('B1SESSION', sessionId, cookieOptions);
-  res.cookie('B1COMPANYDB', companyDB, cookieOptions);
-
-  let newCookieHeader = `B1SESSION=${sessionId}`;
-  if (routeId) {
-    const [name, value] = routeId.split('=');
-    res.cookie(name, value, cookieOptions);
-    newCookieHeader += `; ${routeId}`;
+  if (!forceRefresh) {
+    const cached = sessionCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      if (res) {
+        const cookieOptions: any = { httpOnly: true, secure: true, sameSite: 'none' };
+        res.cookie('B1SESSION', cached.sessionId, cookieOptions);
+        res.cookie('B1COMPANYDB', cached.companyDB, cookieOptions);
+        if (cached.routeId) {
+          const [name, value] = cached.routeId.split('=');
+          res.cookie(name, value, cookieOptions);
+        }
+      }
+      return { sessionId: cached.sessionId, cookieHeader: cached.cookieHeader };
+    }
   }
 
-  return { sessionId, cookieHeader: newCookieHeader };
+  console.log(`Auto-authenticating with SAP Service Layer for company '${companyDB}' (force: ${forceRefresh})...`);
+
+  const usersToTry = [sapConfig.user];
+  if (sapConfig.user.toLowerCase() === 'b1i') {
+    usersToTry.push('manager');
+  } else if (sapConfig.user.toLowerCase() === 'manager') {
+    usersToTry.push('B1i');
+  }
+
+  let lastError: any = null;
+
+  for (const testUser of usersToTry) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        console.log(`Attempting SAP login as '${testUser}' for '${companyDB}' (attempt ${attempt + 1})...`);
+        const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
+          CompanyDB: companyDB,
+          UserName: testUser,
+          Password: sapConfig.password
+        }, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'SAP-Portal-Client/1.0'
+          },
+          timeout: 30000
+        });
+
+        const sessionId = loginResponse.data.SessionId;
+        const cookies = loginResponse.headers['set-cookie'] || [];
+        const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
+
+        const cookieOptions: any = {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'none'
+        };
+
+        if (res) {
+          res.cookie('B1SESSION', sessionId, cookieOptions);
+          res.cookie('B1COMPANYDB', companyDB, cookieOptions);
+        }
+
+        let newCookieHeader = `B1SESSION=${sessionId}`;
+        if (routeId) {
+          const [name, value] = routeId.split('=');
+          if (res) {
+            res.cookie(name, value, cookieOptions);
+          }
+          newCookieHeader += `; ${routeId}`;
+        }
+
+        // Cache session for 25 minutes
+        sessionCache.set(cacheKey, {
+          sessionId,
+          routeId,
+          cookieHeader: newCookieHeader,
+          companyDB,
+          user: testUser,
+          expiresAt: Date.now() + 25 * 60 * 1000
+        });
+
+        console.log(`SAP auto-login successful for '${testUser}' on '${companyDB}'.`);
+        return { sessionId, cookieHeader: newCookieHeader };
+      } catch (err: any) {
+        lastError = err;
+        if (err.response?.status === 401) {
+          console.warn(`SAP login as '${testUser}' returned 401 Unauthorized.`);
+          break; // Try next user in usersToTry
+        }
+        if ((err.response?.status === 502 || err.response?.status === 504) && attempt < 2) {
+          console.warn(`SAP login attempt ${attempt + 1} got ${err.response?.status}. Retrying in ${1000 * (attempt + 1)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  sessionCache.delete(cacheKey);
+  throw lastError || new Error('Falha na autenticação SAP Service Layer');
 };
 
 // Create the API Router
@@ -415,7 +492,13 @@ apiRouter.post('/sap/Attachments2', upload.array('files'), async (req, res) => {
 
 // Proxy middleware for general SAP requests
 apiRouter.all('/sap/*', async (req, res) => {
-  let sessionId = getSessionId(req);
+  const requestedCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const cookieCompany = req.cookies['B1COMPANYDB'];
+  
+  // If the request specifies a different company than the existing cookie session, force getting a session for requestedCompany
+  const isCompanyMismatch = Boolean(cookieCompany && requestedCompany && cookieCompany !== requestedCompany);
+  
+  let sessionId = isCompanyMismatch ? null : getSessionId(req);
   let cookieHeader = Object.entries(req.cookies)
     .map(([key, value]) => `${key}=${value}`)
     .join('; ');
@@ -426,8 +509,8 @@ apiRouter.all('/sap/*', async (req, res) => {
       sessionId = auth.sessionId;
       cookieHeader = auth.cookieHeader;
     } catch (loginErr: any) {
-      console.error('Auto-login failed:', loginErr.message);
-      return res.status(401).json({ error: 'Não autenticado no SAP.', details: loginErr.message });
+      console.error(`Auto-login failed for company '${requestedCompany}':`, loginErr.message);
+      return res.status(401).json({ error: 'Não autenticado no SAP.', details: loginErr.message, companyDB: requestedCompany });
     }
   }
 
@@ -485,7 +568,7 @@ apiRouter.all('/sap/*', async (req, res) => {
           hasAttemptedReauth = true;
           console.warn(`SAP Proxy: 401 / Session Expired on ${endpoint}. Auto re-authenticating...`);
           try {
-            const auth = await doSapLogin(req, res);
+            const auth = await doSapLogin(req, res, true);
             finalHeaders['Cookie'] = auth.cookieHeader;
             console.log(`Auto re-authentication succeeded. Retrying ${endpoint}...`);
             continue;
