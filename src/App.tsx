@@ -42,8 +42,11 @@ import {
   Users,
   DollarSign,
   Activity,
-  Briefcase
+  Briefcase,
+  Calculator,
+  FileSpreadsheet
 } from 'lucide-react';
+import { BidComparativeView } from './components/BidComparativeView';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
@@ -132,7 +135,7 @@ import {
   Cell 
 } from 'recharts';
 
-type View = 'dashboard' | 'create-order' | 'list-orders' | 'create-request' | 'list-requests' | 'create-quotation' | 'list-quotations' | 'approvals' | 'create-down-payment' | 'list-down-payments' | 'quality' | 'maintenance' | 'costs' | 'calibration' | 'quotation-portal' | 'users' | 'sales-orders';
+type View = 'dashboard' | 'create-order' | 'list-orders' | 'create-request' | 'list-requests' | 'create-quotation' | 'list-quotations' | 'bid-map' | 'approvals' | 'create-down-payment' | 'list-down-payments' | 'quality' | 'maintenance' | 'costs' | 'calibration' | 'quotation-portal' | 'users' | 'sales-orders';
 
 function SupplierPortalView({ docEntry }: { docEntry: number }) {
   const [quotation, setQuotation] = useState<any>(null);
@@ -1413,6 +1416,16 @@ export default function App() {
                     if (window.innerWidth < 1024) setSidebarOpen(false);
                   }}
                 />
+                <SidebarItem 
+                  icon={<Calculator />} 
+                  label="Mapa Comparativo (BID)" 
+                  active={currentView === 'bid-map'} 
+                  expanded={sidebarOpen}
+                  onClick={() => {
+                    setCurrentView('bid-map');
+                    if (window.innerWidth < 1024) setSidebarOpen(false);
+                  }}
+                />
               </>
             )}
 
@@ -1617,6 +1630,12 @@ export default function App() {
                 onBack={() => setSelectedQuotationEntry(null)}
                 onViewDetails={handleViewQuotationDetails}
                 userEmail={sapUser?.email}
+              />
+            )}
+            {currentView === 'bid-map' && (
+              <BidComparativeView 
+                key="bid-map" 
+                userEmail={sapUser?.email} 
               />
             )}
             {currentView === 'create-down-payment' && (
