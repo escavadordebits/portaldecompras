@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   ShoppingCart, 
@@ -1246,7 +1246,7 @@ export default function App() {
                 onClick={() => setCurrentView('costs')}
                 className={`evo-nav-link ${currentView === 'costs' ? 'active' : ''}`}
               >
-                Custos
+                Receitas
               </button>
             )}
             {userProfile?.role === 'admin' && (
@@ -1478,7 +1478,7 @@ export default function App() {
                 {activeModules.costs && (
                   <SidebarItem 
                     icon={<FileText />} 
-                    label="Controle de Custos" 
+                    label="Controle de Receitas" 
                     active={currentView === 'costs'} 
                     expanded={sidebarOpen}
                     onClick={() => {
@@ -4270,6 +4270,7 @@ function CostsView() {
   
   const [isPersDialogOpen, setIsPersDialogOpen] = useState(false);
   const [isRentalDialogOpen, setIsRentalDialogOpen] = useState(false);
+  const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const initialPersForm = {
@@ -4302,7 +4303,7 @@ function CostsView() {
   const [formData, setFormData] = useState(initialPersForm);
   const [rentalFormData, setRentalFormData] = useState(initialRentalForm);
 
-  // Computa o breakdown de custos fiel à planilha Excel e ao SAP
+  // Computa o breakdown de receitas/custos fiel à planilha Excel e ao SAP
   const currentPersBreakdown = calculatePersonnelCost({
     valorNormal: formData.U_VlNormal,
     qtdDiariasNormal: formData.U_QtdDiariasNormal,
@@ -4370,17 +4371,17 @@ function CostsView() {
     try {
       if (editingId) {
         await sapService.updatePersonnelCost(editingId, formData);
-        toast.success('Custo de pessoal atualizado com sucesso!');
+        toast.success('Receita de pessoal atualizada com sucesso!');
       } else {
         await sapService.createPersonnelCost(formData);
-        toast.success('Custo de pessoal registrado com sucesso!');
+        toast.success('Receita de pessoal registrada com sucesso!');
       }
       fetchCosts();
       setIsPersDialogOpen(false);
       setFormData(initialPersForm);
       setEditingId(null);
     } catch (error) {
-      toast.error('Erro ao salvar registro de custo.');
+      toast.error('Erro ao salvar registro de receita.');
     } finally {
       setIsSubmitLoading(false);
     }
@@ -4392,10 +4393,10 @@ function CostsView() {
     try {
       if (editingId) {
         await sapService.updateRentalCost(editingId, rentalFormData);
-        toast.success('Custo de locação atualizado com sucesso!');
+        toast.success('Receita de locação atualizada com sucesso!');
       } else {
         await sapService.createRentalCost(rentalFormData);
-        toast.success('Custo de locação registrado com sucesso!');
+        toast.success('Receita de locação registrada com sucesso!');
       }
       fetchCosts();
       setIsRentalDialogOpen(false);
@@ -4473,9 +4474,9 @@ function CostsView() {
     >
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tighter text-evo-dark uppercase">Gestão de Custos</h1>
+          <h1 className="text-3xl font-bold tracking-tighter text-evo-dark uppercase">Gestão de Receitas</h1>
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
-          <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Controle financeiro operacional de colaboradores e locações</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Controle financeiro operacional de receitas de colaboradores e locações</p>
         </div>
 
         <div className="flex gap-4">
@@ -4489,18 +4490,53 @@ function CostsView() {
             <DialogTrigger render={<Button className="evo-button-primary shadow-xl" onClick={() => {
                 setEditingId(null);
                 setFormData(initialPersForm);
-              }} />}>Novo Custo Pessoal</DialogTrigger>
+              }} />}>Nova Receita Pessoal</DialogTrigger>
             <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
-                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Custo Pessoal' : 'Registro de Custo Pessoal (CustosPessoal)'}</DialogTitle>
+                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Receita Pessoal' : 'Registro de Receita de Pessoal (CustosPessoal)'}</DialogTitle>
                 <CardDescription className="text-[10px] uppercase tracking-widest">Lançamento de diárias e horas extras para controle de projetos</CardDescription>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-6 py-4">
                 <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                   <div className="space-y-4">
                     <div className="space-y-1.5">
-                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador</Label>
-                      <Input value={formData.U_Colaborador} onChange={e => setFormData({...formData, U_Colaborador: e.target.value})} className="rounded-none h-10 border-evo-bg" placeholder="Nome Completo" />
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador (Código CO)</Label>
+                      <div className="flex gap-1">
+                        <Input 
+                          value={formData.U_Colaborador} 
+                          onChange={e => setFormData({...formData, U_Colaborador: e.target.value})} 
+                          className="rounded-none h-10 border-evo-bg flex-1 font-bold" 
+                          placeholder="Código ou Nome do Colaborador (Ex: CO...)" 
+                          required
+                        />
+                        <Button 
+                          type="button" 
+                          variant="outline" 
+                          className="rounded-none h-10 w-10 p-0 border-evo-bg"
+                          onClick={() => setIsCollabLookupOpen(true)}
+                          title="Listar Parceiros CO"
+                        >
+                          <Search className="w-4 h-4" />
+                        </Button>
+                      </div>
+
+                      <LookupDialog 
+                        isOpen={isCollabLookupOpen}
+                        onClose={() => setIsCollabLookupOpen(false)}
+                        title="Pesquisar Colaborador (CO)"
+                        placeholder="Filtrar por nome ou código..."
+                        onSelect={(collab: any) => {
+                          setFormData({ ...formData, U_Colaborador: collab.CardName || collab.CardCode });
+                          setIsCollabLookupOpen(false);
+                        }}
+                        searchFn={sapService.getCollaborators}
+                        renderItem={(collab: any) => (
+                          <div className="flex justify-between items-center w-full">
+                            <span className="font-black text-xs text-evo-dark">{collab.CardCode}</span>
+                            <span className="text-[11px] font-bold text-evo-dark/70 uppercase truncate max-w-[280px]">{collab.CardName}</span>
+                          </div>
+                        )}
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
@@ -4606,7 +4642,7 @@ function CostsView() {
                 <DialogFooter>
                   <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
                   <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none px-10">
-                    {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Custo' : 'Gravar Custo'}
+                    {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Receita' : 'Gravar Receita'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -4623,11 +4659,11 @@ function CostsView() {
             <DialogTrigger render={<Button variant="outline" className="rounded-none h-12 uppercase text-[10px] font-black tracking-widest border-evo-dark hover:bg-evo-dark hover:text-white transition-all px-8" onClick={() => {
                 setEditingId(null);
                 setRentalFormData(initialRentalForm);
-              }} />}>Novo Custo Locação</DialogTrigger>
+              }} />}>Nova Receita Locação</DialogTrigger>
             <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
-                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Custo de Locação' : 'Registro de Custo de Locação (CustosLoc)'}</DialogTitle>
-                <CardDescription className="text-[10px] uppercase tracking-widest">Controle de custos de equipamentos e recursos externos</CardDescription>
+                <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Receita de Locação' : 'Registro de Receita de Locação (CustosLoc)'}</DialogTitle>
+                <CardDescription className="text-[10px] uppercase tracking-widest">Controle de receitas de equipamentos e recursos externos</CardDescription>
               </DialogHeader>
               <form onSubmit={handleRentalSubmit} className="space-y-6 py-4">
                 <div className="grid grid-cols-2 gap-x-8 gap-y-4">
@@ -4675,7 +4711,7 @@ function CostsView() {
                     </div>
 
                     <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
-                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Locação</p>
+                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Receita Locação</p>
                       <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
                         R$ {rentalFormData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </h3>
@@ -4696,9 +4732,10 @@ function CostsView() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-        <Card className="evo-card border-none overflow-hidden">
-          <CardHeader className="bg-evo-dark px-8 py-4">
-            <CardTitle className="text-[10px] font-black uppercase tracking-[0.4em] text-white/50">Custo Pessoal (Equipes)</CardTitle>
+        <Card className="evo-card border-none overflow-hidden shadow-lg">
+          <CardHeader className="bg-evo-dark px-8 py-4 flex flex-row items-center justify-between">
+            <CardTitle className="text-[10px] font-black uppercase tracking-[0.4em] text-white">Receita de Pessoal (Equipes)</CardTitle>
+            <Badge className="bg-evo-teal text-white border-none text-[8px] font-black uppercase tracking-wider">{personnel.length} Registros</Badge>
           </CardHeader>
           <Table>
             <TableHeader className="bg-evo-bg/50">
@@ -4713,7 +4750,7 @@ function CostsView() {
               {isLoading ? (
                 <TableRow><TableCell colSpan={4} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
               ) : personnel.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros de pessoal</TableCell></TableRow>
               ) : personnel.map((p, i) => (
                 <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                   <TableCell className="px-6 py-4 text-[10px] font-bold">{p.U_DataInicial ? new Date(p.U_DataInicial).toLocaleDateString('pt-BR') : '-'}</TableCell>
@@ -4735,9 +4772,10 @@ function CostsView() {
           </Table>
         </Card>
 
-        <Card className="evo-card border-none overflow-hidden">
-          <CardHeader className="bg-evo-dark px-8 py-4">
-            <CardTitle className="text-[10px] font-black uppercase tracking-[0.4em] text-white/50">Custos de Locação (Equip.)</CardTitle>
+        <Card className="evo-card border-none overflow-hidden shadow-lg">
+          <CardHeader className="bg-evo-dark px-8 py-4 flex flex-row items-center justify-between">
+            <CardTitle className="text-[10px] font-black uppercase tracking-[0.4em] text-white">Receita de Locação (Equip.)</CardTitle>
+            <Badge className="bg-blue-500 text-white border-none text-[8px] font-black uppercase tracking-wider">{rental.length} Registros</Badge>
           </CardHeader>
           <Table>
             <TableHeader className="bg-evo-bg/50">
@@ -4752,7 +4790,7 @@ function CostsView() {
               {isLoading ? (
                 <TableRow><TableCell colSpan={4} className="text-center py-10 opacity-30 animate-pulse">Buscando...</TableCell></TableRow>
               ) : rental.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros</TableCell></TableRow>
+                <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros de locação</TableCell></TableRow>
               ) : rental.map((r, i) => (
                 <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                   <TableCell className="px-6 py-4 uppercase font-black text-[10px] text-evo-dark">{r.U_Recurso || 'LOCAÇÃO EQUIP.'}</TableCell>
@@ -6044,16 +6082,16 @@ function SalesOrdersView() {
 // Reusable Lookup Dialog
 function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn, renderItem }: any) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [rawResults, setRawResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSearch = async () => {
-    if (!searchTerm) return;
+  const loadData = async (query = '') => {
     setIsLoading(true);
     try {
-      const data = await searchFn(searchTerm);
-      setResults(data || []);
+      const data = await searchFn(query);
+      setRawResults(Array.isArray(data) ? data : []);
     } catch (error) {
+      console.warn('Erro ao buscar dados no lookup:', error);
       toast.error('Erro ao buscar dados.');
     } finally {
       setIsLoading(false);
@@ -6061,45 +6099,85 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
   };
 
   useEffect(() => {
-    if (!isOpen) {
+    if (isOpen) {
       setSearchTerm('');
-      setResults([]);
+      loadData('');
+    } else {
+      setSearchTerm('');
+      setRawResults([]);
     }
   }, [isOpen]);
 
+  const handleSearch = async () => {
+    loadData(searchTerm);
+  };
+
+  // Real-time in-memory filter of loaded list
+  const filteredResults = useMemo(() => {
+    if (!searchTerm.trim()) return rawResults;
+    const term = searchTerm.toLowerCase().trim();
+    return rawResults.filter((item: any) => {
+      const code = String(item.CardCode || item.ItemCode || item.Code || '').toLowerCase();
+      const name = String(item.CardName || item.ItemName || item.Name || item.Description || '').toLowerCase();
+      return code.includes(term) || name.includes(term);
+    });
+  }, [rawResults, searchTerm]);
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md w-[95vw] rounded-none border-t-4 border-evo-teal">
+      <DialogContent className="sm:max-w-lg w-[95vw] rounded-none border-t-4 border-evo-teal shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="uppercase tracking-tight font-black text-sm">{title}</DialogTitle>
+          <div className="flex justify-between items-center pr-4">
+            <DialogTitle className="uppercase tracking-tight font-black text-sm text-evo-dark">{title}</DialogTitle>
+            <span className="text-[9px] font-bold text-evo-teal uppercase bg-evo-teal/10 px-2 py-0.5">
+              {isLoading ? 'Carregando...' : `${filteredResults.length} Encontrado(s)`}
+            </span>
+          </div>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="flex gap-2">
-            <Input 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              placeholder={placeholder}
-              className="rounded-none h-10 border-evo-bg font-bold"
-            />
-            <Button onClick={handleSearch} disabled={isLoading} className="evo-button-primary h-10 rounded-none px-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
+              <Input 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder={placeholder || 'Digite para filtrar ou buscar...'}
+                className="rounded-none h-10 border-evo-bg font-bold pl-9 text-xs"
+                autoFocus
+              />
+            </div>
+            <Button onClick={handleSearch} disabled={isLoading} className="evo-button-primary h-10 rounded-none px-4" title="Buscar no Servidor">
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             </Button>
           </div>
           
-          <div className="max-h-[300px] overflow-y-auto border border-evo-bg divide-y divide-evo-bg">
-            {results.length === 0 ? (
-              <div className="p-8 text-center text-[10px] font-bold text-evo-dark/30 uppercase tracking-widest">
-                {searchTerm ? 'Nenhum resultado encontrado' : 'Digite para pesquisar'}
+          <div className="max-h-[340px] overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white">
+            {isLoading && rawResults.length === 0 ? (
+              <div className="p-8 text-center text-[10px] font-bold text-evo-dark/40 uppercase tracking-widest flex items-center justify-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-evo-teal" />
+                Listando parceiros...
               </div>
-            ) : results.map((item, idx) => (
+            ) : filteredResults.length === 0 ? (
+              <div className="p-8 text-center text-[10px] font-bold text-evo-dark/30 uppercase tracking-widest">
+                {searchTerm ? 'Nenhum resultado encontrado para o filtro' : 'Nenhum registro disponível'}
+              </div>
+            ) : filteredResults.map((item, idx) => (
               <button 
                 key={idx}
                 type="button"
-                onClick={() => onSelect(item)}
-                className="w-full p-4 text-left hover:bg-evo-teal/5 transition-colors flex items-center"
+                onClick={() => {
+                  onSelect(item);
+                  onClose();
+                }}
+                className="w-full p-3.5 text-left hover:bg-evo-teal/5 transition-colors flex items-center group cursor-pointer border-l-2 border-transparent hover:border-evo-teal"
               >
-                {renderItem(item)}
+                {renderItem ? renderItem(item) : (
+                  <div className="flex justify-between items-center w-full">
+                    <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{item.CardCode || item.ItemCode}</span>
+                    <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{item.CardName || item.ItemName}</span>
+                  </div>
+                )}
               </button>
             ))}
           </div>

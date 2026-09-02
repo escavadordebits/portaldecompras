@@ -95,7 +95,7 @@ const MODULE_DEFINITIONS = [
   { id: 'quality', label: 'Qualidade (QLDADE)' },
   { id: 'maintenance', label: 'Manutenção (CAB)' },
   { id: 'calibration', label: 'Calibração' },
-  { id: 'costs', label: 'Gestão de Custos' }
+  { id: 'costs', label: 'Gestão de Receitas' }
 ];
 
 export default function UserManagementView() {
@@ -311,7 +311,7 @@ export default function UserManagementView() {
         'Qualidade (SIM/NAO)': 'SIM',
         'Manutenção (SIM/NAO)': 'SIM',
         'Calibração (SIM/NAO)': 'SIM',
-        'Gestão de Custos (SIM/NAO)': 'SIM'
+        'Gestão de Receitas (SIM/NAO)': 'SIM'
       },
       {
         'E-mail Plataforma': 'comercial.silva@empresa.com.br',
@@ -329,7 +329,7 @@ export default function UserManagementView() {
         'Qualidade (SIM/NAO)': 'NAO',
         'Manutenção (SIM/NAO)': 'NAO',
         'Calibração (SIM/NAO)': 'NAO',
-        'Gestão de Custos (SIM/NAO)': 'NAO'
+        'Gestão de Receitas (SIM/NAO)': 'NAO'
       },
       {
         'E-mail Plataforma': 'suprimentos.costa@empresa.com.br',
@@ -347,7 +347,7 @@ export default function UserManagementView() {
         'Qualidade (SIM/NAO)': 'NAO',
         'Manutenção (SIM/NAO)': 'NAO',
         'Calibração (SIM/NAO)': 'NAO',
-        'Gestão de Custos (SIM/NAO)': 'SIM'
+        'Gestão de Receitas (SIM/NAO)': 'SIM'
       }
     ];
 
@@ -369,7 +369,7 @@ export default function UserManagementView() {
       { wch: 18 }, // Qualidade
       { wch: 18 }, // Manutenção
       { wch: 18 }, // Calibração
-      { wch: 18 }, // Gestão de Custos
+      { wch: 18 }, // Gestão de Receitas
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -401,7 +401,7 @@ export default function UserManagementView() {
       'Qualidade (SIM/NAO)': u.modules?.quality !== false ? 'SIM' : 'NAO',
       'Manutenção (SIM/NAO)': u.modules?.maintenance !== false ? 'SIM' : 'NAO',
       'Calibração (SIM/NAO)': u.modules?.calibration !== false ? 'SIM' : 'NAO',
-      'Gestão de Custos (SIM/NAO)': u.modules?.costs !== false ? 'SIM' : 'NAO',
+      'Gestão de Receitas (SIM/NAO)': u.modules?.costs !== false ? 'SIM' : 'NAO',
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -503,7 +503,7 @@ export default function UserManagementView() {
             quality: parseBoolean(row['Qualidade (SIM/NAO)'] ?? row['Qualidade'] ?? row['quality'], true),
             maintenance: parseBoolean(row['Manutenção (SIM/NAO)'] ?? row['Manutenção'] ?? row['maintenance'], true),
             calibration: parseBoolean(row['Calibração (SIM/NAO)'] ?? row['Calibração'] ?? row['calibration'], true),
-            costs: parseBoolean(row['Gestão de Custos (SIM/NAO)'] ?? row['Gestão de Custos'] ?? row['Custos'] ?? row['costs'], true),
+            costs: parseBoolean(row['Gestão de Receitas (SIM/NAO)'] ?? row['Gestão de Receitas'] ?? row['Receitas'] ?? row['Gestão de Custos (SIM/NAO)'] ?? row['Gestão de Custos'] ?? row['Custos'] ?? row['costs'], true),
           };
 
           const isExisting = existingEmailsMap.has(email.toLowerCase());

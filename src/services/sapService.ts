@@ -160,10 +160,19 @@ export const sapService = {
 
   getPurchaseRequests: async (options?: number | ODataQueryOptions) => {
     try {
-      const url = buildODataQuery('/sap/CustosPessoal', options, 20, 'DocEntry desc');
+      const url = buildODataQuery('/sap/PurchaseRequests', options, 20, 'DocEntry desc');
       const response = await api.get(url);
       return response.data.value || [];
     } catch (error) {
+      if (typeof options === 'object' && options?.search) {
+        try {
+          const fallbackUrl = `/sap/PurchaseRequests?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
+          const response2 = await api.get(fallbackUrl);
+          return response2.data.value || [];
+        } catch {
+          return handleApiError(error, 'getPurchaseRequests');
+        }
+      }
       return handleApiError(error, 'getPurchaseRequests');
     }
   },
@@ -208,7 +217,7 @@ export const sapService = {
 
   getPurchaseRequest: async (docEntry: number) => {
     try {
-      const response = await api.get(`/sap/CustosPessoal(${docEntry})`);
+      const response = await api.get(`/sap/PurchaseRequests(${docEntry})`);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'getPurchaseRequest');
@@ -278,7 +287,7 @@ export const sapService = {
           Usage: line.Usage
         }))
       };
-      const response = await api.post('/sap/CustosPessoal', formattedData, {
+      const response = await api.post('/sap/PurchaseRequests', formattedData, {
         headers: {
           'B1S-EnableApprovalWorkflow': 'true'
         }
@@ -442,13 +451,29 @@ export const sapService = {
 
   getCollaborators: async (name?: string) => {
     try {
-      let url = "/sap/BusinessPartners?$select=CardCode,CardName&$top=50";
-      let filter = "(CardType eq 'cSupplier' or CardType eq 'S') and startswith(CardCode, 'CO')";
-      if (name) {
-        filter += ` and (contains(CardName, '${name}') or contains(CardCode, '${name}'))`;
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,CardType,Frozen&$top=200";
+      let filter = "startswith(CardCode, 'CO') or startswith(CardCode, 'co') or startswith(CardCode, 'Co')";
+      if (name && name.trim()) {
+        const sanitized = name.trim().replace(/'/g, "''");
+        filter = `(${filter}) and (contains(CardName, '${sanitized}') or contains(CardCode, '${sanitized}'))`;
       }
-      const response = await api.get(`${url}&$filter=${filter}`);
-      return response.data.value;
+      try {
+        const response = await api.get(`${url}&$filter=${filter}`);
+        const list = response.data?.value || [];
+        return list.filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+      } catch (err) {
+        // Fallback: fetch top partners and filter in-memory for CardCode starting with CO
+        console.warn('OData filter startswith failed, falling back to in-memory filter...');
+        const fallbackRes = await api.get('/sap/BusinessPartners?$select=CardCode,CardName,Frozen&$top=300');
+        const allBps = fallbackRes.data?.value || [];
+        return allBps.filter((bp: any) => {
+          const code = (bp.CardCode || '').toUpperCase();
+          const matchesCO = code.startsWith('CO');
+          const matchesName = !name || (bp.CardName || '').toLowerCase().includes(name.toLowerCase()) || code.includes(name.toUpperCase());
+          const isActive = bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen;
+          return matchesCO && matchesName && isActive;
+        });
+      }
     } catch (error) {
       return handleApiError(error, 'getCollaborators');
     }

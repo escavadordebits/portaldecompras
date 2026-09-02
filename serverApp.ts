@@ -82,81 +82,95 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
 
   console.log(`Auto-authenticating with SAP Service Layer for company '${companyDB}' (force: ${forceRefresh})...`);
 
-  const usersToTry = [sapConfig.user];
-  if (sapConfig.user.toLowerCase() === 'b1i') {
-    usersToTry.push('manager');
-  } else if (sapConfig.user.toLowerCase() === 'manager') {
-    usersToTry.push('B1i');
+  // Build list of candidate users starting with requested user
+  const candidateUsers = [sapConfig.user, 'manager', 'Manager', 'B1i'];
+  const usersToTry = Array.from(new Set(candidateUsers.filter(Boolean)));
+
+  // Build candidate companies if default company is available
+  const candidateCompanies = [companyDB];
+  if (config.sap.defaultCompany && !candidateCompanies.includes(config.sap.defaultCompany)) {
+    candidateCompanies.push(config.sap.defaultCompany);
   }
 
   let lastError: any = null;
 
-  for (const testUser of usersToTry) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        console.log(`Attempting SAP login as '${testUser}' for '${companyDB}' (attempt ${attempt + 1})...`);
-        const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
-          CompanyDB: companyDB,
-          UserName: testUser,
-          Password: sapConfig.password
-        }, {
-          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'SAP-Portal-Client/1.0'
-          },
-          timeout: 30000
-        });
+  for (const targetCompany of candidateCompanies) {
+    for (const testUser of usersToTry) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          console.log(`Attempting SAP login as '${testUser}' for '${targetCompany}' (attempt ${attempt + 1})...`);
+          const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
+            CompanyDB: targetCompany,
+            UserName: testUser,
+            Password: sapConfig.password
+          }, {
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'User-Agent': 'SAP-Portal-Client/1.0'
+            },
+            timeout: 25000
+          });
 
-        const sessionId = loginResponse.data.SessionId;
-        const cookies = loginResponse.headers['set-cookie'] || [];
-        const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
+          const sessionId = loginResponse.data.SessionId;
+          const cookies = loginResponse.headers['set-cookie'] || [];
+          const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
 
-        const cookieOptions: any = {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none'
-        };
+          const cookieOptions: any = {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none'
+          };
 
-        if (res) {
-          res.cookie('B1SESSION', sessionId, cookieOptions);
-          res.cookie('B1COMPANYDB', companyDB, cookieOptions);
-        }
-
-        let newCookieHeader = `B1SESSION=${sessionId}`;
-        if (routeId) {
-          const [name, value] = routeId.split('=');
           if (res) {
-            res.cookie(name, value, cookieOptions);
+            res.cookie('B1SESSION', sessionId, cookieOptions);
+            res.cookie('B1COMPANYDB', targetCompany, cookieOptions);
           }
-          newCookieHeader += `; ${routeId}`;
-        }
 
-        // Cache session for 25 minutes
-        sessionCache.set(cacheKey, {
-          sessionId,
-          routeId,
-          cookieHeader: newCookieHeader,
-          companyDB,
-          user: testUser,
-          expiresAt: Date.now() + 25 * 60 * 1000
-        });
+          let newCookieHeader = `B1SESSION=${sessionId}`;
+          if (routeId) {
+            const [name, value] = routeId.split('=');
+            if (res) {
+              res.cookie(name, value, cookieOptions);
+            }
+            newCookieHeader += `; ${routeId}`;
+          }
 
-        console.log(`SAP auto-login successful for '${testUser}' on '${companyDB}'.`);
-        return { sessionId, cookieHeader: newCookieHeader };
-      } catch (err: any) {
-        lastError = err;
-        if (err.response?.status === 401) {
-          console.warn(`SAP login as '${testUser}' returned 401 Unauthorized.`);
-          break; // Try next user in usersToTry
+          // Cache session for 25 minutes
+          sessionCache.set(cacheKey, {
+            sessionId,
+            routeId,
+            cookieHeader: newCookieHeader,
+            companyDB: targetCompany,
+            user: testUser,
+            expiresAt: Date.now() + 25 * 60 * 1000
+          });
+
+          console.log(`SAP auto-login successful for '${testUser}' on '${targetCompany}'.`);
+          return { sessionId, cookieHeader: newCookieHeader };
+        } catch (err: any) {
+          lastError = err;
+          const status = err.response?.status;
+          const sapErrorMsg = err.response?.data?.error?.message?.value || err.response?.data?.error?.message || err.message;
+          console.warn(`SAP login attempt ${attempt + 1} as '${testUser}' for '${targetCompany}' failed (${status || 'ERR'}): ${sapErrorMsg}`);
+
+          // If authentication failure / SAML error / 401 / bad credentials, immediately test the next user
+          const isAuthFailure = status === 401 || (typeof sapErrorMsg === 'string' && (
+            sapErrorMsg.toLowerCase().includes('saml') ||
+            sapErrorMsg.toLowerCase().includes('password') ||
+            sapErrorMsg.toLowerCase().includes('user') ||
+            sapErrorMsg.toLowerCase().includes('credential')
+          ));
+
+          if (isAuthFailure) {
+            break; // Stop retrying this user and try next candidate user immediately
+          }
+
+          if (attempt < 1) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
         }
-        if ((err.response?.status === 502 || err.response?.status === 504) && attempt < 2) {
-          console.warn(`SAP login attempt ${attempt + 1} got ${err.response?.status}. Retrying in ${1000 * (attempt + 1)}ms...`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
-        }
-        throw err;
       }
     }
   }
