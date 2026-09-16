@@ -58,10 +58,21 @@ const getSapConfig = (req: express.Request) => {
   };
 };
 
+// Normalize company database name to avoid invalid schema logins
+export const normalizeCompany = (comp?: string): string => {
+  if (!comp) return config.sap.defaultCompany || 'SBO_QUALITECH';
+  const trimmed = comp.trim();
+  if (!trimmed || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+    return 'SBO_QUALITECH';
+  }
+  return trimmed;
+};
+
 // Helper for automatic SAP authentication with fallback user support and session cache
 const doSapLogin = async (req: express.Request, res?: express.Response, forceRefresh = false) => {
   const sapConfig = getSapConfig(req);
-  const companyDB = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const rawCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const companyDB = normalizeCompany(rawCompany);
   const cacheKey = `${sapConfig.baseUrl}_${companyDB}_${sapConfig.user}`;
 
   if (!forceRefresh) {
@@ -86,11 +97,8 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
   const candidateUsers = [sapConfig.user, 'manager', 'Manager', 'B1i'];
   const usersToTry = Array.from(new Set(candidateUsers.filter(Boolean)));
 
-  // Build candidate companies if default company is available
+  // Strictly target the requested companyDB (normalized)
   const candidateCompanies = [companyDB];
-  if (config.sap.defaultCompany && !candidateCompanies.includes(config.sap.defaultCompany)) {
-    candidateCompanies.push(config.sap.defaultCompany);
-  }
 
   let lastError: any = null;
 
@@ -158,6 +166,7 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
           // If authentication failure / SAML error / 401 / bad credentials, immediately test the next user
           const isAuthFailure = status === 401 || (typeof sapErrorMsg === 'string' && (
             sapErrorMsg.toLowerCase().includes('saml') ||
+            sapErrorMsg.toLowerCase().includes('sld') ||
             sapErrorMsg.toLowerCase().includes('password') ||
             sapErrorMsg.toLowerCase().includes('user') ||
             sapErrorMsg.toLowerCase().includes('credential')
@@ -189,7 +198,8 @@ apiRouter.get('/health', (req, res) => {
 
 // API Login Route
 apiRouter.post('/login', async (req, res) => {
-  const { email, companyDB } = req.body;
+  const { email, companyDB: rawCompany } = req.body;
+  const companyDB = normalizeCompany(rawCompany);
   const sapConfig = getSapConfig(req);
 
   if (!email || !companyDB) {
@@ -198,16 +208,12 @@ apiRouter.post('/login', async (req, res) => {
 
   const loginWithRetry = async (retries = 3) => {
     // Try primary user (B1i or configured user), then fallback to manager if 401
-    const usersToTry = [sapConfig.user];
-    if (sapConfig.user.toLowerCase() === 'b1i') {
-      usersToTry.push('manager');
-    } else if (sapConfig.user.toLowerCase() === 'manager') {
-      usersToTry.push('B1i');
-    }
+    const usersToTry = [sapConfig.user, 'manager', 'Manager', 'B1i'];
+    const uniqueUsers = Array.from(new Set(usersToTry.filter(Boolean)));
 
     let lastError: any = null;
 
-    for (const testUser of usersToTry) {
+    for (const testUser of uniqueUsers) {
       for (let i = 0; i < retries; i++) {
         try {
           console.log(`Authenticating with SAP Service Layer as user '${testUser}' on '${companyDB}'...`);
@@ -226,8 +232,18 @@ apiRouter.post('/login', async (req, res) => {
           });
         } catch (error: any) {
           lastError = error;
-          if (error.response?.status === 401) {
-            // If 401, break retry loop to try next user in usersToTry
+          const status = error.response?.status;
+          const sapErrorMsg = error.response?.data?.error?.message?.value || error.response?.data?.error?.message || error.message;
+          const isAuthFailure = status === 401 || (typeof sapErrorMsg === 'string' && (
+            sapErrorMsg.toLowerCase().includes('saml') ||
+            sapErrorMsg.toLowerCase().includes('sld') ||
+            sapErrorMsg.toLowerCase().includes('password') ||
+            sapErrorMsg.toLowerCase().includes('user') ||
+            sapErrorMsg.toLowerCase().includes('credential')
+          ));
+
+          if (isAuthFailure) {
+            // If auth or SSO failure, immediately try next candidate user
             break;
           }
           if (error.response?.status === 502 && i < retries - 1) {
@@ -383,7 +399,7 @@ apiRouter.post('/login', async (req, res) => {
 apiRouter.post('/sap/test-connection', async (req, res) => {
   const { companyDB, user, password, url } = req.body;
   const targetUrl = (url || config.sap.baseUrl).replace(/\/$/, '');
-  const targetCompany = companyDB || config.sap.defaultCompany;
+  const targetCompany = normalizeCompany(companyDB || config.sap.defaultCompany);
   const targetUser = user || config.sap.systemUser;
   const targetPassword = password || config.sap.systemPassword;
 
@@ -506,8 +522,9 @@ apiRouter.post('/sap/Attachments2', upload.array('files'), async (req, res) => {
 
 // Proxy middleware for general SAP requests
 apiRouter.all('/sap/*', async (req, res) => {
-  const requestedCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
-  const cookieCompany = req.cookies['B1COMPANYDB'];
+  const rawRequestedCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const requestedCompany = normalizeCompany(rawRequestedCompany);
+  const cookieCompany = req.cookies['B1COMPANYDB'] ? normalizeCompany(req.cookies['B1COMPANYDB']) : undefined;
   
   // If the request specifies a different company than the existing cookie session, force getting a session for requestedCompany
   const isCompanyMismatch = Boolean(cookieCompany && requestedCompany && cookieCompany !== requestedCompany);

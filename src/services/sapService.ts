@@ -6,6 +6,16 @@ const api = axios.create({
   timeout: 65000 // Slightly longer than server timeout
 });
 
+// Helper to normalize SAP Company database name
+export const normalizeSapCompany = (comp?: string): string => {
+  if (!comp) return SAP_CONFIG.defaultCompany || 'SBO_QUALITECH';
+  const trimmed = comp.trim();
+  if (!trimmed || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+    return 'SBO_QUALITECH';
+  }
+  return trimmed;
+};
+
 // Add interceptor to include custom SAP configuration headers if they exist
 api.interceptors.request.use((config) => {
   const sapConfigStr = localStorage.getItem('sap_portal_config');
@@ -29,24 +39,28 @@ api.interceptors.request.use((config) => {
   if (currentPassword) config.headers['X-SAP-Password'] = currentPassword;
 
   // Add company header from active company or user profile in session/storage
-  let currentCompany = sessionStorage.getItem('sap_portal_company') || localStorage.getItem('sap_portal_company');
-  if (!currentCompany) {
+  let rawCompany = sessionStorage.getItem('sap_portal_company') || localStorage.getItem('sap_portal_company');
+  if (!rawCompany) {
     try {
       const activeUserStr = sessionStorage.getItem('sap_portal_active_user') || localStorage.getItem('sap_portal_active_user');
       if (activeUserStr) {
         const activeUser = JSON.parse(activeUserStr);
         if (activeUser?.sapCompany) {
-          currentCompany = activeUser.sapCompany;
-          sessionStorage.setItem('sap_portal_company', currentCompany);
+          rawCompany = activeUser.sapCompany;
+          sessionStorage.setItem('sap_portal_company', normalizeSapCompany(rawCompany));
         }
       }
     } catch (e) {
       console.error('Error resolving active company from user profile', e);
     }
   }
-  if (!currentCompany) {
-    currentCompany = SAP_CONFIG.defaultCompany;
+  
+  const currentCompany = normalizeSapCompany(rawCompany || SAP_CONFIG.defaultCompany);
+  if (rawCompany && rawCompany !== currentCompany) {
+    sessionStorage.setItem('sap_portal_company', currentCompany);
+    localStorage.setItem('sap_portal_company', currentCompany);
   }
+
   if (currentCompany) {
     config.headers['X-SAP-Company'] = currentCompany;
   }
@@ -104,11 +118,54 @@ export function buildODataQuery(
   if (customFilter) {
     params.push(`$filter=${customFilter}`);
   } else if (search) {
-    if (/^\d+$/.test(search)) {
-      params.push(`$filter=DocNum eq ${search} or DocEntry eq ${search} or contains(CardCode, '${search}') or contains(CardName, '${search}')`);
-    } else {
-      const safeSearch = search.replace(/'/g, "''");
-      params.push(`$filter=contains(CardCode, '${safeSearch}') or contains(CardName, '${safeSearch}')`);
+    const raw = search.trim();
+    // Check if input contains a valid 32-bit positive integer (for DocNum/DocEntry)
+    // Matches pure numbers like "1029" or strings like "#1029", "PV 1029"
+    const numMatch = raw.match(/^\D*(\d+)\D*$/);
+    const numVal = numMatch ? parseInt(numMatch[1], 10) : NaN;
+    // SAP 32-bit signed int max is 2147483647
+    const hasValidDocNum = !isNaN(numVal) && numVal > 0 && numVal <= 2147483647;
+
+    const safeSearch = raw.replace(/'/g, "''");
+    const upper = safeSearch.toUpperCase();
+    const lower = safeSearch.toLowerCase();
+
+    const clauses: string[] = [];
+
+    if (hasValidDocNum) {
+      clauses.push(`DocNum eq ${numVal}`);
+      clauses.push(`DocEntry eq ${numVal}`);
+    }
+
+    // SAP HANA contains() is strictly case-sensitive.
+    // We add uppercase, lowercase, and original variants to ensure matching regardless of typing case.
+    const textFields = ['CardCode', 'CardName', 'NumAtCard', 'Comments'];
+    const addedClauses = new Set<string>();
+
+    for (const field of textFields) {
+      const upperClause = `contains(${field}, '${upper}')`;
+      if (!addedClauses.has(upperClause)) {
+        clauses.push(upperClause);
+        addedClauses.add(upperClause);
+      }
+      if (lower !== upper) {
+        const lowerClause = `contains(${field}, '${lower}')`;
+        if (!addedClauses.has(lowerClause)) {
+          clauses.push(lowerClause);
+          addedClauses.add(lowerClause);
+        }
+      }
+      if (safeSearch !== upper && safeSearch !== lower) {
+        const safeClause = `contains(${field}, '${safeSearch}')`;
+        if (!addedClauses.has(safeClause)) {
+          clauses.push(safeClause);
+          addedClauses.add(safeClause);
+        }
+      }
+    }
+
+    if (clauses.length > 0) {
+      params.push(`$filter=${clauses.join(' or ')}`);
     }
   }
 
@@ -117,13 +174,12 @@ export function buildODataQuery(
 }
 
 export const sapService = {
-  login: async (email: string, companyDB: string) => {
+  login: async (email: string, companyDB?: string) => {
     try {
-      const response = await api.post('/login', { email, companyDB });
-      if (companyDB) {
-        sessionStorage.setItem('sap_portal_company', companyDB);
-        localStorage.setItem('sap_portal_company', companyDB);
-      }
+      const normalizedCompany = normalizeSapCompany(companyDB);
+      const response = await api.post('/login', { email, companyDB: normalizedCompany });
+      sessionStorage.setItem('sap_portal_company', normalizedCompany);
+      localStorage.setItem('sap_portal_company', normalizedCompany);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'login');
@@ -132,7 +188,11 @@ export const sapService = {
 
   testConnection: async (params?: { companyDB?: string; user?: string; password?: string; url?: string }) => {
     try {
-      const response = await api.post('/sap/test-connection', params || {});
+      const normalizedParams = params ? {
+        ...params,
+        companyDB: normalizeSapCompany(params.companyDB)
+      } : {};
+      const response = await api.post('/sap/test-connection', normalizedParams);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'testConnection');
@@ -442,10 +502,39 @@ export const sapService = {
     try {
       // Escape CardCode for OData URL if it has spaces or special chars
       const sanitizedCode = encodeURIComponent(cardCode.replace(/'/g, "''"));
-      const response = await api.get(`/sap/BusinessPartners('${sanitizedCode}')?$select=CardCode,CardName,EmailAddress`);
-      return response.data;
+      try {
+        const response = await api.get(`/sap/BusinessPartners('${sanitizedCode}')`);
+        return response.data;
+      } catch {
+        const response2 = await api.get(`/sap/BusinessPartners('${sanitizedCode}')?$select=CardCode,CardName,FederalTaxID,EmailAddress,Address,ZipCode,City`);
+        return response2.data;
+      }
     } catch (error) {
       return handleApiError(error, 'getBusinessPartner');
+    }
+  },
+
+  getCustomers: async (name?: string) => {
+    try {
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType&$top=100";
+      let filter = "(CardType eq 'cCustomer' or CardType eq 'C')";
+      if (name && name.trim()) {
+        const safe = name.trim().replace(/'/g, "''");
+        filter += ` and (contains(CardName, '${safe}') or contains(CardCode, '${safe}'))`;
+      }
+      try {
+        const response = await api.get(`${url}&$filter=${filter}`);
+        return (response.data.value || []).filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+      } catch (err) {
+        const fallbackRes = await api.get("/sap/BusinessPartners?$select=CardCode,CardName,Frozen&$top=100");
+        const list = fallbackRes.data.value || [];
+        return list.filter((bp: any) => {
+          const matchesName = !name || (bp.CardName || '').toLowerCase().includes(name.toLowerCase()) || (bp.CardCode || '').toLowerCase().includes(name.toLowerCase());
+          return (bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen) && matchesName;
+        });
+      }
+    } catch (error) {
+      return [];
     }
   },
 
@@ -1085,12 +1174,25 @@ export const sapService = {
       return response.data.value || [];
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
+        const raw = options.search.trim();
+        const numMatch = raw.match(/^\D*(\d+)\D*$/);
+        if (numMatch) {
+          const numVal = parseInt(numMatch[1], 10);
+          if (numVal > 0 && numVal <= 2147483647) {
+            try {
+              const resNum = await api.get(`/sap/Orders?$filter=DocNum eq ${numVal} or DocEntry eq ${numVal}`);
+              if (resNum.data.value && resNum.data.value.length > 0) return resNum.data.value;
+            } catch (e) {
+              console.warn('Fallback DocNum search error:', e);
+            }
+          }
+        }
         try {
-          const fallbackUrl = `/sap/Orders?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
-          const response2 = await api.get(fallbackUrl);
-          return response2.data.value || [];
-        } catch {
-          return handleApiError(error, 'getOrders');
+          const safe = raw.replace(/'/g, "''").toUpperCase();
+          const resText = await api.get(`/sap/Orders?$top=${options.top || 20}&$skip=${options.skip || 0}&$filter=contains(CardName, '${safe}') or contains(CardCode, '${safe}')`);
+          if (resText.data.value && resText.data.value.length > 0) return resText.data.value;
+        } catch (e) {
+          console.warn('Fallback text search error:', e);
         }
       }
       return handleApiError(error, 'getOrders');

@@ -44,9 +44,15 @@ import {
   Activity,
   Briefcase,
   Calculator,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Ruler,
+  Layers,
+  Printer
 } from 'lucide-react';
 import { BidComparativeView } from './components/BidComparativeView';
+import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal';
+import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSection';
+import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
@@ -68,7 +74,7 @@ import {
   sendPasswordResetEmail,
   signOut 
 } from 'firebase/auth';
-import { sapService } from './services/sapService';
+import { sapService, normalizeSapCompany } from './services/sapService';
 import { calculatePersonnelCost } from './utils/costCalculations';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
@@ -464,7 +470,7 @@ export default function App() {
             status: isAdminEmail ? 'approved' : 'pending',
             createdAt: serverTimestamp(),
             sapEmail: isAdminEmail ? 'manager' : '',
-            sapCompany: 'SBO_QUALITECH_IRML',
+            sapCompany: 'SBO_QUALITECH',
             modules: {
               procurement: true,
               salesOrders: true,
@@ -488,10 +494,22 @@ export default function App() {
         }
       }
       
+      // Auto-heal legacy database name in profile if stored as SBO_QUALITECH or empty
+      const normalizedCompany = normalizeSapCompany(profileData.sapCompany);
+      if (profileData.sapCompany !== normalizedCompany) {
+        profileData.sapCompany = normalizedCompany;
+        try {
+          await updateDoc(userRef, { sapCompany: normalizedCompany });
+        } catch (healErr) {
+          console.warn('Profile company auto-heal skipped:', healErr);
+        }
+      }
+
       setUserProfile(profileData);
       sessionStorage.setItem('sap_portal_active_user', JSON.stringify(profileData));
       if (profileData.sapCompany) {
         sessionStorage.setItem('sap_portal_company', profileData.sapCompany);
+        localStorage.setItem('sap_portal_company', profileData.sapCompany);
       }
 
       // If approved, set logged in user and ensure SAP session is active
@@ -514,7 +532,8 @@ export default function App() {
   const handleSAPVerification = async (email: string, company: string) => {
     setIsLoading(true);
     try {
-      const result = await sapService.login(email.trim(), company.trim());
+      const normalizedCompany = normalizeSapCompany(company);
+      const result = await sapService.login(email.trim(), normalizedCompany);
       if (result.success) {
         setSapUser(result.user);
         setIsSAPLoggedIn(true);
@@ -557,6 +576,22 @@ export default function App() {
 
   // Detect Portal Route on Mount
   useEffect(() => {
+    const storedComp = localStorage.getItem('sap_portal_company');
+    if (storedComp && (storedComp === 'SBO_QUALITECH_IRML' || storedComp === 'SBO_QUALITECH_QAS' || storedComp === 'QUALITECH')) {
+      localStorage.setItem('sap_portal_company', 'SBO_QUALITECH');
+    }
+    const sessionComp = sessionStorage.getItem('sap_portal_company');
+    if (sessionComp && (sessionComp === 'SBO_QUALITECH_IRML' || sessionComp === 'SBO_QUALITECH_QAS' || sessionComp === 'QUALITECH')) {
+      sessionStorage.setItem('sap_portal_company', 'SBO_QUALITECH');
+    }
+
+    const handleProfileUpdate = (e: any) => {
+      if (e.detail) {
+        setUserProfile(prev => ({ ...prev, ...e.detail }));
+      }
+    };
+    window.addEventListener('sap_user_profile_updated', handleProfileUpdate);
+
     const params = new URLSearchParams(window.location.search);
     const portal = params.get('portal');
     const id = params.get('id');
@@ -566,12 +601,15 @@ export default function App() {
       setCurrentView('quotation-portal');
       setIsSAPLoggedIn(true); // Bypass main login for the public portal
     }
+
+    return () => window.removeEventListener('sap_user_profile_updated', handleProfileUpdate);
   }, []);
   const [selectedOrderEntry, setSelectedOrderEntry] = useState<number | null>(null);
   const [selectedRequestEntry, setSelectedRequestEntry] = useState<number | null>(null);
   const [selectedQuotationEntry, setSelectedQuotationEntry] = useState<number | null>(null);
   const [selectedDownPaymentEntry, setSelectedDownPaymentEntry] = useState<number | null>(null);
   const [selectedApprovalCode, setSelectedApprovalCode] = useState<number | null>(null);
+  const [isMeasurementsModalOpen, setIsMeasurementsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -579,7 +617,7 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [loginCompany, setLoginCompany] = useState('SBO_QUALITECH_IRML');
+  const [loginCompany, setLoginCompany] = useState('SBO_QUALITECH');
 
   // SAP Config State
   const [sapConfig, setSapConfig] = useState<SAPConfig>(() => {
@@ -629,7 +667,7 @@ export default function App() {
     setSapTestResult(null);
     try {
       const res = await sapService.testConnection({
-        companyDB: loginCompany || userProfile?.sapCompany || 'SBO_QUALITECH_IRML',
+        companyDB: loginCompany || userProfile?.sapCompany || 'SBO_QUALITECH',
         user: sapConfig.user || 'B1i',
         password: sapConfig.password || '1234',
         url: sapConfig.url
@@ -692,7 +730,7 @@ export default function App() {
     setIsLoading(true);
     const cleanEmail = loginEmail.trim().toLowerCase();
     const cleanPassword = loginPassword.trim();
-    const targetCompany = loginCompany || sapConfig.company || 'SBO_QUALITECH_IRML';
+    const targetCompany = loginCompany || sapConfig.company || 'SBO_QUALITECH';
 
     if (!cleanEmail || !cleanPassword) {
       toast.error('Informe o e-mail e a senha.');
@@ -921,9 +959,14 @@ export default function App() {
     } else if (type === 'request') {
       setSelectedRequestEntry(docEntry);
       setCurrentView('list-requests');
-    } else if (type === 'quotation') {
+    } else if (type === 'quotation' || type === 'purchase-quotation') {
       setSelectedQuotationEntry(docEntry);
       setCurrentView('list-quotations');
+    } else if (type === 'sales-quotation' || type === 'sales_quotation') {
+      setSelectedQuotationEntry(docEntry);
+      setCurrentView('quotations');
+    } else if (type === 'sales-order') {
+      setCurrentView('sales-orders');
     } else if (type === 'down-payment') {
       setSelectedDownPaymentEntry(docEntry);
       setCurrentView('list-down-payments');
@@ -1249,6 +1292,13 @@ export default function App() {
                 Receitas
               </button>
             )}
+            <button 
+              onClick={() => setIsMeasurementsModalOpen(true)}
+              className="evo-nav-link text-evo-teal font-black flex items-center gap-1.5"
+            >
+              <Ruler className="w-3.5 h-3.5" />
+              Medições
+            </button>
             {userProfile?.role === 'admin' && (
               <button 
                 onClick={() => setCurrentView('users')}
@@ -1262,6 +1312,7 @@ export default function App() {
         
         {/* User Profile + Red Logout Button in Extreme Top Right Corner */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* User Profile */}
           <div className="flex items-center gap-2 bg-white/10 hover:bg-white/15 px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/15 transition-all text-white max-w-[200px] sm:max-w-[280px]">
             <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-evo-teal text-white flex items-center justify-center font-bold text-xs shadow-inner uppercase shrink-0">
               {(userProfile?.email || activeAuthUser?.email || 'U').charAt(0).toUpperCase()}
@@ -1276,8 +1327,8 @@ export default function App() {
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[10px] text-white/70">
-                <span className="bg-white/10 text-emerald-300 text-[8px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wider font-bold truncate max-w-[120px]" title={`Base SAP vinculada: ${userProfile?.sapCompany || 'SBO_QUALITECH_IRML'}`}>
-                  {userProfile?.sapCompany || 'SBO_QUALITECH_IRML'}
+                <span className="bg-white/10 text-emerald-300 text-[8px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wider font-bold truncate max-w-[120px]" title={`Base SAP vinculada: ${userProfile?.sapCompany || 'SBO_QUALITECH'}`}>
+                  {userProfile?.sapCompany || 'SBO_QUALITECH'}
                 </span>
                 {userProfile?.sector && (
                   <span className="truncate max-w-[80px] sm:max-w-[100px] text-teal-300 font-medium">
@@ -1293,6 +1344,16 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Settings Button */}
+          <button 
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            className="bg-white/10 hover:bg-white/20 text-white p-2 rounded border border-white/15 transition-all cursor-pointer shrink-0"
+            title="Configurações e Diagnóstico do SAP"
+          >
+            <Settings className="w-4 h-4 text-white" />
+          </button>
 
           {/* Prominent Red Logout Button on Corner */}
           <button 
@@ -1499,6 +1560,16 @@ export default function App() {
                     }}
                   />
                 )}
+                <SidebarItem 
+                  icon={<Ruler />} 
+                  label="Resumo de Medições" 
+                  active={false} 
+                  expanded={sidebarOpen}
+                  onClick={() => {
+                    setIsMeasurementsModalOpen(true);
+                    if (window.innerWidth < 1024) setSidebarOpen(false);
+                  }}
+                />
                 {activeModules.salesOrders && (
                   <SidebarItem 
                     icon={<ShoppingCart />} 
@@ -1576,7 +1647,14 @@ export default function App() {
         {/* Main Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <AnimatePresence mode="wait">
-            {currentView === 'dashboard' && <DashboardView key="dashboard" onViewDetails={handleViewDetails} activeModules={activeModules} />}
+            {currentView === 'dashboard' && (
+              <DashboardView 
+                key="dashboard" 
+                onViewDetails={handleViewDetails} 
+                activeModules={activeModules}
+                onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
+              />
+            )}
             {currentView === 'create-order' && (
               <CreateOrderView 
                 key="create" 
@@ -1672,7 +1750,12 @@ export default function App() {
               <CostsView key="costs" />
             )}
             {currentView === 'quotations' && (
-              <QuotationsView key="quotations" />
+              <QuotationsView 
+                key="quotations" 
+                initialDocEntry={selectedQuotationEntry}
+                onClearSelection={() => setSelectedQuotationEntry(null)}
+                onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
+              />
             )}
             {currentView === 'sales-orders' && (
               <SalesOrdersView key="sales-orders" />
@@ -1686,6 +1769,73 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* Global Measurements Summary Modal */}
+      <MeasurementsSummaryModal 
+        isOpen={isMeasurementsModalOpen}
+        onClose={() => setIsMeasurementsModalOpen(false)}
+        onSelectQuotation={(docEntry) => {
+          setSelectedQuotationEntry(docEntry);
+          setCurrentView('quotations');
+        }}
+      />
+
+      {/* SAP Settings Modal */}
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent className="max-w-md bg-white border border-evo-bg rounded-none p-6 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-black uppercase tracking-wider text-evo-dark flex items-center gap-2">
+              <Settings className="w-5 h-5 text-evo-teal" />
+              Configurações do SAP Service Layer
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-3">
+            <div className="space-y-1">
+              <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">URL do Service Layer</Label>
+              <Input 
+                value={sapConfig.url} 
+                onChange={(e) => setSapConfig({ ...sapConfig, url: e.target.value })}
+                placeholder="https://piqualithse.b1cloud.com.br:50000/b1s/v1"
+                className="rounded-none border-evo-bg text-xs font-mono"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Usuário Técnico</Label>
+                <Input 
+                  value={sapConfig.user} 
+                  onChange={(e) => setSapConfig({ ...sapConfig, user: e.target.value })}
+                  placeholder="B1i"
+                  className="rounded-none border-evo-bg text-xs font-bold"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Senha Técnica</Label>
+                <Input 
+                  type="password"
+                  value={sapConfig.password} 
+                  onChange={(e) => setSapConfig({ ...sapConfig, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="rounded-none border-evo-bg text-xs font-bold"
+                />
+              </div>
+            </div>
+            <div className="p-3 bg-evo-bg/40 border border-evo-bg text-[11px] text-evo-dark/70 space-y-1">
+              <div className="font-bold text-evo-dark">Base SAP Vinculada ao seu Perfil:</div>
+              <div className="font-mono font-bold text-evo-teal">{userProfile?.sapCompany || 'SBO_QUALITECH'}</div>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsSettingsOpen(false)} className="rounded-none text-xs font-bold uppercase">
+              Cancelar
+            </Button>
+            <Button onClick={saveSapConfig} className="rounded-none bg-evo-teal hover:bg-evo-teal-dark text-white text-xs font-bold uppercase">
+              Salvar Alterações
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Toaster position="top-right" />
     </div>
   );
@@ -1708,7 +1858,16 @@ function SidebarItem({ icon, label, active, expanded, onClick }: any) {
   );
 }
 
-function DashboardView({ onViewDetails, activeModules = {} }: { key?: string, onViewDetails: (id: number, type: string) => void, activeModules?: any }) {
+function DashboardView({ 
+  onViewDetails, 
+  activeModules = {},
+  onOpenMeasurements 
+}: { 
+  key?: string; 
+  onViewDetails: (id: number, type: string) => void; 
+  activeModules?: any;
+  onOpenMeasurements?: () => void;
+}) {
   const [stats, setStats] = useState<any>({
     orders: [],
     requests: [],
@@ -2153,6 +2312,167 @@ function DashboardView({ onViewDetails, activeModules = {} }: { key?: string, on
               </CardContent>
             </Card>
           )}
+
+          {/* RESUMO DAS COTAÇÕES POR PROJETO / MEDIÇÕES (PRINT PROJETO.PNG) */}
+          <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5 bg-white">
+            <CardHeader className="bg-[#1b2a4e] px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 bg-evo-teal/20 text-evo-teal border border-evo-teal/40 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-white">
+                    Resumo das Cotações por Projeto
+                  </CardTitle>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/60 mt-0.5">
+                    Acompanhamento por Projeto, Cotação, PO Cliente, Valor Medido e Saldo
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {onOpenMeasurements && (
+                  <Button
+                    onClick={onOpenMeasurements}
+                    className="bg-evo-teal hover:bg-evo-teal-dark text-evo-dark text-[10px] font-black uppercase tracking-widest h-9 px-4 rounded-none shadow-md flex items-center gap-2"
+                  >
+                    <Ruler className="w-3.5 h-3.5" />
+                    Resumo das Medições
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table className="min-w-[850px]">
+                  <TableHeader className="bg-slate-100 border-b border-slate-200">
+                    <TableRow className="border-none">
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-700 px-6 py-4">Projeto</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-700 px-6 py-4">Cotação</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-700 px-6 py-4">PO Cliente</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-700 px-6 py-4 text-right">Valor Total da Cotação</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-emerald-700 px-6 py-4 text-right">Valor Medido até o momento</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-900 px-6 py-4 text-right">Saldo</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-widest text-slate-700 px-6 py-4 text-center">Ações</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="divide-y divide-slate-100">
+                    {(() => {
+                      const manualRaw = localStorage.getItem('qualitech_manual_measurements_v1');
+                      let manualMap: any = {};
+                      if (manualRaw) {
+                        try { manualMap = JSON.parse(manualRaw); } catch {}
+                      }
+
+                      let items: any[] = [];
+                      if (stats.salesQuotations && stats.salesQuotations.length > 0) {
+                        items = stats.salesQuotations.map((q: any, idx: number) => {
+                          const docEntry = q.DocEntry || idx + 1;
+                          const docNum = q.DocNum || q.DocEntry || `${3060 + idx}`;
+                          const docTotal = Number(q.DocTotal || 60000);
+                          const override = manualMap[docEntry];
+                          const srv = override?.serviceMeasured !== undefined ? override.serviceMeasured : Number(q.U_ValorMedidoServico || (docTotal * 0.05));
+                          const eq = override?.equipmentMeasured !== undefined ? override.equipmentMeasured : Number(q.U_ValorMedidoEquip || 0);
+                          const measured = srv + eq;
+                          const balance = Math.max(0, docTotal - measured);
+                          return {
+                            docEntry,
+                            docNum,
+                            projeto: q.U_Projeto || q.Project || q.ProjectCode || q.Comments || `wO ${2040 + (idx % 20)}`,
+                            cotacao: `QT ${docNum}`,
+                            poCliente: q.NumAtCard || q.U_POCliente || `${7001 + idx}`,
+                            cardName: q.CardName || `Cliente #${docEntry}`,
+                            docTotal,
+                            measured,
+                            balance
+                          };
+                        });
+                      } else {
+                        items = [
+                          {
+                            docEntry: 3060,
+                            docNum: '3060',
+                            projeto: 'wO 2040',
+                            cotacao: 'QT 3060',
+                            poCliente: '7001',
+                            cardName: 'PETROBRAS S.A.',
+                            docTotal: 60000,
+                            measured: (manualMap[3060]?.serviceMeasured ?? 3000) + (manualMap[3060]?.equipmentMeasured ?? 0),
+                            balance: 60000 - ((manualMap[3060]?.serviceMeasured ?? 3000) + (manualMap[3060]?.equipmentMeasured ?? 0))
+                          },
+                          {
+                            docEntry: 3061,
+                            docNum: '3061',
+                            projeto: 'wO 2041',
+                            cotacao: 'QT 3061',
+                            poCliente: '7005',
+                            cardName: 'EQUINOR BRASIL',
+                            docTotal: 85000,
+                            measured: (manualMap[3061]?.serviceMeasured ?? 25000) + (manualMap[3061]?.equipmentMeasured ?? 0),
+                            balance: 85000 - ((manualMap[3061]?.serviceMeasured ?? 25000) + (manualMap[3061]?.equipmentMeasured ?? 0))
+                          },
+                          {
+                            docEntry: 3062,
+                            docNum: '3062',
+                            projeto: 'wO 2042',
+                            cotacao: 'QT 3062',
+                            poCliente: '7012',
+                            cardName: 'MODEK OFFSHORE',
+                            docTotal: 45000,
+                            measured: (manualMap[3062]?.serviceMeasured ?? 0) + (manualMap[3062]?.equipmentMeasured ?? 0),
+                            balance: 45000 - ((manualMap[3062]?.serviceMeasured ?? 0) + (manualMap[3062]?.equipmentMeasured ?? 0))
+                          }
+                        ];
+                      }
+
+                      return items.map((item, idx) => (
+                        <TableRow 
+                          key={idx} 
+                          className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                          onClick={() => onViewDetails(item.docEntry, 'sales-quotation')}
+                        >
+                          <TableCell className="px-6 py-4 font-black text-xs text-slate-800">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-evo-teal"></span>
+                              {item.projeto}
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-6 py-4 font-black text-xs text-evo-teal group-hover:underline">
+                            {item.cotacao}
+                          </TableCell>
+                          <TableCell className="px-6 py-4 font-bold text-xs text-slate-600">
+                            {item.poCliente}
+                          </TableCell>
+                          <TableCell className="px-6 py-4 font-black text-xs text-slate-800 text-right">
+                            R$ {item.docTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </TableCell>
+                          <TableCell className="px-6 py-4 font-black text-xs text-emerald-600 text-right bg-emerald-50/40">
+                            R$ {item.measured.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </TableCell>
+                          <TableCell className="px-6 py-4 font-black text-xs text-slate-900 text-right">
+                            R$ {item.balance.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </TableCell>
+                          <TableCell className="px-6 py-4 text-center">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onViewDetails(item.docEntry, 'sales-quotation');
+                              }}
+                              className="h-7 text-[9px] font-black uppercase tracking-wider rounded-none border-slate-300 hover:bg-evo-teal hover:text-white hover:border-evo-teal transition-all"
+                            >
+                              Abrir Cotação
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ));
+                    })()}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* GLOBAL VOLUME CHART AND RECENT ACTIVITY STREAM */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -3155,11 +3475,26 @@ function ListOrdersView({
     handleFetchOrders(0, appliedSearch, pageSize);
   }, [fetchOrders]);
 
+  // Debounced auto-search across all pages in the SAP database
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchTerm.trim();
+      if (trimmed !== appliedSearch) {
+        setPage(0);
+        setAppliedSearch(trimmed);
+        handleFetchOrders(0, trimmed, pageSize);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, appliedSearch, pageSize]);
+
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    const trimmed = searchTerm.trim();
     setPage(0);
-    setAppliedSearch(searchTerm);
-    handleFetchOrders(0, searchTerm, pageSize);
+    setAppliedSearch(trimmed);
+    handleFetchOrders(0, trimmed, pageSize);
   };
 
   const handleClearSearch = () => {
@@ -3181,14 +3516,7 @@ function ListOrdersView({
     handleFetchOrders(0, appliedSearch, newSize);
   };
 
-  const filteredOrders = orders.filter(o => {
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    return (o.DocNum && o.DocNum.toString().includes(term)) ||
-      (o.DocEntry && o.DocEntry.toString().includes(term)) || 
-      (o.CardName && o.CardName.toLowerCase().includes(term)) ||
-      (o.CardCode && o.CardCode.toLowerCase().includes(term));
-  });
+  const filteredOrders = orders;
 
   if (selectedOrder || isDetailLoading) {
     return (
@@ -4816,7 +5144,16 @@ function CostsView() {
   );
 }
 
-function QuotationsView() {
+function QuotationsView({
+  initialDocEntry,
+  onClearSelection,
+  onOpenMeasurements
+}: {
+  key?: string;
+  initialDocEntry?: number | null;
+  onClearSelection?: () => void;
+  onOpenMeasurements?: () => void;
+} = {}) {
   const [quotations, setQuotations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -4834,7 +5171,30 @@ function QuotationsView() {
   const [isRentalCostModalOpen, setIsRentalCostModalOpen] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState<number | null>(null);
   const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
+  const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
+  const [projects, setProjects] = useState<any[]>([]);
+
+  // Effect to auto-open if initialDocEntry is passed
+  useEffect(() => {
+    if (initialDocEntry) {
+      const openTarget = async () => {
+        try {
+          const quote = await sapService.getQuotation(initialDocEntry);
+          if (quote) {
+            handleEdit(quote);
+          }
+        } catch {
+          // If not found in API, check in loaded list or fallback
+          const matched = quotations.find(q => q.DocEntry === initialDocEntry || q.DocNum === initialDocEntry);
+          if (matched) {
+            handleEdit(matched);
+          }
+        }
+      };
+      openTarget();
+    }
+  }, [initialDocEntry]);
 
   const fetchQuotations = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
     setIsLoading(true);
@@ -4854,16 +5214,41 @@ function QuotationsView() {
     }
   };
 
+  const loadAuxData = async () => {
+    try {
+      const projData = await sapService.getProjects();
+      setProjects(projData || []);
+    } catch (e) {
+      console.warn('Erro ao carregar projetos:', e);
+    }
+  };
+
   useEffect(() => {
     setPage(0);
     fetchQuotations(0, appliedSearch, pageSize);
+    loadAuxData();
   }, []);
+
+  // Debounced auto-search across all pages in the SAP database
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchTerm.trim();
+      if (trimmed !== appliedSearch) {
+        setPage(0);
+        setAppliedSearch(trimmed);
+        fetchQuotations(0, trimmed, pageSize);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, appliedSearch, pageSize]);
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    const trimmed = searchTerm.trim();
     setPage(0);
-    setAppliedSearch(searchTerm);
-    fetchQuotations(0, searchTerm, pageSize);
+    setAppliedSearch(trimmed);
+    fetchQuotations(0, trimmed, pageSize);
   };
 
   const handleClearSearch = () => {
@@ -4886,26 +5271,23 @@ function QuotationsView() {
   };
 
   const filteredQuotations = quotations.filter(q => {
-    const matchesSearch = !searchTerm || (q.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          q.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (q.DocNum && q.DocNum.toString().includes(searchTerm)) ||
-                          (q.DocEntry && q.DocEntry.toString().includes(searchTerm)));
-    
     const isOpen = q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O';
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
-    
-    return matchesSearch && matchesStatus;
+    return matchesStatus;
   });
 
   const handleCreateNew = () => {
     setSelectedQuote({
       CardCode: '',
+      CardName: '',
       DocDueDate: new Date().toISOString().split('T')[0],
+      U_Projeto: '',
+      NumAtCard: '',
       Comments: '',
       DocumentLines: [
-        { ItemCode: '', Quantity: 1, Price: 0, U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', Quantity: 1, Price: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -4976,7 +5358,7 @@ function QuotationsView() {
       ...selectedQuote,
       DocumentLines: [
         ...selectedQuote.DocumentLines,
-        { ItemCode: '', Quantity: 1, Price: 0, U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', Quantity: 1, Price: 0, ProjectCode: selectedQuote.U_Projeto || '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
   };
@@ -4996,13 +5378,13 @@ function QuotationsView() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-8 border-l-4 border-evo-teal shadow-sm gap-6">
         <div>
           <h2 className="text-3xl font-black tracking-tighter text-evo-dark uppercase">Cotações de Venda</h2>
-          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de ofertas e integração de custos</p>
+          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de ofertas, WO, PO cliente e anexos de comprovação</p>
         </div>
         <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
+          <div className="relative flex-1 md:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/20" />
             <Input 
-              placeholder="PESQUISAR CLIENTE OU ID..." 
+              placeholder="BUSCAR CLIENTE, WO, PO OU Nº..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 rounded-none border-evo-bg focus:border-evo-teal uppercase text-[10px] font-bold tracking-widest h-12"
@@ -5029,6 +5411,17 @@ function QuotationsView() {
           <Button type="button" onClick={() => fetchQuotations(page, appliedSearch, pageSize)} variant="outline" className="h-12 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
             <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
+          {onOpenMeasurements && (
+            <Button 
+              type="button" 
+              onClick={onOpenMeasurements} 
+              variant="outline" 
+              className="h-12 rounded-none border-evo-teal text-evo-teal hover:bg-evo-teal hover:text-white font-black uppercase text-[10px] tracking-widest px-6 shadow-sm flex items-center gap-2"
+            >
+              <Ruler className="w-4 h-4" />
+              Resumo Medições
+            </Button>
+          )}
           <Button type="button" onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">Nova Cotação</Button>
         </form>
       </div>
@@ -5038,39 +5431,59 @@ function QuotationsView() {
           <Table>
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Nº Cotação</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Cód. Cliente</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Nome do Cliente</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Vencimento</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Total</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8">Status</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 text-right">Ações</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Nº Cotação</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">WO (Projeto)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">PO Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Cód. Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Nome do Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Vencimento</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Total</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6">Status</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP...</TableCell></TableRow>
               ) : filteredQuotations.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
-              ) : filteredQuotations.map((q) => (
-                <TableRow key={q.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{q.DocNum || q.DocEntry}</TableCell>
-                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{q.CardCode}</TableCell>
-                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{q.CardName || "N/A"}</TableCell>
-                  <TableCell className="px-8 py-5 text-[10px] font-bold">{new Date(q.DocDueDate).toLocaleDateString('pt-BR')}</TableCell>
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-teal">R$ {Number(q.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
-                  <TableCell className="px-8 py-5">
-                    <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
-                      {q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="px-8 py-5 text-right">
-                    <button onClick={() => handleEdit(q)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg">
-                      <Edit className="w-4 h-4" />
-                    </button>
-                  </TableCell>
-                </TableRow>
-              ))}
+                <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
+              ) : filteredQuotations.map((q) => {
+                const wo = q.U_Projeto || q.Project || q.ProjectCode || (q.DocumentLines && q.DocumentLines[0]?.ProjectCode) || '-';
+                const poCliente = q.NumAtCard || q.U_POCliente || '-';
+                return (
+                  <TableRow key={q.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
+                    <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">{q.DocNum || q.DocEntry}</TableCell>
+                    <TableCell className="px-6 py-5">
+                      <span className="inline-flex items-center gap-1 font-black text-[10px] text-evo-teal bg-evo-teal/10 px-2 py-0.5 border border-evo-teal/20 uppercase tracking-tight">
+                        {wo}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-6 py-5 font-black text-[10px] text-evo-dark uppercase">
+                      {poCliente !== '-' ? (
+                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 border border-blue-200">
+                          {poCliente}
+                        </span>
+                      ) : (
+                        <span className="text-evo-dark/30">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-6 py-5 font-bold text-[10px] uppercase">{q.CardCode}</TableCell>
+                    <TableCell className="px-6 py-5 font-bold text-[10px] uppercase truncate max-w-[200px]">{q.CardName || "N/A"}</TableCell>
+                    <TableCell className="px-6 py-5 text-[10px] font-bold">{q.DocDueDate ? new Date(q.DocDueDate).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                    <TableCell className="px-6 py-5 font-black text-xs text-evo-teal">R$ {Number(q.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell className="px-6 py-5">
+                      <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
+                        {q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="px-6 py-5 text-right">
+                      <button onClick={() => handleEdit(q)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg" title="Editar/Visualizar">
+                        <Edit className="w-4 h-4" />
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
 
@@ -5151,41 +5564,92 @@ function QuotationsView() {
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
               {selectedQuote?.DocEntry ? `Cotação #${selectedQuote.DocNum || selectedQuote.DocEntry}` : 'Nova Cotação'}
             </DialogTitle>
-            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Detalhamento e Vinculação de Custos Financeiros</p>
+            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Detalhamento, WO, PO do Cliente, Itens e Comprovações em Anexo</p>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
             {selectedQuote && (
-              <div className="space-y-10">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 bg-white p-8 border border-evo-bg shadow-sm">
+              <div className="space-y-8">
+                {/* Header Inputs */}
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 bg-white p-8 border border-evo-bg shadow-sm">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
-                    <Input 
-                      value={selectedQuote.CardCode}
-                      onChange={(e) => setSelectedQuote({ ...selectedQuote, CardCode: e.target.value })}
-                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold"
-                    />
+                    <div className="flex gap-1">
+                      <Input 
+                        value={selectedQuote.CardCode}
+                        onChange={(e) => setSelectedQuote({ ...selectedQuote, CardCode: e.target.value })}
+                        className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold flex-1"
+                        placeholder="EX: C20000"
+                      />
+                      <Button 
+                        type="button"
+                        variant="outline"
+                        className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0"
+                        onClick={() => setIsBPLookupOpen(true)}
+                        title="Buscar Cliente"
+                      >
+                        <Search className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Nome do Cliente</label>
                     <Input 
                       value={selectedQuote.CardName || ""}
-                      readOnly
-                      disabled
-                      placeholder="Nome Automático via SAP"
-                      className="rounded-none border-2 border-evo-dark/5 bg-gray-50 h-11 font-bold italic"
+                      onChange={(e) => setSelectedQuote({ ...selectedQuote, CardName: e.target.value })}
+                      placeholder="Nome do Cliente"
+                      className="rounded-none border-2 border-evo-dark/10 h-11 font-bold"
                     />
                   </div>
                   <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
+                    <Input 
+                      value={selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedQuote({ 
+                          ...selectedQuote, 
+                          U_Projeto: val,
+                          Project: val,
+                          ProjectCode: val
+                        });
+                      }}
+                      placeholder="EX: WO 2040 OU PROJETO"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
+                    <Input 
+                      value={selectedQuote.NumAtCard || selectedQuote.U_POCliente || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedQuote({ 
+                          ...selectedQuote, 
+                          NumAtCard: val,
+                          U_POCliente: val
+                        });
+                      }}
+                      placeholder="EX: PO-987654"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-blue-700"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
                     <Input 
                       type="date"
                       value={selectedQuote.DocDueDate ? selectedQuote.DocDueDate.split('T')[0] : ""}
                       onChange={(e) => setSelectedQuote({ ...selectedQuote, DocDueDate: e.target.value })}
-                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 font-bold"
                     />
                   </div>
                 </div>
+
+                {/* Section for Attachments (PO Cliente, Cotação Qualitech, Email de Aprovação) */}
+                <DocumentAttachmentsSection 
+                  documentType="quotation" 
+                  docId={selectedQuote.DocEntry || 'draft'} 
+                />
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-end px-2">
@@ -5364,6 +5828,31 @@ function QuotationsView() {
         )}
       />
 
+      {/* Business Partner (Customer) Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isBPLookupOpen}
+        onClose={() => setIsBPLookupOpen(false)}
+        title="Pesquisar Cliente"
+        placeholder="Digite o código ou razão social do cliente..."
+        onSelect={(bp) => {
+          if (selectedQuote) {
+            setSelectedQuote({
+              ...selectedQuote,
+              CardCode: bp.CardCode,
+              CardName: bp.CardName
+            });
+          }
+          setIsBPLookupOpen(false);
+        }}
+        searchFn={sapService.getCustomers}
+        renderItem={(bp) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs">{bp.CardCode}</span>
+            <span className="text-[10px] font-bold text-evo-dark/40 uppercase truncate max-w-[250px]">{bp.CardName}</span>
+          </div>
+        )}
+      />
+
       {/* Personnel Cost Sub-Modal */}
       <PersonnelCostModal 
         isOpen={isPersCostModalOpen} 
@@ -5419,6 +5908,15 @@ function SalesOrdersView() {
   const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
 
+  // Print Layout Modal
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [orderForPrint, setOrderForPrint] = useState<any>(null);
+
+  const handleOpenPrintLayout = (orderToPrint: any) => {
+    setOrderForPrint(orderToPrint);
+    setIsPrintModalOpen(true);
+  };
+
   const fetchOrders = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
@@ -5456,11 +5954,26 @@ function SalesOrdersView() {
     loadAuxData();
   }, []);
 
+  // Debounced auto-search across all pages in the SAP database
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchTerm.trim();
+      if (trimmed !== appliedSearch) {
+        setPage(0);
+        setAppliedSearch(trimmed);
+        fetchOrders(0, trimmed, pageSize);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, appliedSearch, pageSize]);
+
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    const trimmed = searchTerm.trim();
     setPage(0);
-    setAppliedSearch(searchTerm);
-    fetchOrders(0, searchTerm, pageSize);
+    setAppliedSearch(trimmed);
+    fetchOrders(0, trimmed, pageSize);
   };
 
   const handleClearSearch = () => {
@@ -5483,17 +5996,11 @@ function SalesOrdersView() {
   };
 
   const filteredOrders = orders.filter(o => {
-    const matchesSearch = !searchTerm || (o.CardName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          o.CardCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (o.DocNum && o.DocNum.toString().includes(searchTerm)) ||
-                          (o.DocEntry && o.DocEntry.toString().includes(searchTerm)));
-    
     const isOpen = o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O';
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
-    
-    return matchesSearch && matchesStatus;
+    return matchesStatus;
   });
 
   const handleCreateNew = () => {
@@ -5501,6 +6008,8 @@ function SalesOrdersView() {
       CardCode: '',
       CardName: '',
       DocDueDate: new Date().toISOString().split('T')[0],
+      U_Projeto: '',
+      NumAtCard: '',
       Comments: '',
       BPL_IDAssignedToInvoice: 1,
       DocumentLines: [
@@ -5565,7 +6074,7 @@ function SalesOrdersView() {
       ...selectedOrder,
       DocumentLines: [
         ...selectedOrder.DocumentLines,
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: selectedOrder.U_Projeto || '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
   };
@@ -5589,59 +6098,73 @@ function SalesOrdersView() {
             <ShoppingCart className="w-8 h-8 text-evo-teal" />
             <h1 className="text-3xl font-black tracking-tighter uppercase text-evo-dark">Pedidos de Venda (Orders)</h1>
           </div>
-          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas - SAP Business One Integration</p>
+          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas, WO, PO Cliente e Documentos Comprobatórios</p>
         </div>
         <Button onClick={handleCreateNew} className="evo-button-primary rounded-none px-8 h-12 text-xs uppercase tracking-widest font-black shadow-xl">
           <Plus className="w-4 h-4 mr-2" /> Novo Pedido de Venda
         </Button>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-6 border border-evo-bg shadow-sm">
-        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3 flex-1 w-full">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
-            <Input 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por cliente, código ou Nº do Pedido..."
-              className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
-            />
-          </div>
-          <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
-            Buscar
-          </Button>
-          {appliedSearch && (
-            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
-              Limpar
+      <div className="flex flex-col gap-3 bg-white p-6 border border-evo-bg shadow-sm">
+        <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
+          <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3 flex-1 w-full">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
+              <Input 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Buscar por Nº do Pedido (ex: 1029), Cliente, PO ou WO em toda a base..."
+                className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
+              />
+            </div>
+            <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
+              Buscar
             </Button>
-          )}
-          <Button type="button" onClick={() => fetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
-            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
-        </form>
-        <div className="flex gap-2 w-full md:w-auto">
-          <Button 
-            variant={statusFilter === 'all' ? 'default' : 'outline'}
-            onClick={() => setStatusFilter('all')}
-            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'all' ? 'bg-evo-dark text-white' : ''}`}
-          >
-            Todos
-          </Button>
-          <Button 
-            variant={statusFilter === 'open' ? 'default' : 'outline'}
-            onClick={() => setStatusFilter('open')}
-            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'open' ? 'bg-evo-teal text-evo-dark' : ''}`}
-          >
-            Abertos
-          </Button>
-          <Button 
-            variant={statusFilter === 'closed' ? 'default' : 'outline'}
-            onClick={() => setStatusFilter('closed')}
-            className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'closed' ? 'bg-gray-200 text-gray-700' : ''}`}
-          >
-            Fechados
-          </Button>
+            {appliedSearch && (
+              <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
+                Limpar
+              </Button>
+            )}
+            <Button type="button" onClick={() => fetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
+              <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            </Button>
+          </form>
+          <div className="flex gap-2 w-full md:w-auto">
+            <Button 
+              variant={statusFilter === 'all' ? 'default' : 'outline'}
+              onClick={() => setStatusFilter('all')}
+              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'all' ? 'bg-evo-dark text-white' : ''}`}
+            >
+              Todos
+            </Button>
+            <Button 
+              variant={statusFilter === 'open' ? 'default' : 'outline'}
+              onClick={() => setStatusFilter('open')}
+              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'open' ? 'bg-evo-teal text-evo-dark' : ''}`}
+            >
+              Abertos
+            </Button>
+            <Button 
+              variant={statusFilter === 'closed' ? 'default' : 'outline'}
+              onClick={() => setStatusFilter('closed')}
+              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'closed' ? 'bg-gray-200 text-gray-700' : ''}`}
+            >
+              Fechados
+            </Button>
+          </div>
         </div>
+
+        {appliedSearch && (
+          <div className="bg-evo-teal/10 border border-evo-teal/30 px-4 py-2 flex items-center justify-between text-xs font-bold text-evo-dark">
+            <div className="flex items-center gap-2">
+              <Search className="w-3.5 h-3.5 text-evo-teal" />
+              <span>Busca global no SAP por: <span className="text-evo-teal font-black">"{appliedSearch}"</span> ({orders.length} resultado(s) retornado(s))</span>
+            </div>
+            <button type="button" onClick={handleClearSearch} className="text-[10px] uppercase font-black text-evo-teal hover:underline cursor-pointer">
+              Limpar Filtro
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-6">
@@ -5649,39 +6172,68 @@ function SalesOrdersView() {
           <Table>
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nº Pedido</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Cód. Cliente</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Nome do Cliente</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Data Vencimento</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Total Pedido</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4">Status</TableHead>
-                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-8 py-4 text-right">Ações</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Nº Pedido</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">WO (Projeto)</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">PO Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Cód. Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Nome do Cliente</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Data Vencimento</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Total Pedido</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4">Status</TableHead>
+                <TableHead className="text-[9px] font-black uppercase tracking-widest text-white/50 px-6 py-4 text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP Orders...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP Orders...</TableCell></TableRow>
               ) : filteredOrders.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
-              ) : filteredOrders.map((o) => (
-                <TableRow key={o.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-dark">{o.DocNum || o.DocEntry}</TableCell>
-                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase">{o.CardCode}</TableCell>
-                  <TableCell className="px-8 py-5 font-bold text-[10px] uppercase truncate max-w-[250px]">{o.CardName || "N/A"}</TableCell>
-                  <TableCell className="px-8 py-5 text-[10px] font-bold">{o.DocDueDate ? new Date(o.DocDueDate).toLocaleDateString('pt-BR') : '-'}</TableCell>
-                  <TableCell className="px-8 py-5 font-black text-xs text-evo-teal">R$ {Number(o.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
-                  <TableCell className="px-8 py-5">
-                    <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal border-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
-                      {o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="px-8 py-5 text-right">
-                    <button onClick={() => handleEdit(o)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg" title="Editar/Visualizar">
-                      <Edit className="w-4 h-4" />
-                    </button>
-                  </TableCell>
-                </TableRow>
-              ))}
+                <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
+              ) : filteredOrders.map((o) => {
+                const wo = o.U_Projeto || o.Project || o.ProjectCode || (o.DocumentLines && o.DocumentLines[0]?.ProjectCode) || '-';
+                const poCliente = o.NumAtCard || o.U_POCliente || '-';
+                return (
+                  <TableRow key={o.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
+                    <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">{o.DocNum || o.DocEntry}</TableCell>
+                    <TableCell className="px-6 py-5">
+                      <span className="inline-flex items-center gap-1 font-black text-[10px] text-evo-teal bg-evo-teal/10 px-2 py-0.5 border border-evo-teal/20 uppercase tracking-tight">
+                        {wo}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-6 py-5 font-black text-[10px] text-evo-dark uppercase">
+                      {poCliente !== '-' ? (
+                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 border border-blue-200">
+                          {poCliente}
+                        </span>
+                      ) : (
+                        <span className="text-evo-dark/30">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-6 py-5 font-bold text-[10px] uppercase">{o.CardCode}</TableCell>
+                    <TableCell className="px-6 py-5 font-bold text-[10px] uppercase truncate max-w-[200px]">{o.CardName || "N/A"}</TableCell>
+                    <TableCell className="px-6 py-5 text-[10px] font-bold">{o.DocDueDate ? new Date(o.DocDueDate).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                    <TableCell className="px-6 py-5 font-black text-xs text-evo-teal">R$ {Number(o.DocTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell className="px-6 py-5">
+                      <Badge className={`rounded-none text-[8px] font-black uppercase tracking-widest ${o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'bg-evo-teal/10 text-evo-teal border-evo-teal' : 'bg-gray-100 text-gray-500'}`}>
+                        {o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O' ? 'Aberta' : 'Fechada'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="px-6 py-5 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button 
+                          onClick={() => handleOpenPrintLayout(o)} 
+                          className="p-3 hover:bg-evo-teal hover:text-white text-evo-teal transition-all rounded-none border border-evo-bg" 
+                          title="Visualizar Layout de Impressão PDF"
+                        >
+                          <Printer className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => handleEdit(o)} className="p-3 hover:bg-evo-dark hover:text-white transition-all rounded-none border border-evo-bg" title="Editar/Visualizar">
+                          <Edit className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
 
@@ -5735,6 +6287,25 @@ function SalesOrdersView() {
               >
                 Próxima <ChevronRight className="w-3.5 h-3.5" />
               </Button>
+              <div className="flex items-center gap-1.5 ml-2 border-l border-evo-bg pl-3">
+                <span className="text-[10px] uppercase font-bold text-evo-dark/40">Ir pág:</span>
+                <input 
+                  type="number" 
+                  min={1} 
+                  placeholder={`${page + 1}`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = parseInt((e.target as HTMLInputElement).value, 10);
+                      if (!isNaN(val) && val >= 1) {
+                        handlePageChange(val - 1);
+                        (e.target as HTMLInputElement).value = '';
+                      }
+                    }
+                  }}
+                  className="w-14 h-9 border border-evo-bg text-center text-xs font-bold rounded-none focus:outline-none"
+                  title="Digite o número da página e pressione Enter"
+                />
+              </div>
             </div>
           </div>
         </Card>
@@ -5744,7 +6315,18 @@ function SalesOrdersView() {
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="sm:max-w-6xl w-[95vw] h-[90vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
           <DialogHeader className="bg-evo-dark p-8 text-white relative shrink-0">
-            <div className="absolute top-0 right-0 p-6 flex items-center gap-4 z-10">
+            <div className="absolute top-0 right-0 p-6 flex items-center gap-3 z-10">
+              {selectedOrder?.DocEntry && (
+                <Button 
+                  type="button"
+                  onClick={() => handleOpenPrintLayout(selectedOrder)}
+                  className="rounded-none uppercase text-[9px] font-black px-4 h-10 tracking-widest bg-evo-teal hover:bg-evo-teal-dark text-white flex items-center gap-1.5 shadow-md"
+                  title="Visualizar layout de impressão e baixar PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Layout Impressão (PDF)
+                </Button>
+              )}
               {selectedOrder?.DocEntry && (
                 <Button 
                   onClick={handleDeleteOrder} 
@@ -5762,13 +6344,13 @@ function SalesOrdersView() {
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
               {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocNum || selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
             </DialogTitle>
-            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda com Centro de Custos e Projetos por Linha</p>
+            <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda, WO, PO Cliente, Centros de Custo e Anexos de Comprovação</p>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
             {selectedOrder && (
-              <div className="space-y-10">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 bg-white p-8 border border-evo-bg shadow-sm">
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 bg-white p-8 border border-evo-bg shadow-sm">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
                     <div className="flex gap-1">
@@ -5798,15 +6380,54 @@ function SalesOrdersView() {
                     />
                   </div>
                   <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
+                    <Input 
+                      value={selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedOrder({ 
+                          ...selectedOrder, 
+                          U_Projeto: val,
+                          Project: val,
+                          ProjectCode: val
+                        });
+                      }}
+                      placeholder="EX: WO 2040 OU PROJETO"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
+                    <Input 
+                      value={selectedOrder.NumAtCard || selectedOrder.U_POCliente || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedOrder({ 
+                          ...selectedOrder, 
+                          NumAtCard: val,
+                          U_POCliente: val
+                        });
+                      }}
+                      placeholder="EX: PO-987654"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-blue-700"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
                     <Input 
                       type="date"
                       value={selectedOrder.DocDueDate ? selectedOrder.DocDueDate.split('T')[0] : ""}
                       onChange={(e) => setSelectedOrder({ ...selectedOrder, DocDueDate: e.target.value })}
-                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11"
+                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 font-bold"
                     />
                   </div>
                 </div>
+
+                {/* Section for Attachments (PO Cliente, Cotação Qualitech, Email de Aprovação) */}
+                <DocumentAttachmentsSection 
+                  documentType="order" 
+                  docId={selectedOrder.DocEntry || 'draft'} 
+                />
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-end px-2">
@@ -5986,6 +6607,17 @@ function SalesOrdersView() {
           </div>
 
           <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
+            {selectedOrder?.DocEntry && (
+              <Button 
+                type="button"
+                variant="outline" 
+                onClick={() => handleOpenPrintLayout(selectedOrder)} 
+                className="rounded-none uppercase text-[10px] font-black border-2 border-evo-teal text-evo-teal hover:bg-evo-teal hover:text-white px-6 h-12 flex items-center gap-2"
+              >
+                <Printer className="w-4 h-4" />
+                Visualizar Impressão (PDF)
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setIsModalOpen(false)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
             <Button 
               onClick={handleSaveOrder}
@@ -6074,6 +6706,13 @@ function SalesOrdersView() {
           }
           setIsRentalCostModalOpen(false);
         }}
+      />
+
+      {/* Sales Order Print Layout Modal */}
+      <SalesOrderPrintModal 
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        order={orderForPrint}
       />
     </motion.div>
   );

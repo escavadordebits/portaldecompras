@@ -61,6 +61,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { normalizeSapCompany } from '../services/sapService';
 
 interface ModulePermissions {
   procurement: boolean;
@@ -118,7 +119,7 @@ export default function UserManagementView() {
     email: '',
     password: '',
     sapEmail: '',
-    sapCompany: 'SBO_QUALITECH_IRML',
+    sapCompany: 'SBO_QUALITECH',
     sector: '',
     role: 'user',
     status: 'approved',
@@ -143,7 +144,14 @@ export default function UserManagementView() {
     setIsLoading(true);
     try {
       const querySnapshot = await getDocs(collection(db, 'users'));
-      const userData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const userData = querySnapshot.docs.map(doc => {
+        const data: any = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          sapCompany: normalizeSapCompany(data.sapCompany)
+        };
+      });
       setUsers(userData);
     } catch (error) {
       toast.error('Erro ao buscar usuários do sistema.');
@@ -179,21 +187,47 @@ export default function UserManagementView() {
     setIsSubmitting(true);
     try {
       const userRef = doc(db, 'users', selectedUser.id);
+      const companyVal = selectedUser.sapCompany?.trim() 
+        ? normalizeSapCompany(selectedUser.sapCompany.trim()) 
+        : 'SBO_QUALITECH';
+
       const updateData: any = {
         role: selectedUser.role,
         status: selectedUser.status,
-        sector: selectedUser.sector || '',
-        sapEmail: selectedUser.sapEmail || '',
-        sapCompany: selectedUser.sapCompany || '',
+        sector: selectedUser.sector?.trim() || '',
+        sapEmail: selectedUser.sapEmail?.trim() || '',
+        sapCompany: companyVal,
         password: selectedUser.password || '',
         modules: selectedUser.modules || { ...DEFAULT_MODULES },
         updatedAt: serverTimestamp()
       };
 
-      await updateDoc(userRef, updateData);
+      await setDoc(userRef, updateData, { merge: true });
+
+      // Synchronize active session if current logged-in user was updated
+      const activeUserStr = sessionStorage.getItem('sap_portal_active_user');
+      if (activeUserStr) {
+        try {
+          const active = JSON.parse(activeUserStr);
+          if (
+            active.id === selectedUser.id || 
+            active.uid === selectedUser.id || 
+            (active.email && selectedUser.email && active.email.toLowerCase().trim() === selectedUser.email.toLowerCase().trim())
+          ) {
+            const updatedActive = { ...active, ...updateData, sapCompany: companyVal };
+            sessionStorage.setItem('sap_portal_active_user', JSON.stringify(updatedActive));
+            sessionStorage.setItem('sap_portal_company', companyVal);
+            localStorage.setItem('sap_portal_company', companyVal);
+            window.dispatchEvent(new CustomEvent('sap_user_profile_updated', { detail: updatedActive }));
+          }
+        } catch (e) {
+          console.warn('Could not sync active user session', e);
+        }
+      }
+
       toast.success('Cadastro e permissões do usuário atualizados com sucesso!');
       setIsEditDialogOpen(false);
-      fetchUsers();
+      await fetchUsers();
     } catch (error) {
       console.error(error);
       toast.error('Erro ao atualizar usuário.');
@@ -219,11 +253,15 @@ export default function UserManagementView() {
       const docId = existingUser ? existingUser.id : normalizedEmail.replace(/[^a-z0-9@_.-]/g, '_');
       const userRef = doc(db, 'users', docId);
 
+      const companyVal = newUser.sapCompany?.trim() 
+        ? normalizeSapCompany(newUser.sapCompany.trim()) 
+        : 'SBO_QUALITECH';
+
       const payload = {
         email: newUser.email.trim(),
         password: newUser.password || '',
         sapEmail: newUser.sapEmail?.trim() || newUser.email.trim(),
-        sapCompany: newUser.sapCompany?.trim() || 'SBO_QUALITECH_IRML',
+        sapCompany: companyVal,
         sector: newUser.sector?.trim() || '',
         role: newUser.role || 'user',
         status: newUser.status || 'approved',
@@ -239,13 +277,13 @@ export default function UserManagementView() {
         email: '',
         password: '',
         sapEmail: '',
-        sapCompany: 'SBO_QUALITECH_IRML',
+        sapCompany: 'SBO_QUALITECH',
         sector: '',
         role: 'user',
         status: 'approved',
         modules: { ...DEFAULT_MODULES }
       });
-      fetchUsers();
+      await fetchUsers();
     } catch (error) {
       console.error(error);
       toast.error('Erro ao criar novo usuário.');
@@ -299,7 +337,7 @@ export default function UserManagementView() {
         'E-mail Plataforma': 'admin.demo@empresa.com.br',
         'Senha': 'SenhaForte#2026',
         'E-mail SAP': 'manager',
-        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH_IRML',
+        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH',
         'Nível de Acesso (admin/user)': 'admin',
         'Status (approved/pending/blocked)': 'approved',
         'Setor': 'TI e Inovação',
@@ -317,7 +355,7 @@ export default function UserManagementView() {
         'E-mail Plataforma': 'comercial.silva@empresa.com.br',
         'Senha': 'Mudar@1234',
         'E-mail SAP': 'comercial.silva@empresa.com.br',
-        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH_IRML',
+        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH',
         'Nível de Acesso (admin/user)': 'user',
         'Status (approved/pending/blocked)': 'approved',
         'Setor': 'Comercial',
@@ -335,7 +373,7 @@ export default function UserManagementView() {
         'E-mail Plataforma': 'suprimentos.costa@empresa.com.br',
         'Senha': 'Mudar@1234',
         'E-mail SAP': 'suprimentos.costa@empresa.com.br',
-        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH_IRML',
+        'Empresa SAP (CompanyDB)': 'SBO_QUALITECH',
         'Nível de Acesso (admin/user)': 'user',
         'Status (approved/pending/blocked)': 'approved',
         'Setor': 'Suprimentos',
@@ -474,13 +512,13 @@ export default function UserManagementView() {
             email
           ).trim();
 
-          const sapCompany = String(
+          const sapCompany = normalizeSapCompany(String(
             row['Empresa SAP (CompanyDB)'] || 
             row['Empresa SAP'] || 
             row['CompanyDB'] || 
             row['sapCompany'] || 
-            'SBO_QUALITECH_IRML'
-          ).trim();
+            'SBO_QUALITECH'
+          ).trim());
 
           const sector = String(
             row['Setor'] || 
@@ -658,7 +696,7 @@ export default function UserManagementView() {
                 email: '',
                 password: generateRandomPassword(),
                 sapEmail: '',
-                sapCompany: 'SBO_QUALITECH_IRML',
+                sapCompany: 'SBO_QUALITECH',
                 sector: '',
                 role: 'user',
                 status: 'approved',
@@ -1036,7 +1074,7 @@ export default function UserManagementView() {
                 <Input 
                   value={newUser.sapCompany}
                   onChange={(e) => setNewUser({ ...newUser, sapCompany: e.target.value })}
-                  placeholder="SBO_QUALITECH_IRML"
+                  placeholder="SBO_QUALITECH"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
               </div>
@@ -1233,7 +1271,7 @@ export default function UserManagementView() {
                 <Input 
                   value={selectedUser?.sapCompany || ''}
                   onChange={(e) => setSelectedUser({ ...selectedUser, sapCompany: e.target.value })}
-                  placeholder="SBO_QUALITECH_IRML"
+                  placeholder="SBO_QUALITECH"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
               </div>
