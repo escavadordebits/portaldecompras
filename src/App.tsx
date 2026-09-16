@@ -78,6 +78,7 @@ import { sapService, normalizeSapCompany } from './services/sapService';
 import { calculatePersonnelCost } from './utils/costCalculations';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
+import { APP_VERSION_TAG } from './config/version';
 import { Button } from '@/components/ui/button';
 
 // Enhanced Logo Component using Icons
@@ -1005,6 +1006,11 @@ export default function App() {
         {/* Background Accent */}
         <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
         
+        {/* Version in bottom left corner */}
+        <div className="absolute bottom-4 left-4 z-20 text-[10px] font-mono font-bold text-evo-dark/40 tracking-wider">
+          {APP_VERSION_TAG}
+        </div>
+        
         <motion.div 
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -1638,8 +1644,13 @@ export default function App() {
               <LogOut className="w-4 h-4 shrink-0" />
               {sidebarOpen && <span>Sair da Conta</span>}
             </button>
-            <div className="text-[9px] uppercase tracking-widest text-white/30 font-bold px-2">
-              {sidebarOpen ? 'SAP Business One' : 'B1'}
+            <div className="px-2 flex flex-col gap-0.5 text-left">
+              <div className="text-[9px] uppercase tracking-widest text-white/30 font-bold truncate">
+                {sidebarOpen ? 'SAP Business One' : 'B1'}
+              </div>
+              <div className="text-[10px] font-mono font-bold text-white/50 tracking-wider">
+                {APP_VERSION_TAG}
+              </div>
             </div>
           </div>
         </aside>
