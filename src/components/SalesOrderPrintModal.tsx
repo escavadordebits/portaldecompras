@@ -39,7 +39,10 @@ import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { sapService } from '../services/sapService';
-import { enviarEmailComAnexoReal } from '../services/microsoftGraphEmailService';
+import { 
+  enviarEmailComAnexoReal, 
+  parseEmailRecipients 
+} from '../services/microsoftGraphEmailService';
 import { 
   getStoredMicrosoftAccount, 
   getStoredMicrosoftConfig, 
@@ -1049,10 +1052,21 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       }
     }
 
-    if (!emailTo.trim()) {
-      toast.error('Informe o e-mail do destinatário.');
+    const recipientList = parseEmailRecipients(emailTo);
+
+    if (recipientList.length === 0) {
+      toast.error('Informe pelo menos um endereço de e-mail de destinatário.');
       return;
     }
+
+    // Validação básica do formato de cada e-mail
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const invalidEmails = recipientList.filter(email => !emailRegex.test(email));
+    if (invalidEmails.length > 0) {
+      toast.error(`E-mail(s) com formato inválido: ${invalidEmails.join(', ')}`);
+      return;
+    }
+
     if (!pdfFileForEmail) {
       toast.error('Arquivo em anexo não encontrado.');
       return;
@@ -1063,11 +1077,14 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       await enviarEmailComAnexoReal(
         tokenToSend,
         pdfFileForEmail,
-        emailTo.trim(),
+        recipientList,
         emailSubject.trim(),
         emailBody.trim()
       );
-      toast.success(`E-mail com anexo enviado com sucesso para ${emailTo}!`);
+      const recipientSummary = recipientList.length === 1 
+        ? recipientList[0] 
+        : `${recipientList.length} destinatários (${recipientList.join('; ')})`;
+      toast.success(`E-mail com anexo enviado com sucesso para ${recipientSummary}!`);
       setIsEmailModalOpen(false);
     } catch (err: any) {
       console.error('Erro ao enviar e-mail via Microsoft Graph:', err);
@@ -2131,17 +2148,37 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
 
             {/* Recipient */}
             <div className="space-y-1.5">
-              <Label className="text-[10px] font-black uppercase tracking-widest text-slate-600">
-                {emailLang === 'en' ? 'To (Recipient Email)' : 'Para (Destinatário)'}
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-[10px] font-black uppercase tracking-widest text-slate-600">
+                  {emailLang === 'en' ? 'To (Recipient Email)' : 'Para (Destinatários)'}
+                </Label>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  {emailLang === 'en' ? 'Separate multiple emails with (;)' : 'Múltiplos e-mails: separe com ponto e vírgula (;)'}
+                </span>
+              </div>
               <Input
-                type="email"
-                placeholder={emailLang === 'en' ? 'recipient@company.com' : 'destinatario@outlook.com'}
+                type="text"
+                placeholder={emailLang === 'en' ? 'user1@company.com; user2@company.com' : 'destinatario1@empresa.com; destinatario2@empresa.com'}
                 value={emailTo}
                 onChange={(e) => setEmailTo(e.target.value)}
                 className="h-10 text-xs font-semibold rounded-none border-slate-300 focus:border-blue-600"
                 required
               />
+              {parseEmailRecipients(emailTo).length > 1 && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase">
+                    {parseEmailRecipients(emailTo).length} destinatários:
+                  </span>
+                  {parseEmailRecipients(emailTo).map((email, idx) => (
+                    <span 
+                      key={idx} 
+                      className="inline-flex items-center px-2 py-0.5 text-[11px] font-mono font-semibold bg-blue-50 text-blue-800 border border-blue-200"
+                    >
+                      {email}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Subject */}
