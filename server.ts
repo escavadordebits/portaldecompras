@@ -4,7 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import { app } from './serverApp';
 import { config } from './config';
 
-const PORT = config.server.port;
+const PORT = 3000;
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -21,9 +21,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server error:', err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+});
