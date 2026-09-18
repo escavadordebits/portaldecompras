@@ -750,9 +750,6 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.5);
       doc.setTextColor(100, 116, 139);
-      doc.text(isEn 
-        ? 'SAP Business One - Sales Order Mirror / Draft Invoice - Author: Diego Lira Reviewed by: ALAN'
-        : 'SAP Business One - Espelho pedido de compra V4 - 04-23 Author: Diego Lira Revisado por: ALAN', 14, pageHeight - 8);
       doc.text(isEn ? `Page ${p} of ${totalPdfPages}` : `Página ${p} de ${totalPdfPages}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
       doc.text(isEn ? 'Printed via SAP Business One' : 'Impresso por SAP Business One', pageWidth - 14, pageHeight - 8, { align: 'right' });
     }
@@ -1692,11 +1689,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
 
                     {/* --- FOOTER ON EVERY PAGE --- */}
                     <div className="pt-6 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-500">
-                      <div>
-                        {layoutLang === 'en'
-                          ? 'SAP Business One - Sales Order Mirror / Draft Invoice - Author: Diego Lira Reviewed by: ALAN'
-                          : 'SAP Business One - Espelho pedido de compra V4 - 04-23 Author: Diego Lira Revisado por: ALAN'}
-                      </div>
+                      <div></div>
                       <div className="font-bold">
                         {layoutLang === 'en' 
                           ? `Page ${pageData.pageNumber} of ${previewPages.length}`
