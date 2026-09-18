@@ -577,13 +577,14 @@ export default function App() {
 
   // Detect Portal Route on Mount
   useEffect(() => {
+    const defaultComp = 'SBO_QUALITECH';
     const storedComp = localStorage.getItem('sap_portal_company');
-    if (storedComp && (storedComp === 'SBO_QUALITECH_IRML' || storedComp === 'SBO_QUALITECH_QAS' || storedComp === 'QUALITECH')) {
-      localStorage.setItem('sap_portal_company', 'SBO_QUALITECH');
+    if (!storedComp || storedComp === 'SBO_QUALITECH_QAS' || storedComp === 'QUALITECH' || storedComp === 'SBO_QUALITECH_' || storedComp === 'SBO_QUALITECH_IRML') {
+      localStorage.setItem('sap_portal_company', defaultComp);
     }
     const sessionComp = sessionStorage.getItem('sap_portal_company');
-    if (sessionComp && (sessionComp === 'SBO_QUALITECH_IRML' || sessionComp === 'SBO_QUALITECH_QAS' || sessionComp === 'QUALITECH')) {
-      sessionStorage.setItem('sap_portal_company', 'SBO_QUALITECH');
+    if (!sessionComp || sessionComp === 'SBO_QUALITECH_QAS' || sessionComp === 'QUALITECH' || sessionComp === 'SBO_QUALITECH_' || sessionComp === 'SBO_QUALITECH_IRML') {
+      sessionStorage.setItem('sap_portal_company', defaultComp);
     }
 
     const handleProfileUpdate = (e: any) => {
@@ -1769,7 +1770,10 @@ export default function App() {
               />
             )}
             {currentView === 'sales-orders' && (
-              <SalesOrdersView key="sales-orders" />
+              <SalesOrdersView 
+                key="sales-orders" 
+                userEmail={userProfile?.email || activeAuthUser?.email || ''} 
+              />
             )}
             {currentView === 'calibration' && (
               <CalibrationView key="calibration" />
@@ -5895,7 +5899,7 @@ function QuotationsView({
   );
 }
 
-function SalesOrdersView() {
+function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -6724,6 +6728,7 @@ function SalesOrdersView() {
         isOpen={isPrintModalOpen}
         onClose={() => setIsPrintModalOpen(false)}
         order={orderForPrint}
+        userEmail={userEmail}
       />
     </motion.div>
   );

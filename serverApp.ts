@@ -54,21 +54,24 @@ const getSapConfig = (req: express.Request) => {
   return {
     baseUrl: (customUrl || config.sap.baseUrl).replace(/\/$/, ''),
     user: customUser || config.sap.systemUser,
-    password: customPassword || config.sap.systemPassword
+    password: (customPassword && customPassword !== '1234') ? customPassword : (config.sap.systemPassword || customPassword || '1234')
   };
 };
 
-// Normalize company database name to avoid invalid schema logins
+// Normalize company database name to avoid invalid schema logins - standard is SBO_QUALITECH
 export const normalizeCompany = (comp?: string): string => {
-  if (!comp) return config.sap.defaultCompany || 'SBO_QUALITECH';
+  if (!comp) return 'SBO_QUALITECH';
   const trimmed = comp.trim();
-  if (!trimmed || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+  if (!trimmed || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
   return trimmed;
 };
 
-// Helper for automatic SAP authentication with fallback user support and session cache
+// Map of in-flight authentication promises to prevent concurrent SAP login race conditions (SAML Login Failed)
+const inFlightLogins = new Map<string, Promise<{ sessionId: string; cookieHeader: string; companyDB: string; routeId?: string }>>();
+
+// Helper for automatic SAP authentication with mutex and session cache
 const doSapLogin = async (req: express.Request, res?: express.Response, forceRefresh = false) => {
   const sapConfig = getSapConfig(req);
   const rawCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
@@ -91,105 +94,229 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
     }
   }
 
-  console.log(`Auto-authenticating with SAP Service Layer for company '${companyDB}' (force: ${forceRefresh})...`);
+  // Mutex: Check if another request is already authenticating for this cacheKey
+  const inFlightKey = `${sapConfig.baseUrl}_${companyDB}_${sapConfig.user}`;
+  const existingLogin = inFlightLogins.get(inFlightKey);
+  if (existingLogin) {
+    console.log(`SAP Login for '${companyDB}' is already in-flight. Awaiting existing authentication...`);
+    try {
+      const auth = await existingLogin;
+      if (res) {
+        const cookieOptions: any = { httpOnly: true, secure: true, sameSite: 'none' };
+        res.cookie('B1SESSION', auth.sessionId, cookieOptions);
+        res.cookie('B1COMPANYDB', auth.companyDB, cookieOptions);
+        if (auth.routeId) {
+          const [name, value] = auth.routeId.split('=');
+          res.cookie(name, value, cookieOptions);
+        }
+      }
+      return { sessionId: auth.sessionId, cookieHeader: auth.cookieHeader };
+    } catch {
+      // If previous in-flight promise failed, proceed to initiate fresh login
+    }
+  }
 
-  // Build list of candidate users starting with requested user
-  const candidateUsers = [sapConfig.user, 'manager', 'Manager', 'B1i'];
-  const usersToTry = Array.from(new Set(candidateUsers.filter(Boolean)));
+  const loginExecution = (async () => {
+    console.log(`Auto-authenticating with SAP Service Layer for company '${companyDB}' (force: ${forceRefresh})...`);
 
-  // Strictly target the requested companyDB (normalized)
-  const candidateCompanies = [companyDB];
+    // Build list of candidate users starting with requested user
+    const candidateUsers = [sapConfig.user, 'B1i', 'manager', 'Manager'];
+    const usersToTry = Array.from(new Set(candidateUsers.filter(Boolean)));
+    const candidateCompanies = Array.from(new Set([companyDB, 'SBO_QUALITECH'].filter(Boolean)));
 
-  let lastError: any = null;
+    let lastError: any = null;
 
-  for (const targetCompany of candidateCompanies) {
-    for (const testUser of usersToTry) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          console.log(`Attempting SAP login as '${testUser}' for '${targetCompany}' (attempt ${attempt + 1})...`);
-          const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
-            CompanyDB: targetCompany,
-            UserName: testUser,
-            Password: sapConfig.password
-          }, {
-            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-              'User-Agent': 'SAP-Portal-Client/1.0'
-            },
-            timeout: 25000
-          });
+    for (const targetCompany of candidateCompanies) {
+      for (const testUser of usersToTry) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            console.log(`Attempting SAP login as '${testUser}' for '${targetCompany}' (attempt ${attempt + 1})...`);
+            const loginResponse = await axios.post(`${sapConfig.baseUrl}/Login`, {
+              CompanyDB: targetCompany,
+              UserName: testUser,
+              Password: sapConfig.password
+            }, {
+              httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'User-Agent': 'SAP-Portal-Client/1.0'
+              },
+              timeout: 25000
+            });
 
-          const sessionId = loginResponse.data.SessionId;
-          const cookies = loginResponse.headers['set-cookie'] || [];
-          const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
+            const sessionId = loginResponse.data.SessionId;
+            const cookies = loginResponse.headers['set-cookie'] || [];
+            const routeId = cookies.find((c: string) => c.includes('ROUTEID'))?.split(';')[0];
 
-          const cookieOptions: any = {
-            httpOnly: true,
-            secure: true,
-            sameSite: 'none'
-          };
-
-          if (res) {
-            res.cookie('B1SESSION', sessionId, cookieOptions);
-            res.cookie('B1COMPANYDB', targetCompany, cookieOptions);
-          }
-
-          let newCookieHeader = `B1SESSION=${sessionId}`;
-          if (routeId) {
-            const [name, value] = routeId.split('=');
-            if (res) {
-              res.cookie(name, value, cookieOptions);
+            let newCookieHeader = `B1SESSION=${sessionId}`;
+            if (routeId) {
+              newCookieHeader += `; ${routeId}`;
             }
-            newCookieHeader += `; ${routeId}`;
-          }
 
-          // Cache session for 25 minutes
-          sessionCache.set(cacheKey, {
-            sessionId,
-            routeId,
-            cookieHeader: newCookieHeader,
-            companyDB: targetCompany,
-            user: testUser,
-            expiresAt: Date.now() + 25 * 60 * 1000
-          });
+            // Cache session for 25 minutes
+            const sessionObj = {
+              sessionId,
+              routeId,
+              cookieHeader: newCookieHeader,
+              companyDB: targetCompany,
+              user: testUser,
+              expiresAt: Date.now() + 25 * 60 * 1000
+            };
+            sessionCache.set(cacheKey, sessionObj);
+            sessionCache.set(`${sapConfig.baseUrl}_${targetCompany}_${testUser}`, sessionObj);
 
-          console.log(`SAP auto-login successful for '${testUser}' on '${targetCompany}'.`);
-          return { sessionId, cookieHeader: newCookieHeader };
-        } catch (err: any) {
-          lastError = err;
-          const status = err.response?.status;
-          const sapErrorMsg = err.response?.data?.error?.message?.value || err.response?.data?.error?.message || err.message;
-          console.warn(`SAP login attempt ${attempt + 1} as '${testUser}' for '${targetCompany}' failed (${status || 'ERR'}): ${sapErrorMsg}`);
+            console.log(`SAP auto-login successful for '${testUser}' on '${targetCompany}'.`);
+            return { sessionId, cookieHeader: newCookieHeader, companyDB: targetCompany, routeId };
+          } catch (err: any) {
+            lastError = err;
+            const status = err.response?.status;
+            const sapErrorMsg = err.response?.data?.error?.message?.value || err.response?.data?.error?.message || err.message;
+            console.warn(`SAP login attempt ${attempt + 1} as '${testUser}' for '${targetCompany}' failed (${status || 'ERR'}): ${sapErrorMsg}`);
 
-          // If authentication failure / SAML error / 401 / bad credentials, immediately test the next user
-          const isAuthFailure = status === 401 || (typeof sapErrorMsg === 'string' && (
-            sapErrorMsg.toLowerCase().includes('saml') ||
-            sapErrorMsg.toLowerCase().includes('sld') ||
-            sapErrorMsg.toLowerCase().includes('password') ||
-            sapErrorMsg.toLowerCase().includes('user') ||
-            sapErrorMsg.toLowerCase().includes('credential')
-          ));
+            const isSamlRace = status === 500 && typeof sapErrorMsg === 'string' && sapErrorMsg.toLowerCase().includes('saml');
+            if (isSamlRace && attempt < 2) {
+              const waitMs = 800 * (attempt + 1) + Math.floor(Math.random() * 400);
+              console.log(`SAML lock detected in SAP SLD. Retrying '${testUser}' in ${waitMs}ms...`);
+              await new Promise(resolve => setTimeout(resolve, waitMs));
+              continue;
+            }
 
-          if (isAuthFailure) {
-            break; // Stop retrying this user and try next candidate user immediately
-          }
+            // If explicit 401 (not SSO / wrong password), test next user
+            if (status === 401) {
+              break;
+            }
 
-          if (attempt < 1) {
-            await new Promise(resolve => setTimeout(resolve, 800));
+            if (attempt < 2) {
+              await new Promise(resolve => setTimeout(resolve, 800));
+            }
           }
         }
       }
     }
-  }
 
-  sessionCache.delete(cacheKey);
-  throw lastError || new Error('Falha na autenticação SAP Service Layer');
+    sessionCache.delete(cacheKey);
+    throw lastError || new Error('Falha na autenticação SAP Service Layer');
+  })();
+
+  inFlightLogins.set(inFlightKey, loginExecution);
+
+  try {
+    const auth = await loginExecution;
+    if (res) {
+      const cookieOptions: any = { httpOnly: true, secure: true, sameSite: 'none' };
+      res.cookie('B1SESSION', auth.sessionId, cookieOptions);
+      res.cookie('B1COMPANYDB', auth.companyDB, cookieOptions);
+      if (auth.routeId) {
+        const [name, value] = auth.routeId.split('=');
+        res.cookie(name, value, cookieOptions);
+      }
+    }
+    return { sessionId: auth.sessionId, cookieHeader: auth.cookieHeader };
+  } finally {
+    inFlightLogins.delete(inFlightKey);
+  }
 };
 
 // Create the API Router
 const apiRouter = express.Router();
+
+// Microsoft OAuth Popup Callback (Receiver page)
+const handleOAuthCallback = (req: express.Request, res: express.Response) => {
+  const code = req.query.code;
+  const state = req.query.state;
+  const error = req.query.error;
+  const errorDescription = req.query.error_description;
+
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <title>Autenticação Microsoft Concluída</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; }
+      .card { background: white; padding: 32px 28px; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1); max-width: 400px; text-align: center; border: 1px solid #e2e8f0; }
+      .spinner { width: 36px; height: 36px; border: 3px solid #e2e8f0; border-top-color: #0078d4; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      h2 { font-size: 17px; margin: 0 0 8px; color: #0078d4; font-weight: 700; }
+      p { font-size: 13px; color: #64748b; margin: 0; line-height: 1.4; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="spinner"></div>
+      <h2>Conectando ao Microsoft 365</h2>
+      <p>Autenticação processada. Retornando ao Portal SAP...</p>
+    </div>
+    <script>
+      const payload = {
+        type: 'MS_OAUTH_CALLBACK',
+        code: ${JSON.stringify(code || null)},
+        state: ${JSON.stringify(state || null)},
+        error: ${JSON.stringify(error || null)},
+        errorDescription: ${JSON.stringify(errorDescription || null)}
+      };
+
+      if (window.opener) {
+        window.opener.postMessage(payload, '*');
+        setTimeout(() => {
+          try { window.close(); } catch(e) {}
+        }, 500);
+      } else {
+        window.location.href = '/';
+      }
+    </script>
+  </body>
+</html>`);
+};
+
+app.get(['/auth/callback', '/auth/callback/'], handleOAuthCallback);
+apiRouter.get(['/auth/callback', '/auth/callback/'], handleOAuthCallback);
+
+// Microsoft Token Exchange Endpoint
+apiRouter.post('/auth/microsoft/token', async (req, res) => {
+  const { code, codeVerifier, clientId, tenantId = 'common', redirectUri } = req.body;
+
+  const targetClientId = clientId || process.env.MICROSOFT_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
+
+  if (!code || !targetClientId) {
+    return res.status(400).json({ error: 'Parâmetros "code" e "clientId" são obrigatórios.' });
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.append('client_id', targetClientId);
+    params.append('grant_type', 'authorization_code');
+    params.append('code', code);
+    params.append('redirect_uri', redirectUri || `${req.protocol}://${req.get('host')}/auth/callback`);
+    if (codeVerifier) {
+      params.append('code_verifier', codeVerifier);
+    }
+    if (clientSecret) {
+      params.append('client_secret', clientSecret);
+    }
+
+    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    const response = await axios.post(tokenUrl, params.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      timeout: 25000
+    });
+
+    res.json(response.data);
+  } catch (err: any) {
+    const errorData = err.response?.data;
+    console.error('Microsoft Token Exchange Error:', errorData || err.message);
+    res.status(err.response?.status || 500).json(errorData || { 
+      error: 'Erro ao trocar código por token na Microsoft.', 
+      details: err.message 
+    });
+  }
+});
 
 // Health check endpoint
 apiRouter.get('/health', (req, res) => {

@@ -6,7 +6,7 @@ export const config = {
     baseUrl: process.env.SAP_SERVICE_LAYER_URL || 'https://piqualithse.b1cloud.com.br:50000/b1s/v1',
     systemUser: process.env.SAP_USER_NAME || 'B1i',
     systemPassword: process.env.SAP_PASSWORD || '1234',
-    defaultCompany: process.env.SAP_COMPANY_DB || 'SBO_QUALITECH'
+    defaultCompany: 'SBO_QUALITECH'
   },
   server: {
     port: 3000

@@ -8,9 +8,9 @@ const api = axios.create({
 
 // Helper to normalize SAP Company database name
 export const normalizeSapCompany = (comp?: string): string => {
-  if (!comp) return SAP_CONFIG.defaultCompany || 'SBO_QUALITECH';
+  if (!comp) return 'SBO_QUALITECH';
   const trimmed = comp.trim();
-  if (!trimmed || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+  if (!trimmed || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
   return trimmed;
