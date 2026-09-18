@@ -46,6 +46,8 @@ import {
   loginWithMicrosoftPopup, 
   saveMicrosoftConfig, 
   clearMicrosoftSession,
+  DEFAULT_CLIENT_ID,
+  DEFAULT_TENANT_ID,
   MicrosoftAccount 
 } from '../services/microsoftAuthService';
 
@@ -90,10 +92,13 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
     return getStoredMicrosoftAccount();
   });
   const [azureClientId, setAzureClientId] = useState(() => {
-    return getStoredMicrosoftConfig().clientId || '';
+    return getStoredMicrosoftConfig().clientId || DEFAULT_CLIENT_ID;
   });
   const [azureTenantId, setAzureTenantId] = useState(() => {
-    return getStoredMicrosoftConfig().tenantId || 'common';
+    return getStoredMicrosoftConfig().tenantId || DEFAULT_TENANT_ID;
+  });
+  const [azureRedirectUri, setAzureRedirectUri] = useState(() => {
+    return getStoredMicrosoftConfig().redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '');
   });
   const [isLoggingInMs, setIsLoggingInMs] = useState(false);
   const [showAzureConfig, setShowAzureConfig] = useState(false);
@@ -979,27 +984,30 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
   };
 
   const handleMicrosoftLogin = async () => {
-    if (!azureClientId.trim()) {
-      setShowAzureConfig(true);
-      toast.info('Informe o ID do Aplicativo Azure (Client ID) para autorizar.');
-      return;
-    }
+    const effectiveClientId = (azureClientId || '').trim() || DEFAULT_CLIENT_ID;
+    const effectiveTenantId = (azureTenantId || '').trim() || DEFAULT_TENANT_ID;
+    const effectiveRedirectUri = (azureRedirectUri || '').trim() || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '');
 
-    saveMicrosoftConfig(azureClientId.trim(), azureTenantId.trim());
+    saveMicrosoftConfig(effectiveClientId, effectiveTenantId, effectiveRedirectUri);
     setIsLoggingInMs(true);
 
     try {
       toast.loading('Abrindo janela de login oficial da Microsoft...', { id: 'ms-auth-login' });
       const account = await loginWithMicrosoftPopup({
-        clientId: azureClientId.trim(),
-        tenantId: azureTenantId.trim()
+        clientId: effectiveClientId,
+        tenantId: effectiveTenantId,
+        redirectUri: effectiveRedirectUri
       });
       setMsAccount(account);
       setMsGraphToken(account.accessToken);
       toast.success(`Conectado com sucesso como ${account.name || account.email}!`, { id: 'ms-auth-login' });
     } catch (err: any) {
       console.error('Erro na autenticação Microsoft:', err);
-      toast.error(err?.message || 'Falha ao autenticar com a conta Microsoft.', { id: 'ms-auth-login' });
+      const errMsg = err?.message || 'Falha ao autenticar com a conta Microsoft.';
+      if (errMsg.includes('AADSTS50011')) {
+        setShowAzureConfig(true);
+      }
+      toast.error(errMsg, { id: 'ms-auth-login', duration: 8000 });
     } finally {
       setIsLoggingInMs(false);
     }
@@ -1825,12 +1833,17 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
 
               {/* Expandable Azure AD App Configuration */}
               {showAzureConfig && (
-                <div className="bg-white border border-slate-300 p-4 space-y-3 text-xs">
+                <div className="bg-white border border-slate-300 p-4 space-y-3.5 text-xs">
                   <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                    <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4 text-blue-600" />
-                      Configuração do Microsoft Entra ID (Azure AD)
-                    </span>
+                      <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                        Configurações do Azure / Microsoft Entra ID
+                      </span>
+                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                        Pré-configurado
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => setShowAzureConfig(false)}
@@ -1840,51 +1853,112 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                     </button>
                   </div>
 
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-bold text-slate-600 uppercase">
-                      ID do Aplicativo (Client ID)
-                    </Label>
-                    <Input
-                      type="text"
-                      placeholder="Ex: a1b2c3d4-e5f6-7890-abcd-1234567890ab"
-                      value={azureClientId}
-                      onChange={(e) => setAzureClientId(e.target.value)}
-                      className="h-8 text-xs font-mono rounded-none border-slate-300"
-                    />
-                    <p className="text-[10px] text-slate-500">
-                      Obtido em: <strong>portal.azure.com &gt; Microsoft Entra ID &gt; Registros de aplicativo</strong>
-                    </p>
+                  <p className="text-[11px] text-slate-600 leading-snug">
+                    Os dados do Azure da Qualitech já vêm pré-carregados automaticamente. Você <strong>não precisa digitá-los a cada envio</strong>.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                        ID do Aplicativo (Client ID)
+                      </Label>
+                      <Input
+                        type="text"
+                        placeholder="Ex: 4b46fdf1-7963-4933-8955-0a730ed95b1d"
+                        value={azureClientId}
+                        onChange={(e) => setAzureClientId(e.target.value)}
+                        className="h-8 text-xs font-mono rounded-none border-slate-300"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                        Tenant ID (Diretório)
+                      </Label>
+                      <Input
+                        type="text"
+                        placeholder="common (padrão) ou ID do Tenant"
+                        value={azureTenantId}
+                        onChange={(e) => setAzureTenantId(e.target.value)}
+                        className="h-8 text-xs font-mono rounded-none border-slate-300"
+                      />
+                    </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-bold text-slate-600 uppercase">
-                      Tenant ID (Diretório)
-                    </Label>
-                    <Input
-                      type="text"
-                      placeholder="common (padrão) ou ID do Tenant da Qualitech"
-                      value={azureTenantId}
-                      onChange={(e) => setAzureTenantId(e.target.value)}
-                      className="h-8 text-xs font-mono rounded-none border-slate-300"
-                    />
-                  </div>
+                  {/* Redirect URI Configuration & Selector */}
+                  <div className="bg-slate-50 p-3 border border-slate-200 rounded space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black text-slate-800 uppercase tracking-wider">
+                        URL de Redirecionamento (Redirect URI Ativa)
+                      </span>
+                      <span className="text-[10px] text-blue-600 font-bold">
+                        Selecione a que bate com o Azure:
+                      </span>
+                    </div>
 
-                  <div className="bg-slate-50 p-2.5 border border-slate-200 rounded space-y-1.5">
-                    <span className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
-                      URLs de Redirecionamento (Cadastrar no Azure como SPA ou Web):
-                    </span>
-                    <div className="flex items-center justify-between bg-white px-2 py-1 border border-slate-200 font-mono text-[10px] text-slate-700">
-                      <span className="truncate">{typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '/auth/callback'}</span>
+                    <div className="flex flex-wrap gap-2 pt-0.5">
                       <button
                         type="button"
                         onClick={() => {
-                          navigator.clipboard.writeText(typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '/auth/callback');
+                          const uri = `${window.location.origin}/auth/callback`;
+                          setAzureRedirectUri(uri);
+                          saveMicrosoftConfig(azureClientId.trim(), azureTenantId.trim(), uri);
+                          toast.success('URI alterada para /auth/callback');
+                        }}
+                        className={`px-2.5 py-1 text-[10px] font-bold border ${
+                          azureRedirectUri.endsWith('/auth/callback')
+                            ? 'bg-blue-600 text-white border-blue-700'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        1. Padrão (/auth/callback)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const uri = `${window.location.origin}/`;
+                          setAzureRedirectUri(uri);
+                          saveMicrosoftConfig(azureClientId.trim(), azureTenantId.trim(), uri);
+                          toast.success('URI alterada para URL Raiz (/)');
+                        }}
+                        className={`px-2.5 py-1 text-[10px] font-bold border ${
+                          azureRedirectUri.endsWith('/') && !azureRedirectUri.includes('/auth/callback')
+                            ? 'bg-blue-600 text-white border-blue-700'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        2. URL Raiz (/)
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-white px-2.5 py-1.5 border border-slate-200 font-mono text-[11px] text-slate-800">
+                      <span className="truncate">{azureRedirectUri}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(azureRedirectUri);
                           toast.success('URL copiada para a área de transferência!');
                         }}
-                        className="ml-2 text-blue-600 hover:text-blue-800 font-sans font-bold flex items-center gap-1"
+                        className="ml-2 text-blue-600 hover:text-blue-800 font-sans font-bold flex items-center gap-1 shrink-0"
                       >
                         <Copy className="w-3 h-3" /> Copiar
                       </button>
+                    </div>
+
+                    {/* AADSTS50011 Helper Box */}
+                    <div className="bg-amber-50 border border-amber-200 p-2.5 text-[11px] text-amber-900 rounded space-y-1">
+                      <p className="font-bold flex items-center gap-1 text-amber-950">
+                        <span>💡 Se você recebeu o erro AADSTS50011:</span>
+                      </p>
+                      <p className="text-[10px] text-amber-800 leading-normal">
+                        O Azure requer que a URL acima esteja cadastrada em:
+                        <br />
+                        <strong>portal.azure.com &gt; Registros de aplicativo &gt; {azureClientId || '4b46fdf1-7963-4933-8955-0a730ed95b1d'} &gt; Autenticação &gt; URIs de redirecionamento</strong> (como <em>Aplicativo de página única - SPA</em>).
+                      </p>
+                      <p className="text-[10px] text-amber-800">
+                        Dica: Caso no Azure você tenha cadastrado apenas a URL raiz (sem <code>/auth/callback</code>), basta clicar no botão <strong>"2. URL Raiz (/)"</strong> acima!
+                      </p>
                     </div>
                   </div>
 
@@ -1896,8 +1970,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                       type="button"
                       size="sm"
                       onClick={() => {
-                        saveMicrosoftConfig(azureClientId.trim(), azureTenantId.trim());
-                        toast.success('Configurações salvas neste navegador!');
+                        saveMicrosoftConfig(azureClientId.trim(), azureTenantId.trim(), azureRedirectUri.trim());
+                        toast.success('Configurações salvas!');
                         setShowAzureConfig(false);
                       }}
                       className="h-7 text-xs bg-slate-800 hover:bg-slate-900 text-white rounded-none font-bold uppercase"

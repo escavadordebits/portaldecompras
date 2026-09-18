@@ -4,6 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Qualitech - Central de Serviços </title>
+    <script>
+      (function() {
+        if (window.opener && (window.location.search.indexOf('code=') !== -1 || window.location.search.indexOf('error=') !== -1 || window.location.hash.indexOf('code=') !== -1)) {
+          var urlParams = new URLSearchParams(window.location.search);
+          var hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+          var code = urlParams.get('code') || hashParams.get('code');
+          var state = urlParams.get('state') || hashParams.get('state');
+          var error = urlParams.get('error') || hashParams.get('error');
+          var errorDescription = urlParams.get('error_description') || hashParams.get('error_description');
+
+          window.opener.postMessage({
+            type: 'MS_OAUTH_CALLBACK',
+            code: code || null,
+            state: state || null,
+            error: error || null,
+            errorDescription: errorDescription || null
+          }, '*');
+
+          setTimeout(function() {
+            try { window.close(); } catch(e) {}
+          }, 300);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

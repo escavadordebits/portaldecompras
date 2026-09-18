@@ -278,7 +278,7 @@ apiRouter.get(['/auth/callback', '/auth/callback/'], handleOAuthCallback);
 apiRouter.post('/auth/microsoft/token', async (req, res) => {
   const { code, codeVerifier, clientId, tenantId = 'common', redirectUri } = req.body;
 
-  const targetClientId = clientId || process.env.MICROSOFT_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+  const targetClientId = clientId || process.env.MICROSOFT_CLIENT_ID || process.env.AZURE_CLIENT_ID || '4b46fdf1-7963-4933-8955-0a730ed95b1d';
   const clientSecret = process.env.MICROSOFT_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
 
   if (!code || !targetClientId) {

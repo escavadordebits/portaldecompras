@@ -17,30 +17,38 @@ export interface MicrosoftAuthConfig {
 const STORAGE_KEYS = {
   CLIENT_ID: 'ms_client_id',
   TENANT_ID: 'ms_tenant_id',
+  REDIRECT_URI: 'ms_redirect_uri',
   ACCESS_TOKEN: 'ms_graph_token',
   ACCOUNT: 'ms_graph_account',
   CODE_VERIFIER: 'ms_pkce_verifier'
 };
 
-// Default fallback client ID if not configured in environment
+// Azure App Registration pre-configured for Qualitech
+export const DEFAULT_CLIENT_ID = '4b46fdf1-7963-4933-8955-0a730ed95b1d';
 export const DEFAULT_TENANT_ID = 'common';
 
 export function getStoredMicrosoftConfig(): MicrosoftAuthConfig {
   const envClientId = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MICROSOFT_CLIENT_ID) || '';
   const storedClientId = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.CLIENT_ID) || '' : '';
-  const storedTenant = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.TENANT_ID) || DEFAULT_TENANT_ID : DEFAULT_TENANT_ID;
+  const storedTenant = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.TENANT_ID) || '' : '';
+  const storedRedirectUri = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.REDIRECT_URI) || '' : '';
+
+  const defaultRedirect = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '';
 
   return {
-    clientId: storedClientId || envClientId,
-    tenantId: storedTenant,
-    redirectUri: typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : ''
+    clientId: storedClientId || envClientId || DEFAULT_CLIENT_ID,
+    tenantId: storedTenant || DEFAULT_TENANT_ID,
+    redirectUri: storedRedirectUri || defaultRedirect
   };
 }
 
-export function saveMicrosoftConfig(clientId: string, tenantId = 'common') {
+export function saveMicrosoftConfig(clientId: string, tenantId = 'common', redirectUri?: string) {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEYS.CLIENT_ID, clientId.trim());
-    localStorage.setItem(STORAGE_KEYS.TENANT_ID, tenantId.trim() || 'common');
+    localStorage.setItem(STORAGE_KEYS.CLIENT_ID, clientId.trim() || DEFAULT_CLIENT_ID);
+    localStorage.setItem(STORAGE_KEYS.TENANT_ID, tenantId.trim() || DEFAULT_TENANT_ID);
+    if (redirectUri) {
+      localStorage.setItem(STORAGE_KEYS.REDIRECT_URI, redirectUri.trim());
+    }
   }
 }
 
@@ -100,11 +108,12 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
 export async function loginWithMicrosoftPopup(options?: {
   clientId?: string;
   tenantId?: string;
+  redirectUri?: string;
 }): Promise<MicrosoftAccount> {
   const config = getStoredMicrosoftConfig();
-  const clientId = options?.clientId?.trim() || config.clientId?.trim();
+  const clientId = options?.clientId?.trim() || config.clientId?.trim() || DEFAULT_CLIENT_ID;
   const tenantId = options?.tenantId?.trim() || config.tenantId?.trim() || DEFAULT_TENANT_ID;
-  const redirectUri = `${window.location.origin}/auth/callback`;
+  const redirectUri = options?.redirectUri?.trim() || config.redirectUri || `${window.location.origin}/auth/callback`;
 
   if (!clientId) {
     throw new Error('ID do Aplicativo Azure (Client ID) não configurado.');
@@ -168,6 +177,9 @@ export async function loginWithMicrosoftPopup(options?: {
 
         if (event.data.error) {
           const errorMsg = event.data.errorDescription || event.data.error;
+          if (typeof errorMsg === 'string' && errorMsg.includes('AADSTS50011')) {
+            return reject(new Error(`Erro AADSTS50011: A URL de redirecionamento "${redirectUri}" não está cadastrada no Azure Portal para o app ${clientId}. Adicione esta URL em portal.azure.com > Microsoft Entra ID > Registros de aplicativo > Autenticação.`));
+          }
           return reject(new Error(`Falha na autorização Microsoft: ${errorMsg}`));
         }
 
@@ -217,9 +229,9 @@ export async function loginWithMicrosoftPopup(options?: {
           setTimeout(() => {
             if (!isProcessingCallback) {
               cleanup();
-              reject(new Error('A janela de autenticação da Microsoft foi fechada antes da conclusão.'));
+              reject(new Error('A janela de autenticação da Microsoft foi fechada antes da conclusão. Se você viu o erro AADSTS50011 na janela, verifique as URLs de redirecionamento cadastradas no Azure.'));
             }
-          }, 600);
+          }, 700);
         }
       } catch {
         // Safe to ignore cross-origin access exception
@@ -228,7 +240,7 @@ export async function loginWithMicrosoftPopup(options?: {
   });
 }
 
-// Exchange code for token via server proxy or directly
+// Exchange code for token via server proxy or directly with Microsoft PKCE
 async function exchangeCodeForToken(params: {
   code: string;
   codeVerifier: string;
@@ -236,16 +248,45 @@ async function exchangeCodeForToken(params: {
   tenantId: string;
   redirectUri: string;
 }): Promise<any> {
-  const response = await fetch('/api/auth/microsoft/token', {
+  // 1. First attempt through backend proxy
+  try {
+    const response = await fetch('/api/auth/microsoft/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(params)
+    });
+
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    console.warn('Tentativa via servidor falhou, usando troca direta PKCE via Microsoft Graph...', err);
+  }
+
+  // 2. Direct PKCE exchange with Microsoft Graph token endpoint (CORS enabled for SPA)
+  const tokenParams = new URLSearchParams();
+  tokenParams.append('client_id', params.clientId);
+  tokenParams.append('grant_type', 'authorization_code');
+  tokenParams.append('code', params.code);
+  tokenParams.append('redirect_uri', params.redirectUri);
+  if (params.codeVerifier) {
+    tokenParams.append('code_verifier', params.codeVerifier);
+  }
+
+  const tokenUrl = `https://login.microsoftonline.com/${params.tenantId}/oauth2/v2.0/token`;
+  const msResponse = await fetch(tokenUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json'
     },
-    body: JSON.stringify(params)
+    body: tokenParams.toString()
   });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+  if (!msResponse.ok) {
+    const errorData = await msResponse.json().catch(() => ({}));
     throw new Error(
       errorData.error_description || 
       errorData.details || 
@@ -254,7 +295,7 @@ async function exchangeCodeForToken(params: {
     );
   }
 
-  return response.json();
+  return msResponse.json();
 }
 
 // Fetch authenticated profile from Graph API
