@@ -76,6 +76,7 @@ import {
 } from 'firebase/auth';
 import { sapService, normalizeSapCompany } from './services/sapService';
 import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween } from './utils/costCalculations';
+import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
 import { APP_VERSION_TAG } from './config/version';
@@ -4634,6 +4635,8 @@ function CostsView() {
     U_NoturnoNob: 0,
     U_HExtraDiu: 0,
     U_HExtraNot: 0,
+    U_QtdDobra: 0,
+    U_PercDobra: 50,
     U_Total: 0
   };
 
@@ -4677,7 +4680,9 @@ function CostsView() {
     noturnoNormal: formData.U_NoturnoNor,
     noturnoNob: formData.U_NoturnoNob,
     hExtraDiurna: formData.U_HExtraDiu,
-    hExtraNoturna: formData.U_HExtraNot
+    hExtraNoturna: formData.U_HExtraNot,
+    qtdDobraColaborador: formData.U_QtdDobra,
+    percDobraColaborador: formData.U_PercDobra
   });
 
   useEffect(() => {
@@ -4696,6 +4701,8 @@ function CostsView() {
     formData.U_NoturnoNob, 
     formData.U_HExtraDiu, 
     formData.U_HExtraNot,
+    formData.U_QtdDobra,
+    formData.U_PercDobra,
     currentPersBreakdown.standByRate,
     currentPersBreakdown.totalGeral
   ]);
@@ -4735,11 +4742,26 @@ function CostsView() {
     e.preventDefault();
     setIsSubmitLoading(true);
     try {
+      const payload = {
+        ...formData,
+        U_VlNormal: Number(formData.U_VlNormal) || 0,
+        U_StandByRate: Number(formData.U_StandByRate) || 0,
+        U_QtdDiariasNormal: Number(formData.U_QtdDiariasNormal) || 0,
+        U_QtdDiariasStandBy: Number(formData.U_QtdDiariasStandBy) || 0,
+        U_NoturnoNor: Number(formData.U_NoturnoNor) || 0,
+        U_NoturnoNob: Number(formData.U_NoturnoNob) || 0,
+        U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
+        U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+        U_QtdDobra: Number(formData.U_QtdDobra) || 0,
+        U_PercDobra: Number(formData.U_PercDobra) || 50,
+        U_VlDobra: currentPersBreakdown.totalDobraColaborador,
+        U_Total: Number(formData.U_Total) || 0
+      };
       if (editingId) {
-        await sapService.updatePersonnelCost(editingId, formData);
+        await sapService.updatePersonnelCost(editingId, payload);
         toast.success('Receita de pessoal atualizada com sucesso!');
       } else {
-        await sapService.createPersonnelCost(formData);
+        await sapService.createPersonnelCost(payload);
         toast.success('Receita de pessoal registrada com sucesso!');
       }
       fetchCosts();
@@ -4757,11 +4779,20 @@ function CostsView() {
     e.preventDefault();
     setIsSubmitLoading(true);
     try {
+      const payload = {
+        ...rentalFormData,
+        U_ValorBase: Number(rentalFormData.U_ValorBase) || 0,
+        U_HorasNor: Number(rentalFormData.U_HorasNor) || 0,
+        U_HorasNob: Number(rentalFormData.U_HorasNob) || 0,
+        U_HENor: Number(rentalFormData.U_HENor) || 0,
+        U_HENob: Number(rentalFormData.U_HENob) || 0,
+        U_Total: Number(rentalFormData.U_Total) || 0
+      };
       if (editingId) {
-        await sapService.updateRentalCost(editingId, rentalFormData);
+        await sapService.updateRentalCost(editingId, payload);
         toast.success('Receita de locação atualizada com sucesso!');
       } else {
-        await sapService.createRentalCost(rentalFormData);
+        await sapService.createRentalCost(payload);
         toast.success('Receita de locação registrada com sucesso!');
       }
       fetchCosts();
@@ -4788,6 +4819,8 @@ function CostsView() {
       U_NoturnoNob: item.U_NoturnoNob || 0,
       U_HExtraDiu: item.U_HExtraDiu || 0,
       U_HExtraNot: item.U_HExtraNot || 0,
+      U_QtdDobra: item.U_QtdDobra || 0,
+      U_PercDobra: item.U_PercDobra || 50,
       U_Total: item.U_Total || 0
     });
     setEditingId(item.DocEntry);
@@ -4934,7 +4967,7 @@ function CostsView() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
-                        <Input type="number" step="0.5" value={formData.U_QtdDiariasStandBy} onChange={e => updatePersDatesOrDeductions({ U_QtdDiariasStandBy: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
+                        <DecimalInput value={formData.U_QtdDiariasStandBy} onChange={val => updatePersDatesOrDeductions({ U_QtdDiariasStandBy: val })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
                   </div>
@@ -4943,21 +4976,103 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
-                        <Input type="number" value={formData.U_NoturnoNor} onChange={e => updatePersDatesOrDeductions({ U_NoturnoNor: parseInt(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
+                        <DecimalInput value={formData.U_NoturnoNor} onChange={val => updatePersDatesOrDeductions({ U_NoturnoNor: val })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Nob</Label>
-                        <Input type="number" value={formData.U_NoturnoNob} onChange={e => setFormData({...formData, U_NoturnoNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Dobrado</Label>
+                        <DecimalInput value={formData.U_NoturnoNob} onChange={val => setFormData({...formData, U_NoturnoNob: val})} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
+
+                    {/* Dobra de Colaborador (Proposta Comercial - 40% ou 50%) */}
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-none space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">Dobra de Colaborador</span>
+                          <span className="text-[8px] font-bold px-1.5 py-0.5 bg-amber-500/20 text-amber-900 border border-amber-500/30 uppercase tracking-tighter">Proposta Comercial</span>
+                        </div>
+                        <span className="text-[9px] font-bold text-evo-dark/70 font-mono">
+                          {formData.U_PercDobra || 50}% da Diária (R$ {((Number(formData.U_VlNormal) * (Number(formData.U_PercDobra) || 50)) / 100).toFixed(2)})
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 items-end">
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Qtd Dobras</Label>
+                            <span className="text-[8px] font-bold text-amber-800">Decimais (ex: 1 ou 1,5)</span>
+                          </div>
+                          <DecimalInput 
+                            value={formData.U_QtdDobra} 
+                            onChange={val => setFormData({...formData, U_QtdDobra: val})} 
+                            className="rounded-none h-9 border-amber-300 bg-white font-bold" 
+                            placeholder="0,0" 
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Percentual da Proposta</Label>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setFormData({...formData, U_PercDobra: 40})}
+                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
+                                formData.U_PercDobra === 40 
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                                  : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
+                              }`}
+                            >
+                              40%
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setFormData({...formData, U_PercDobra: 50})}
+                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
+                                formData.U_PercDobra === 50 
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                                  : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
+                              }`}
+                            >
+                              50%
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {Number(formData.U_QtdDobra) > 0 && (
+                        <div className="flex justify-between items-center text-[10px] font-bold text-amber-900 bg-amber-100/80 px-2 py-1 border-l-2 border-amber-600">
+                          <span>Subtotal Dobra ({formData.U_QtdDobra}x @ {formData.U_PercDobra}%):</span>
+                          <span className="font-mono font-black">R$ {currentPersBreakdown.totalDobraColaborador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
-                        <Input type="number" value={formData.U_HExtraDiu} onChange={e => setFormData({...formData, U_HExtraDiu: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <div className="flex justify-between items-center">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                        </div>
+                        <DecimalInput 
+                          value={formData.U_HExtraDiu} 
+                          onChange={val => setFormData({...formData, U_HExtraDiu: val})} 
+                          className="rounded-none h-10 border-evo-bg font-bold" 
+                          placeholder="0,0"
+                          title="Ex: 2,5 ou 2.5 ou 2:30"
+                        />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
-                        <Input type="number" value={formData.U_HExtraNot} onChange={e => setFormData({...formData, U_HExtraNot: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <div className="flex justify-between items-center">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                        </div>
+                        <DecimalInput 
+                          value={formData.U_HExtraNot} 
+                          onChange={val => setFormData({...formData, U_HExtraNot: val})} 
+                          className="rounded-none h-10 border-evo-bg font-bold" 
+                          placeholder="0,0"
+                          title="Ex: 2,5 ou 2.5 ou 2:30"
+                        />
                       </div>
                     </div>
 
@@ -4982,6 +5097,10 @@ function CostsView() {
                         <div className="flex justify-between text-white/80">
                           <span>Noturno Dobrado:</span>
                           <span className="font-mono font-bold">R$ {currentPersBreakdown.totalNoturnoNob.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-amber-300">
+                          <span>Dobra Colaborador ({currentPersBreakdown.percDobraColaborador}%):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalDobraColaborador.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-white/80">
                           <span>H.E. Diurna (1.5x):</span>
@@ -5061,21 +5180,39 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
-                        <Input type="number" value={rentalFormData.U_HorasNor} onChange={e => setRentalFormData({...rentalFormData, U_HorasNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <DecimalInput value={rentalFormData.U_HorasNor} onChange={val => setRentalFormData({...rentalFormData, U_HorasNor: val})} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
-                        <Input type="number" value={rentalFormData.U_HorasNob} onChange={e => setRentalFormData({...rentalFormData, U_HorasNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <DecimalInput value={rentalFormData.U_HorasNob} onChange={val => setRentalFormData({...rentalFormData, U_HorasNob: val})} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
-                        <Input type="number" value={rentalFormData.U_HENor} onChange={e => setRentalFormData({...rentalFormData, U_HENor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <div className="flex justify-between items-center">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                        </div>
+                        <DecimalInput 
+                          value={rentalFormData.U_HENor} 
+                          onChange={val => setRentalFormData({...rentalFormData, U_HENor: val})} 
+                          className="rounded-none h-10 border-evo-bg font-bold" 
+                          placeholder="0,0"
+                          title="Ex: 2,5 ou 2.5 ou 2:30"
+                        />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
-                        <Input type="number" value={rentalFormData.U_HENob} onChange={e => setRentalFormData({...rentalFormData, U_HENob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <div className="flex justify-between items-center">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                        </div>
+                        <DecimalInput 
+                          value={rentalFormData.U_HENob} 
+                          onChange={val => setRentalFormData({...rentalFormData, U_HENob: val})} 
+                          className="rounded-none h-10 border-evo-bg font-bold" 
+                          placeholder="0,0"
+                          title="Ex: 2,5 ou 2.5 ou 2:30"
+                        />
                       </div>
                     </div>
 
@@ -5327,8 +5464,10 @@ function QuotationsView({
       U_Projeto: '',
       NumAtCard: '',
       Comments: '',
+      DiscountPercent: 0,
+      TotalDiscount: 0,
       DocumentLines: [
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -5344,6 +5483,7 @@ function QuotationsView({
           return {
             ...l,
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
+            DiscountPercent: Number(l.DiscountPercent) || 0,
             U_nItem: nItem,
             U_nITEM: nItem,
             U_ItemLoc: itemLoc,
@@ -5351,6 +5491,10 @@ function QuotationsView({
             Price: l.Price ?? l.UnitPrice ?? 0
           };
         });
+      }
+      if (fullQuote) {
+        fullQuote.DiscountPercent = Number(fullQuote.DiscountPercent) || 0;
+        fullQuote.TotalDiscount = Number(fullQuote.TotalDiscount) || 0;
       }
       setSelectedQuote(fullQuote);
       setIsModalOpen(true);
@@ -5366,6 +5510,7 @@ function QuotationsView({
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
       const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => ({
         ...line,
+        DiscountPercent: Number(line.DiscountPercent) || 0,
         CostingCode: line.CostingCode || 'BR',
         CostingCode2: line.CostingCode2 || 'MATRIZ',
         CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -5375,6 +5520,8 @@ function QuotationsView({
 
       const quoteToSave = {
         ...selectedQuote,
+        DiscountPercent: selectedQuote.DiscountPercent !== undefined ? Number(selectedQuote.DiscountPercent) : 0,
+        TotalDiscount: selectedQuote.TotalDiscount !== undefined ? Number(selectedQuote.TotalDiscount) : 0,
         U_Projeto: proj,
         Project: proj,
         ProjectCode: proj,
@@ -5787,12 +5934,16 @@ function QuotationsView({
                           <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-28 text-center">Quant.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-36 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 w-24 text-center">Desc. %</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Vinculação de Custos (Pessoal / Locação)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 text-right">Total Linha</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {selectedQuote.DocumentLines.map((line: any, idx: number) => (
+                        {selectedQuote.DocumentLines.map((line: any, idx: number) => {
+                          const lineDiscPct = Number(line.DiscountPercent) || 0;
+                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price)) * (1 - lineDiscPct / 100);
+                          return (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                             <TableCell className="px-6 py-4 min-w-[280px]">
                               <div className="space-y-1.5">
@@ -5856,6 +6007,20 @@ function QuotationsView({
                                 />
                               </div>
                             </TableCell>
+                            <TableCell className="px-3 py-4">
+                              <div className="relative">
+                                <Input 
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.5"
+                                  value={line.DiscountPercent ?? 0}
+                                  onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                                  placeholder="0%"
+                                />
+                              </div>
+                            </TableCell>
                             <TableCell className="px-6 py-4">
                               {(() => {
                                 const nItemVal = line.U_nItem || line.U_nITEM;
@@ -5908,14 +6073,152 @@ function QuotationsView({
                               })()}
                             </TableCell>
                             <TableCell className="px-6 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10">
-                              R$ {(line.Quantity * line.Price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              <div>
+                                R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                {lineDiscPct > 0 && (
+                                  <span className="block text-[9px] font-bold text-rose-500 font-mono">
+                                    (-{lineDiscPct}%)
+                                  </span>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
-                        ))}
+                        );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
                 </div>
+
+                {/* Resumo Financeiro & Lançamento de Descontos do Documento */}
+                {(() => {
+                  const quoteSubtotal = (selectedQuote.DocumentLines || []).reduce((acc: number, l: any) => {
+                    const qty = Number(l.Quantity) || 0;
+                    const price = Number(l.Price ?? l.UnitPrice ?? 0);
+                    const lineDisc = Number(l.DiscountPercent) || 0;
+                    return acc + (qty * price * (1 - lineDisc / 100));
+                  }, 0);
+
+                  const quoteDiscPct = Number(selectedQuote.DiscountPercent) || 0;
+                  const quoteDiscVal = (selectedQuote.TotalDiscount !== undefined && Number(selectedQuote.TotalDiscount) > 0 && quoteDiscPct === 0)
+                    ? Number(selectedQuote.TotalDiscount)
+                    : (quoteSubtotal * (quoteDiscPct / 100));
+                  const quoteTotal = Math.max(0, quoteSubtotal - quoteDiscVal);
+
+                  return (
+                    <div className="bg-white border-2 border-evo-dark/10 p-6 space-y-4 shadow-sm">
+                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-evo-bg pb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-black uppercase tracking-widest text-evo-dark">Lançamento de Desconto & Resumo Financeiro</h4>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase tracking-tighter">Proposta / Pedido</span>
+                          </div>
+                          <p className="text-[9px] font-bold text-evo-dark/40 uppercase">Preencha o percentual ou valor de desconto aplicado nesta cotação para refletir na proposta e draft</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-black uppercase text-evo-dark/40 mr-1">Atalhos:</span>
+                          {[0, 3, 5, 8, 10, 15].map((pct) => (
+                            <Button
+                              key={pct}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${
+                                quoteDiscPct === pct 
+                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm' 
+                                  : 'border-evo-bg hover:bg-evo-dark hover:text-white'
+                              }`}
+                              onClick={() => {
+                                const val = (quoteSubtotal * pct) / 100;
+                                setSelectedQuote({
+                                  ...selectedQuote,
+                                  DiscountPercent: pct,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, quoteSubtotal - val)
+                                });
+                              }}
+                            >
+                              {pct === 0 ? 'Sem Desconto' : `${pct}%`}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                        <div className="p-3 bg-evo-bg/20 border border-evo-bg">
+                          <span className="text-[9px] font-black uppercase text-evo-dark/40 block">Subtotal dos Itens</span>
+                          <span className="text-lg font-black text-evo-dark font-mono">
+                            R$ {quoteSubtotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase text-evo-dark/60">Desconto do Documento (%)</Label>
+                            <span className="text-[8px] font-bold text-evo-teal">Percentual</span>
+                          </div>
+                          <div className="relative">
+                            <Input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              value={selectedQuote.DiscountPercent ?? 0}
+                              onChange={(e) => {
+                                const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                const val = (quoteSubtotal * pct) / 100;
+                                setSelectedQuote({
+                                  ...selectedQuote,
+                                  DiscountPercent: pct,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, quoteSubtotal - val)
+                                });
+                              }}
+                              className="rounded-none h-10 border-evo-bg font-bold pr-8"
+                              placeholder="0.0"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-evo-dark/40">%</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase text-evo-dark/60">Desconto do Documento (R$)</Label>
+                            <span className="text-[8px] font-bold text-rose-500">Valor em Moeda</span>
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-evo-dark/40">R$</span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={quoteDiscVal > 0 ? quoteDiscVal : ''}
+                              onChange={(e) => {
+                                const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                const pct = quoteSubtotal > 0 ? (val / quoteSubtotal) * 100 : 0;
+                                setSelectedQuote({
+                                  ...selectedQuote,
+                                  DiscountPercent: Math.round(pct * 100) / 100,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, quoteSubtotal - val)
+                                });
+                              }}
+                              className="rounded-none h-10 border-evo-bg font-bold pl-8 text-rose-600 font-mono"
+                              placeholder="0,00"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-3 bg-evo-dark text-white border-l-4 border-evo-teal shadow-md">
+                          <span className="text-[9px] font-black uppercase text-white/50 block">Total Geral Líquido</span>
+                          <span className="text-xl font-black text-evo-teal font-mono">
+                            R$ {quoteTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações</label>
@@ -6159,9 +6462,11 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       U_Projeto: '',
       NumAtCard: '',
       Comments: '',
+      DiscountPercent: 0,
+      TotalDiscount: 0,
       BPL_IDAssignedToInvoice: 1,
       DocumentLines: [
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -6177,6 +6482,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
           return {
             ...l,
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
+            DiscountPercent: Number(l.DiscountPercent) || 0,
             U_nItem: nItem,
             U_nITEM: nItem,
             U_ItemLoc: itemLoc,
@@ -6184,6 +6490,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
             Price: l.Price ?? l.UnitPrice ?? 0
           };
         });
+      }
+      if (fullOrder) {
+        fullOrder.DiscountPercent = Number(fullOrder.DiscountPercent) || 0;
+        fullOrder.TotalDiscount = Number(fullOrder.TotalDiscount) || 0;
       }
       setSelectedOrder(fullOrder);
       setIsModalOpen(true);
@@ -6203,6 +6513,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
       const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => ({
         ...line,
+        DiscountPercent: Number(line.DiscountPercent) || 0,
         CostingCode: line.CostingCode || 'BR',
         CostingCode2: line.CostingCode2 || 'MATRIZ',
         CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -6212,6 +6523,8 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
 
       const orderToSave = {
         ...selectedOrder,
+        DiscountPercent: selectedOrder.DiscountPercent !== undefined ? Number(selectedOrder.DiscountPercent) : 0,
+        TotalDiscount: selectedOrder.TotalDiscount !== undefined ? Number(selectedOrder.TotalDiscount) : 0,
         U_Projeto: proj,
         Project: proj,
         ProjectCode: proj,
@@ -6658,6 +6971,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Quant.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-28 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Desc. %</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Centro de Custo</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Projeto</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
@@ -6666,7 +6980,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {selectedOrder.DocumentLines.map((line: any, idx: number) => (
+                        {selectedOrder.DocumentLines.map((line: any, idx: number) => {
+                          const lineDiscPct = Number(line.DiscountPercent) || 0;
+                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price || line.UnitPrice || 0)) * (1 - lineDiscPct / 100);
+                          return (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                             <TableCell className="px-4 py-4 min-w-[280px]">
                               <div className="space-y-1.5">
@@ -6727,6 +7044,20 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                   value={line.Price || line.UnitPrice || 0}
                                   onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
                                   className="h-10 rounded-none text-xs border-evo-bg pl-6 text-right font-bold"
+                                />
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-2 py-4">
+                              <div className="relative">
+                                <Input 
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.5"
+                                  value={line.DiscountPercent ?? 0}
+                                  onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                                  placeholder="0%"
                                 />
                               </div>
                             </TableCell>
@@ -6814,7 +7145,14 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                               })()}
                             </TableCell>
                             <TableCell className="px-4 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10">
-                              R$ {(line.Quantity * (line.Price || line.UnitPrice || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              <div>
+                                R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                {lineDiscPct > 0 && (
+                                  <span className="block text-[8px] font-bold text-rose-500 font-mono">
+                                    (-{lineDiscPct}%)
+                                  </span>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell className="px-2 py-4 text-center">
                               {selectedOrder.DocumentLines.length > 1 && (
@@ -6824,11 +7162,142 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                               )}
                             </TableCell>
                           </TableRow>
-                        ))}
+                        );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
                 </div>
+
+                {/* Resumo Financeiro & Lançamento de Descontos do Pedido */}
+                {(() => {
+                  const orderSubtotal = (selectedOrder.DocumentLines || []).reduce((acc: number, l: any) => {
+                    const qty = Number(l.Quantity) || 0;
+                    const price = Number(l.Price ?? l.UnitPrice ?? 0);
+                    const lineDisc = Number(l.DiscountPercent) || 0;
+                    return acc + (qty * price * (1 - lineDisc / 100));
+                  }, 0);
+
+                  const orderDiscPct = Number(selectedOrder.DiscountPercent) || 0;
+                  const orderDiscVal = (selectedOrder.TotalDiscount !== undefined && Number(selectedOrder.TotalDiscount) > 0 && orderDiscPct === 0)
+                    ? Number(selectedOrder.TotalDiscount)
+                    : (orderSubtotal * (orderDiscPct / 100));
+                  const orderTotal = Math.max(0, orderSubtotal - orderDiscVal);
+
+                  return (
+                    <div className="bg-white border-2 border-evo-dark/10 p-6 space-y-4 shadow-sm">
+                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-evo-bg pb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-black uppercase tracking-widest text-evo-dark">Lançamento de Desconto & Resumo Financeiro</h4>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase tracking-tighter">Pedido de Venda</span>
+                          </div>
+                          <p className="text-[9px] font-bold text-evo-dark/40 uppercase">Preencha o percentual ou valor de desconto aplicado neste pedido de venda</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-black uppercase text-evo-dark/40 mr-1">Atalhos:</span>
+                          {[0, 3, 5, 8, 10, 15].map((pct) => (
+                            <Button
+                              key={pct}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${
+                                orderDiscPct === pct 
+                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm' 
+                                  : 'border-evo-bg hover:bg-evo-dark hover:text-white'
+                              }`}
+                              onClick={() => {
+                                const val = (orderSubtotal * pct) / 100;
+                                setSelectedOrder({
+                                  ...selectedOrder,
+                                  DiscountPercent: pct,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, orderSubtotal - val)
+                                });
+                              }}
+                            >
+                              {pct === 0 ? 'Sem Desconto' : `${pct}%`}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                        <div className="p-3 bg-evo-bg/20 border border-evo-bg">
+                          <span className="text-[9px] font-black uppercase text-evo-dark/40 block">Subtotal dos Itens</span>
+                          <span className="text-lg font-black text-evo-dark font-mono">
+                            R$ {orderSubtotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase text-evo-dark/60">Desconto do Documento (%)</Label>
+                            <span className="text-[8px] font-bold text-evo-teal">Percentual</span>
+                          </div>
+                          <div className="relative">
+                            <Input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              value={selectedOrder.DiscountPercent ?? 0}
+                              onChange={(e) => {
+                                const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                const val = (orderSubtotal * pct) / 100;
+                                setSelectedOrder({
+                                  ...selectedOrder,
+                                  DiscountPercent: pct,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, orderSubtotal - val)
+                                });
+                              }}
+                              className="rounded-none h-10 border-evo-bg font-bold pr-8"
+                              placeholder="0.0"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-evo-dark/40">%</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase text-evo-dark/60">Desconto do Documento (R$)</Label>
+                            <span className="text-[8px] font-bold text-rose-500">Valor em Moeda</span>
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-evo-dark/40">R$</span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={orderDiscVal > 0 ? orderDiscVal : ''}
+                              onChange={(e) => {
+                                const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                const pct = orderSubtotal > 0 ? (val / orderSubtotal) * 100 : 0;
+                                setSelectedOrder({
+                                  ...selectedOrder,
+                                  DiscountPercent: Math.round(pct * 100) / 100,
+                                  TotalDiscount: val,
+                                  DocTotal: Math.max(0, orderSubtotal - val)
+                                });
+                              }}
+                              className="rounded-none h-10 border-evo-bg font-bold pl-8 text-rose-600 font-mono"
+                              placeholder="0,00"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-3 bg-evo-dark text-white border-l-4 border-evo-teal shadow-md">
+                          <span className="text-[9px] font-black uppercase text-white/50 block">Total Geral Líquido</span>
+                          <span className="text-xl font-black text-evo-teal font-mono">
+                            R$ {orderTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações do Pedido</label>
@@ -7094,6 +7563,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     U_NotNob: 0,
     U_HExtraDiu: 0,
     U_HExtraNot: 0,
+    U_QtdDobra: 0,
+    U_PercDobra: 50,
     U_Total: 0
   });
 
@@ -7135,6 +7606,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
             const notNob = Number(existing.U_NotNob) || 0;
             const hExtraDiu = Number(existing.U_HExtraDiu) || 0;
             const hExtraNot = Number(existing.U_HExtraNot) || 0;
+            const qtdDobra = Number(existing.U_QtdDobra) || 0;
+            const percDobra = Number(existing.U_PercDobra) || 50;
             const total = Number(existing.U_Total) || 0;
 
             setFormData({
@@ -7149,6 +7622,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
               U_NotNob: notNob,
               U_HExtraDiu: hExtraDiu,
               U_HExtraNot: hExtraNot,
+              U_QtdDobra: qtdDobra,
+              U_PercDobra: percDobra,
               U_Total: total
             });
           }
@@ -7175,6 +7650,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         U_NotNob: 0,
         U_HExtraDiu: 0,
         U_HExtraNot: 0,
+        U_QtdDobra: 0,
+        U_PercDobra: 50,
         U_Total: 0
       });
     }
@@ -7188,7 +7665,9 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     noturnoNormal: formData.U_NotNor,
     noturnoNob: formData.U_NotNob,
     hExtraDiurna: formData.U_HExtraDiu,
-    hExtraNoturna: formData.U_HExtraNot
+    hExtraNoturna: formData.U_HExtraNot,
+    qtdDobraColaborador: formData.U_QtdDobra,
+    percDobraColaborador: formData.U_PercDobra
   });
 
   useEffect(() => {
@@ -7209,6 +7688,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     formData.U_NotNob, 
     formData.U_HExtraDiu, 
     formData.U_HExtraNot,
+    formData.U_QtdDobra,
+    formData.U_PercDobra,
     currentBreakdown.standByRate,
     currentBreakdown.totalGeral
   ]);
@@ -7232,6 +7713,9 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_QtdDobra: Number(formData.U_QtdDobra) || 0,
+          U_PercDobra: Number(formData.U_PercDobra) || 50,
+          U_VlDobra: currentBreakdown.totalDobraColaborador,
           U_Total: Number(formData.U_Total) || 0
         };
 
@@ -7256,6 +7740,9 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_QtdDobra: Number(formData.U_QtdDobra) || 0,
+          U_PercDobra: Number(formData.U_PercDobra) || 50,
+          U_VlDobra: currentBreakdown.totalDobraColaborador,
           U_Total: Number(formData.U_Total) || 0
         };
         
@@ -7371,7 +7858,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
-                    <Input type="number" step="0.5" value={formData.U_QtdDiariasSt} onChange={e => updateDatesOrDeductions({ U_QtdDiariasSt: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <DecimalInput value={formData.U_QtdDiariasSt} onChange={val => updateDatesOrDeductions({ U_QtdDiariasSt: val })} className="rounded-none h-10 border-evo-bg font-bold" />
                   </div>
                 </div>
               </div>
@@ -7380,21 +7867,103 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
-                    <Input type="number" value={formData.U_NotNor} onChange={e => updateDatesOrDeductions({ U_NotNor: parseInt(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <DecimalInput value={formData.U_NotNor} onChange={val => updateDatesOrDeductions({ U_NotNor: val })} className="rounded-none h-10 border-evo-bg font-bold" />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">NOTURNO DOBRADO</Label>
-                    <Input type="number" value={formData.U_NotNob} onChange={e => setFormData({...formData, U_NotNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Dobrado</Label>
+                    <DecimalInput value={formData.U_NotNob} onChange={val => setFormData({...formData, U_NotNob: val})} className="rounded-none h-10 border-evo-bg font-bold" />
                   </div>
                 </div>
+
+                {/* Dobra de Colaborador (Proposta Comercial - 40% ou 50%) */}
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-none space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">Dobra de Colaborador</span>
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 bg-amber-500/20 text-amber-900 border border-amber-500/30 uppercase tracking-tighter">Proposta Comercial</span>
+                    </div>
+                    <span className="text-[9px] font-bold text-evo-dark/70 font-mono">
+                      {formData.U_PercDobra || 50}% da Diária (R$ {((Number(formData.U_VlNormal) * (Number(formData.U_PercDobra) || 50)) / 100).toFixed(2)})
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Qtd Dobras</Label>
+                        <span className="text-[8px] font-bold text-amber-800">Decimais (ex: 1 ou 1,5)</span>
+                      </div>
+                      <DecimalInput 
+                        value={formData.U_QtdDobra} 
+                        onChange={val => setFormData({...formData, U_QtdDobra: val})} 
+                        className="rounded-none h-9 border-amber-300 bg-white font-bold" 
+                        placeholder="0,0" 
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Percentual da Proposta</Label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, U_PercDobra: 40})}
+                          className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
+                            formData.U_PercDobra === 40 
+                              ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                              : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
+                          }`}
+                        >
+                          40%
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, U_PercDobra: 50})}
+                          className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
+                            formData.U_PercDobra === 50 
+                              ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                              : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
+                          }`}
+                        >
+                          50%
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {Number(formData.U_QtdDobra) > 0 && (
+                    <div className="flex justify-between items-center text-[10px] font-bold text-amber-900 bg-amber-100/80 px-2 py-1 border-l-2 border-amber-600">
+                      <span>Subtotal Dobra ({formData.U_QtdDobra}x @ {formData.U_PercDobra}%):</span>
+                      <span className="font-mono font-black">R$ {currentBreakdown.totalDobraColaborador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
-                    <Input type="number" value={formData.U_HExtraDiu} onChange={e => setFormData({...formData, U_HExtraDiu: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                    </div>
+                    <DecimalInput 
+                      value={formData.U_HExtraDiu} 
+                      onChange={val => setFormData({...formData, U_HExtraDiu: val})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      placeholder="0,0"
+                      title="Ex: 2,5 ou 2.5 ou 2:30"
+                    />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
-                    <Input type="number" value={formData.U_HExtraNot} onChange={e => setFormData({...formData, U_HExtraNot: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                    </div>
+                    <DecimalInput 
+                      value={formData.U_HExtraNot} 
+                      onChange={val => setFormData({...formData, U_HExtraNot: val})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      placeholder="0,0"
+                      title="Ex: 2,5 ou 2.5 ou 2:30"
+                    />
                   </div>
                 </div>
 
@@ -7419,6 +7988,10 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                     <div className="flex justify-between text-white/80">
                       <span>Noturno Dobrado:</span>
                       <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNob.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-300">
+                      <span>Dobra Colaborador ({currentBreakdown.percDobraColaborador}%):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalDobraColaborador.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-white/80">
                       <span>H.E. Diurna (1.5x):</span>
@@ -7650,21 +8223,39 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
-                    <Input type="number" value={formData.U_HorasNor} onChange={e => setFormData({...formData, U_HorasNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <DecimalInput value={formData.U_HorasNor} onChange={val => setFormData({...formData, U_HorasNor: val})} className="rounded-none h-10 border-evo-bg font-bold" placeholder="0,0" />
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
-                    <Input type="number" value={formData.U_HorasNob} onChange={e => setFormData({...formData, U_HorasNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <DecimalInput value={formData.U_HorasNob} onChange={val => setFormData({...formData, U_HorasNob: val})} className="rounded-none h-10 border-evo-bg font-bold" placeholder="0,0" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
-                    <Input type="number" value={formData.U_HENor} onChange={e => setFormData({...formData, U_HENor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                    </div>
+                    <DecimalInput 
+                      value={formData.U_HENor} 
+                      onChange={val => setFormData({...formData, U_HENor: val})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      placeholder="0,0"
+                      title="Ex: 2,5 ou 2.5 ou 2:30"
+                    />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
-                    <Input type="number" value={formData.U_HENob} onChange={e => setFormData({...formData, U_HENob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                    </div>
+                    <DecimalInput 
+                      value={formData.U_HENob} 
+                      onChange={val => setFormData({...formData, U_HENob: val})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      placeholder="0,0"
+                      title="Ex: 2,5 ou 2.5 ou 2:30"
+                    />
                   </div>
                 </div>
 

@@ -13,6 +13,45 @@ export interface PersonnelCostInput {
   noturnoNob: number;            // M41 - Noturno Dobrado / Stand-by (ex: 1)
   hExtraDiurna: number;          // N41 - Horas Extras Diurnas (ex: 1)
   hExtraNoturna: number;         // O41 - Horas Extras Noturnas (ex: 1)
+  qtdDobraColaborador?: number;  // Qtd Dobras de Colaborador (ex: 1, 1.5, 2)
+  percDobraColaborador?: number; // Percentual da Dobra (40% ou 50%, padrão 50)
+}
+
+/**
+ * Converte entradas de horas ou valores decimais aceitando tanto vírgula (,) quanto ponto (.)
+ * e também formato de hora (ex: "2:30" => 2.5 horas, "1:15" => 1.25 horas).
+ */
+export function parseDecimalInput(val: string | number | undefined | null): number {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  const clean = String(val).trim();
+  if (!clean) return 0;
+
+  // Suporte a formato HH:MM (ex: 2:30 -> 2.5, 01:15 -> 1.25)
+  if (clean.includes(':')) {
+    const parts = clean.split(':');
+    const hours = parseFloat(parts[0]) || 0;
+    const minutes = parseFloat(parts[1]) || 0;
+    const sign = hours < 0 ? -1 : 1;
+    const result = sign * (Math.abs(hours) + (minutes / 60));
+    return Math.round(result * 1000) / 1000;
+  }
+
+  // Converte vírgula para ponto
+  const normalized = clean.replace(',', '.');
+  const num = parseFloat(normalized);
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Formata um número para exibição em campos com vírgula (formato brasileiro)
+ */
+export function formatDecimalInput(val: number | string | undefined | null): string {
+  if (val === undefined || val === null || val === '') return '0';
+  const num = typeof val === 'number' ? val : parseDecimalInput(val);
+  if (isNaN(num) || num === 0) return '0';
+  const rounded = Math.round(num * 1000) / 1000;
+  return String(rounded).replace('.', ',');
 }
 
 /**
@@ -119,6 +158,12 @@ export interface PersonnelCostBreakdown {
   totalNoturnoDobrado: number;      // M * I
   totalNoturnoNob: number;          // M * I (Alias)
 
+  // Dobra de Colaborador (Proposta Comercial - 40% ou 50%)
+  qtdDobraColaborador: number;
+  percDobraColaborador: number;     // 40 ou 50 (%)
+  unitDobraColaborador: number;     // H * (perc / 100)
+  totalDobraColaborador: number;    // Qtd * unitDobra
+
   // Taxas e Horas Extras (Valores Unitários por hora e Totais)
   unitHrExtraDiurna: number;        // (H / 12) * 1.5
   totalHrExtraDiurna: number;       // ((H / 12) * 1.5) * N
@@ -146,6 +191,10 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
   const M = Math.max(0, Number(input.noturnoNob) || 0);
   const N = Math.max(0, Number(input.hExtraDiurna) || 0);
   const O = Math.max(0, Number(input.hExtraNoturna) || 0);
+  const P = Math.max(0, Number(input.qtdDobraColaborador) || 0);
+  const percDobra = (input.percDobraColaborador !== undefined && Number(input.percDobraColaborador) > 0)
+    ? Number(input.percDobraColaborador)
+    : 50;
 
   // Componentes de Diárias e Noturnos
   const totalDiariasNormais = J * H;
@@ -154,6 +203,10 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
   const adicionalNoturnoNormal = L * H;
   const totalNoturnoNormal = taxaNoturnoNormal + adicionalNoturnoNormal;
   const totalNoturnoDobrado = M * I;
+
+  // Dobra de Colaborador (40% ou 50% do Valor Normal da Diária conforme Proposta Comercial)
+  const unitDobraColaborador = H * (percDobra / 100);
+  const totalDobraColaborador = P * unitDobraColaborador;
 
   // Componentes de Horas Extras
   const valorHoraBase = H > 0 ? H / 12 : 0;
@@ -171,7 +224,7 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
   const totalHExtraNoturna = totalHrExtraNoturna + totalTxExtraNoturna;
 
   // Consolidados
-  const totalTaxas = taxaNoturnoNormal + totalTxExtraNoturna;
+  const totalTaxas = taxaNoturnoNormal + totalTxExtraNoturna + totalDobraColaborador;
   
   const totalGeral = 
     totalDiariasNormais + 
@@ -179,6 +232,7 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
     taxaNoturnoNormal + 
     adicionalNoturnoNormal + 
     totalNoturnoDobrado + 
+    totalDobraColaborador +
     totalHrExtraDiurna + 
     totalTxExtraNoturna + 
     totalHrExtraNoturna;
@@ -193,6 +247,10 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
     noturnoNob: M,
     hExtraDiurna: N,
     hExtraNoturna: O,
+    qtdDobraColaborador: P,
+    percDobraColaborador: percDobra,
+    unitDobraColaborador,
+    totalDobraColaborador,
     totalDiariasNormais,
     totalDiariasNormal: totalDiariasNormais,
     totalDiariasStandBy,

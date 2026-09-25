@@ -1231,10 +1231,17 @@ export const sapService = {
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
               CostingCode4: lineProj,
               ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProj !== 'BASE' ? lineProj : undefined),
+              DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
               U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
               BPL_IDAssignedToInvoice: 1
             };
           });
+        }
+        if (sanitized.DiscountPercent !== undefined && sanitized.DiscountPercent !== null) {
+          sanitized.DiscountPercent = Number(sanitized.DiscountPercent);
+        }
+        if (sanitized.TotalDiscount !== undefined && sanitized.TotalDiscount !== null && Number(sanitized.TotalDiscount) > 0) {
+          sanitized.TotalDiscount = Number(sanitized.TotalDiscount);
         }
         return sanitized;
       };
@@ -1271,10 +1278,17 @@ export const sapService = {
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
               CostingCode4: lineProj,
               ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProj !== 'BASE' ? lineProj : undefined),
+              DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
               U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
               BPL_IDAssignedToInvoice: 1
             };
           });
+        }
+        if (sanitized.DiscountPercent !== undefined && sanitized.DiscountPercent !== null) {
+          sanitized.DiscountPercent = Number(sanitized.DiscountPercent);
+        }
+        if (sanitized.TotalDiscount !== undefined && sanitized.TotalDiscount !== null && Number(sanitized.TotalDiscount) > 0) {
+          sanitized.TotalDiscount = Number(sanitized.TotalDiscount);
         }
         return sanitized;
       };
@@ -1358,6 +1372,7 @@ export const sapService = {
           CostingCode4: lineProject,
           CostingCode5: line.CostingCode5 || undefined,
           ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProject !== 'BASE' ? lineProject : undefined),
+          DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
           U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
           U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
@@ -1375,6 +1390,13 @@ export const sapService = {
         BPL_IDAssignedToInvoice: 1,
         DocumentLines: sanitizedLines
       };
+
+      if (data.DiscountPercent !== undefined && data.DiscountPercent !== null) {
+        payload.DiscountPercent = Number(data.DiscountPercent);
+      }
+      if (data.TotalDiscount !== undefined && data.TotalDiscount !== null && Number(data.TotalDiscount) > 0) {
+        payload.TotalDiscount = Number(data.TotalDiscount);
+      }
 
       if (headerProject && headerProject !== 'BASE') {
         payload.Project = headerProject;
@@ -1414,6 +1436,7 @@ export const sapService = {
           CostingCode4: lineProject,
           CostingCode5: line.CostingCode5 || undefined,
           ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProject !== 'BASE' ? lineProject : undefined),
+          DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
           U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
           U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
@@ -1427,6 +1450,13 @@ export const sapService = {
         BPL_IDAssignedToInvoice: 1,
         DocumentLines: sanitizedLines
       };
+
+      if (data.DiscountPercent !== undefined && data.DiscountPercent !== null) {
+        patchPayload.DiscountPercent = Number(data.DiscountPercent);
+      }
+      if (data.TotalDiscount !== undefined && data.TotalDiscount !== null && Number(data.TotalDiscount) > 0) {
+        patchPayload.TotalDiscount = Number(data.TotalDiscount);
+      }
 
       if (data.DocDueDate) {
         patchPayload.DocDueDate = data.DocDueDate.split('T')[0];

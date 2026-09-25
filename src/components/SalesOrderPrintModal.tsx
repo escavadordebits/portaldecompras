@@ -209,6 +209,12 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       } else {
         const vlrNormal = Number(line.Price || line.UnitPrice || 500);
         const standByRate = vlrNormal * 0.5;
+        const qtdDobra = Number(line.U_QtdDobra || 0);
+        const percDobra = Number(line.U_PercDobra || 50);
+        const valDobra = qtdDobra * (vlrNormal * (percDobra / 100));
+        const taxaDobText = qtdDobra > 0 
+          ? `${valDobra.toFixed(2).replace('.', ',')} (${percDobra}%)`
+          : '0,00  0,00';
         services.push({
           inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : (idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
           fim: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : (idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
@@ -219,8 +225,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           diariasNormalMob: '1  1',
           noturnoNorDob: '1  1',
           hrExtrasDiurNot: '1  1',
-          taxaDobDiurNot: '0,00  0,00',
-          totalTaxas: '0,00',
+          taxaDobDiurNot: taxaDobText,
+          totalTaxas: valDobra > 0 ? valDobra.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00',
           totalGeral: lineTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       }
@@ -298,18 +304,24 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       return acc + num;
     }, 0);
 
-    const disc = Number(currentDoc.TotalDiscount || currentDoc.DiscountPercent ? (calcServ + calcRent) * ((Number(currentDoc.DiscountPercent) || 0) / 100) : 150.00);
+    let disc = 0;
+    if (currentDoc.TotalDiscount && Number(currentDoc.TotalDiscount) > 0) {
+      disc = Number(currentDoc.TotalDiscount);
+    } else if (currentDoc.DiscountPercent && Number(currentDoc.DiscountPercent) > 0) {
+      disc = (calcServ + calcRent) * ((Number(currentDoc.DiscountPercent) || 0) / 100);
+    }
+
     const total = (currentDoc.DocTotal && Number(currentDoc.DocTotal) > 0)
       ? Number(currentDoc.DocTotal)
-      : (calcServ + calcRent - disc);
+      : Math.max(0, calcServ + calcRent - disc);
 
     return {
       serviceLines: services,
       rentalLines: rentals,
-      servPrestado: calcServ > 0 ? calcServ : 26918.00,
-      equipLocados: calcRent > 0 ? calcRent : 1867.64,
-      descontos: disc > 0 ? disc : 150.00,
-      totalGeral: total > 0 ? total : 28635.64
+      servPrestado: calcServ > 0 ? calcServ : (services.length > 0 ? 0 : 26918.00),
+      equipLocados: calcRent > 0 ? calcRent : (rentals.length > 0 ? 0 : 1867.64),
+      descontos: disc,
+      totalGeral: total > 0 ? total : Math.max(0, calcServ + calcRent - disc)
     };
   }, [currentDoc]);
 
