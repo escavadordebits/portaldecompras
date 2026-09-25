@@ -75,7 +75,7 @@ import {
   signOut 
 } from 'firebase/auth';
 import { sapService, normalizeSapCompany } from './services/sapService';
-import { calculatePersonnelCost } from './utils/costCalculations';
+import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween } from './utils/costCalculations';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
 import { APP_VERSION_TAG } from './config/version';
@@ -1223,7 +1223,12 @@ export default function App() {
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <Logo size="md" className="bg-white text-evo-teal shadow-none" />
             <div className="flex flex-col leading-none">
-              <span className="font-bold text-lg sm:text-xl tracking-tighter text-white">QUALITECH</span>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-lg sm:text-xl tracking-tighter text-white">QUALITECH</span>
+                <span className="bg-evo-teal/30 text-teal-200 border border-teal-400/40 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded tracking-wider shadow-sm">
+                  {APP_VERSION_TAG}
+                </span>
+              </div>
               <span className="text-[7px] sm:text-[8px] uppercase tracking-[0.2em] font-medium opacity-70 text-white">Procurement Service</span>
             </div>
           </div>
@@ -3610,7 +3615,7 @@ function ListOrdersView({
                       {selectedOrder?.DocumentLines?.map((line: any, idx: number) => (
                         <TableRow key={idx} className="border-evo-bg transition-colors hover:bg-evo-bg/40">
                           <TableCell className="px-8 py-5">
-                            <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">{line.ItemDescription}</p>
+                            <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">{line.ItemDescription || line.ItemName || line.Dscription || '-'}</p>
                             <p className="text-[9px] font-bold text-evo-teal/60 tracking-widest">{line.ItemCode}</p>
                           </TableCell>
                           <TableCell className="px-6 py-5 font-bold text-xs text-evo-dark">{line.Quantity}</TableCell>
@@ -4616,13 +4621,14 @@ function CostsView() {
   const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
+  const todayStr = new Date().toISOString().split('T')[0];
   const initialPersForm = {
-    U_DataInicial: new Date().toISOString().split('T')[0],
-    U_DataFinal: new Date().toISOString().split('T')[0],
+    U_DataInicial: todayStr,
+    U_DataFinal: todayStr,
     U_Colaborador: '',
     U_VlNormal: 0,
     U_StandByRate: 0,
-    U_QtdDiariasNormal: 0,
+    U_QtdDiariasNormal: calculateNormalDiarias(todayStr, todayStr, 0, 0),
     U_QtdDiariasStandBy: 0,
     U_NoturnoNor: 0,
     U_NoturnoNob: 0,
@@ -4645,6 +4651,23 @@ function CostsView() {
 
   const [formData, setFormData] = useState(initialPersForm);
   const [rentalFormData, setRentalFormData] = useState(initialRentalForm);
+
+  // Recalcula Qtd Diárias (Normal) automaticamente fiel à fórmula Excel: =SE(B41="";0;C41-B41+1-K41-L41)
+  const updatePersDatesOrDeductions = (updates: Partial<typeof formData>) => {
+    setFormData(prev => {
+      const next = { ...prev, ...updates };
+      const calculatedNormal = calculateNormalDiarias(
+        next.U_DataInicial,
+        next.U_DataFinal,
+        next.U_QtdDiariasStandBy,
+        next.U_NoturnoNor
+      );
+      return {
+        ...next,
+        U_QtdDiariasNormal: calculatedNormal
+      };
+    });
+  };
 
   // Computa o breakdown de receitas/custos fiel à planilha Excel e ao SAP
   const currentPersBreakdown = calculatePersonnelCost({
@@ -4884,11 +4907,11 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
-                        <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="date" value={formData.U_DataInicial} onChange={e => updatePersDatesOrDeductions({ U_DataInicial: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
-                        <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="date" value={formData.U_DataFinal} onChange={e => updatePersDatesOrDeductions({ U_DataFinal: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4 border-t border-evo-bg pt-4">
@@ -4897,8 +4920,11 @@ function CostsView() {
                         <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({...formData, U_VlNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
-                        <Input type="number" step="0.5" value={formData.U_QtdDiariasNormal} onChange={e => setFormData({...formData, U_QtdDiariasNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <div className="flex justify-between items-center">
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tighter" title="Fórmula Excel: =SE(B41=&quot;&quot;;0;C41-B41+1-K41-L41)">Auto (Excel)</span>
+                        </div>
+                        <Input type="number" step="0.5" value={formData.U_QtdDiariasNormal} onChange={e => setFormData({...formData, U_QtdDiariasNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -4908,7 +4934,7 @@ function CostsView() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
-                        <Input type="number" step="0.5" value={formData.U_QtdDiariasStandBy} onChange={e => setFormData({...formData, U_QtdDiariasStandBy: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="number" step="0.5" value={formData.U_QtdDiariasStandBy} onChange={e => updatePersDatesOrDeductions({ U_QtdDiariasStandBy: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
                   </div>
@@ -4917,7 +4943,7 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
-                        <Input type="number" value={formData.U_NoturnoNor} onChange={e => setFormData({...formData, U_NoturnoNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="number" value={formData.U_NoturnoNor} onChange={e => updatePersDatesOrDeductions({ U_NoturnoNor: parseInt(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Nob</Label>
@@ -5302,7 +5328,7 @@ function QuotationsView({
       NumAtCard: '',
       Comments: '',
       DocumentLines: [
-        { ItemCode: '', Quantity: 1, Price: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -5311,6 +5337,21 @@ function QuotationsView({
   const handleEdit = async (quote: any) => {
     try {
       const fullQuote = await sapService.getQuotation(quote.DocEntry);
+      if (fullQuote && fullQuote.DocumentLines) {
+        fullQuote.DocumentLines = fullQuote.DocumentLines.map((l: any) => {
+          const nItem = l.U_nItem ?? l.U_nITEM ?? '';
+          const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
+          return {
+            ...l,
+            ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
+            U_nItem: nItem,
+            U_nITEM: nItem,
+            U_ItemLoc: itemLoc,
+            U_ITEMLOC: itemLoc,
+            Price: l.Price ?? l.UnitPrice ?? 0
+          };
+        });
+      }
       setSelectedQuote(fullQuote);
       setIsModalOpen(true);
     } catch (error) {
@@ -5322,13 +5363,32 @@ function QuotationsView({
     if (!selectedQuote) return;
     setIsOrderLoading(true);
     try {
+      const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
+      const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => ({
+        ...line,
+        CostingCode: line.CostingCode || 'BR',
+        CostingCode2: line.CostingCode2 || 'MATRIZ',
+        CostingCode3: line.CostingCode3 || 'OPER_OFF',
+        CostingCode4: line.CostingCode4 || line.ProjectCode || proj,
+        ProjectCode: line.ProjectCode || proj
+      }));
+
+      const quoteToSave = {
+        ...selectedQuote,
+        U_Projeto: proj,
+        Project: proj,
+        ProjectCode: proj,
+        CostingCode4: proj,
+        DocumentLines: preparedLines
+      };
+
       let savedQuote;
       if (selectedQuote.DocEntry) {
-        await sapService.updateQuotation(selectedQuote.DocEntry, selectedQuote);
+        await sapService.updateQuotation(selectedQuote.DocEntry, quoteToSave);
         savedQuote = await sapService.getQuotation(selectedQuote.DocEntry);
         toast.success('Cotação atualizada com sucesso!');
       } else {
-        savedQuote = await sapService.createQuotation(selectedQuote);
+        savedQuote = await sapService.createQuotation(quoteToSave);
         toast.success('Cotação criada com sucesso!');
       }
       
@@ -5336,18 +5396,27 @@ function QuotationsView({
       if (savedQuote && savedQuote.DocEntry) {
         try {
           toast.info('Iniciando geração automática do Pedido de Venda...');
-          await sapService.createOrderFromQuotation(savedQuote);
+          await sapService.createOrderFromQuotation({
+            ...savedQuote,
+            U_Projeto: proj,
+            CostingCode4: proj,
+            Project: proj,
+            ProjectCode: proj,
+            DocumentLines: preparedLines
+          });
           toast.success('Pedido de Venda criado e Cotação encerrada com sucesso!');
-        } catch (orderErr) {
+        } catch (orderErr: any) {
           console.warn('Erro na conversão automática para Pedido de Venda:', orderErr);
-          toast.warning('Cotação salva, porém não foi possível converter em Pedido automaticamente.');
+          const errDetail = orderErr?.response?.data?.error?.message?.value || orderErr?.message || '';
+          toast.warning(`Cotação salva, porém erro ao converter em Pedido: ${errDetail}`);
         }
       }
       
       fetchQuotations();
       setIsModalOpen(false);
-    } catch (error) {
-      toast.error('Erro ao salvar cotação.');
+    } catch (error: any) {
+      const errDetail = error?.response?.data?.error?.message?.value || error?.message || '';
+      toast.error(`Erro ao salvar cotação: ${errDetail}`);
     } finally {
       setIsOrderLoading(false);
     }
@@ -5357,23 +5426,44 @@ function QuotationsView({
     if (!selectedQuote?.DocEntry) return;
     setIsOrderLoading(true);
     try {
-      await sapService.createOrderFromQuotation(selectedQuote);
+      const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
+      await sapService.createOrderFromQuotation({
+        ...selectedQuote,
+        U_Projeto: proj,
+        CostingCode4: proj,
+        Project: proj,
+        ProjectCode: proj
+      });
       toast.success('Pedido de Venda criado com sucesso! Cotação encerrada.');
       fetchQuotations();
       setIsModalOpen(false);
-    } catch (error) {
-      toast.error('Erro ao gerar pedido.');
+    } catch (error: any) {
+      const errDetail = error?.response?.data?.error?.message?.value || error?.message || '';
+      toast.error(`Erro ao gerar pedido: ${errDetail}`);
     } finally {
       setIsOrderLoading(false);
     }
   };
 
   const handleAddLine = () => {
+    const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
     setSelectedQuote({
       ...selectedQuote,
       DocumentLines: [
         ...selectedQuote.DocumentLines,
-        { ItemCode: '', Quantity: 1, Price: 0, ProjectCode: selectedQuote.U_Projeto || '', U_nITEM: '', U_ItemLoc: '' }
+        { 
+          ItemCode: '', 
+          ItemDescription: '', 
+          Quantity: 1, 
+          Price: 0, 
+          CostingCode: 'BR',
+          CostingCode2: 'MATRIZ',
+          CostingCode3: 'OPER_OFF',
+          CostingCode4: proj,
+          ProjectCode: proj, 
+          U_nITEM: '', 
+          U_ItemLoc: '' 
+        }
       ]
     });
   };
@@ -5619,19 +5709,34 @@ function QuotationsView({
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
                     <Input 
-                      value={selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
+                      list="quotation-projects-list"
+                      value={selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
                       onChange={(e) => {
                         const val = e.target.value;
+                        const updatedLines = (selectedQuote.DocumentLines || []).map((l: any) => ({
+                          ...l,
+                          CostingCode4: val,
+                          ProjectCode: val
+                        }));
                         setSelectedQuote({ 
                           ...selectedQuote, 
                           U_Projeto: val,
                           Project: val,
-                          ProjectCode: val
+                          ProjectCode: val,
+                          CostingCode4: val,
+                          DocumentLines: updatedLines
                         });
                       }}
                       placeholder="EX: WO 2040 OU PROJETO"
                       className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
                     />
+                    <datalist id="quotation-projects-list">
+                      {projects.map((p) => (
+                        <option key={p.Code} value={p.Code}>
+                          {p.Name}
+                        </option>
+                      ))}
+                    </datalist>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
@@ -5679,7 +5784,7 @@ function QuotationsView({
                     <Table className="min-w-[800px]">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Cód. Item</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-28 text-center">Quant.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-36 text-center">Preço Unit.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Vinculação de Custos (Pessoal / Locação)</TableHead>
@@ -5689,32 +5794,47 @@ function QuotationsView({
                       <TableBody>
                         {selectedQuote.DocumentLines.map((line: any, idx: number) => (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-6 py-4">
-                              <div className="space-y-1">
-                                <div className="flex gap-1">
+                            <TableCell className="px-6 py-4 min-w-[280px]">
+                              <div className="space-y-1.5">
+                                <div className="flex gap-1.5">
                                   <Input 
-                                    value={line.ItemCode}
+                                    value={line.ItemCode || ''}
                                     onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    className="h-10 rounded-none text-xs border-evo-bg bg-transparent font-bold focus:bg-white flex-1"
-                                    placeholder="EX: ITEM-001"
+                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1"
+                                    placeholder="CÓDIGO (EX: ITEM-001)"
                                   />
                                   <Button 
                                     size="sm" 
                                     variant="outline" 
-                                    className="h-10 w-10 p-0 rounded-none border-evo-bg"
+                                    className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
                                     onClick={() => {
                                       setLineIndexForLookup(idx);
                                       setIsItemLookupOpen(true);
                                     }}
+                                    title="Pesquisar Item no SAP"
                                   >
                                     <Search className="w-3.5 h-3.5" />
                                   </Button>
                                 </div>
-                                {(line.ItemDescription || line.ItemName) && (
-                                  <p className="text-[10px] font-black text-evo-teal uppercase tracking-tight truncate max-w-[250px] mt-1 bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal">
-                                    {line.ItemDescription || line.ItemName}
-                                  </p>
-                                )}
+                                <div className="space-y-1">
+                                  <Input 
+                                    value={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      updateLine(idx, 'ItemDescription', val);
+                                      updateLine(idx, 'ItemName', val);
+                                      updateLine(idx, 'Dscription', val);
+                                    }}
+                                    className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
+                                    placeholder="Descrição do item ou serviço..."
+                                    title={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                  />
+                                  {(line.ItemDescription || line.ItemName || line.Dscription) && (
+                                    <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
+                                      {line.ItemDescription || line.ItemName || line.Dscription}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell className="px-4 py-4">
@@ -5737,49 +5857,55 @@ function QuotationsView({
                               </div>
                             </TableCell>
                             <TableCell className="px-6 py-4">
-                              <div className="flex items-center gap-6">
-                                <div className="flex flex-col gap-1">
-                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
-                                  <div className="flex items-center gap-2">
-                                    <Button 
-                                      size="sm" 
-                                      variant="ghost" 
-                                      className={`h-8 w-8 p-0 border rounded-none transition-all ${line.U_nITEM ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
-                                      onClick={() => {
-                                        setActiveLineIndex(idx);
-                                        setIsPersCostModalOpen(true);
-                                      }}
-                                    >
-                                      <User className="w-3.5 h-3.5" />
-                                    </Button>
-                                    <span className={`text-[9px] font-black uppercase ${line.U_nITEM ? 'text-evo-teal' : 'text-rose-400'}`}>
-                                      {line.U_nITEM ? `#${line.U_nITEM}` : 'PENDENTE'}
-                                    </span>
-                                  </div>
-                                </div>
+                              {(() => {
+                                const nItemVal = line.U_nItem || line.U_nITEM;
+                                const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
+                                return (
+                                  <div className="flex items-center gap-6">
+                                    <div className="flex flex-col gap-1">
+                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                      <div className="flex items-center gap-2">
+                                        <Button 
+                                          size="sm" 
+                                          variant="ghost" 
+                                          className={`h-8 w-8 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                          onClick={() => {
+                                            setActiveLineIndex(idx);
+                                            setIsPersCostModalOpen(true);
+                                          }}
+                                        >
+                                          <User className="w-3.5 h-3.5" />
+                                        </Button>
+                                        <span className={`text-[9px] font-black uppercase ${nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                          {nItemVal ? `#${nItemVal}` : 'PENDENTE'}
+                                        </span>
+                                      </div>
+                                    </div>
 
-                                <div className="w-[1px] h-8 bg-evo-bg" />
+                                    <div className="w-[1px] h-8 bg-evo-bg" />
 
-                                <div className="flex flex-col gap-1">
-                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
-                                  <div className="flex items-center gap-2">
-                                    <Button 
-                                      size="sm" 
-                                      variant="ghost" 
-                                      className={`h-8 w-8 p-0 border rounded-none transition-all ${line.U_ItemLoc ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
-                                      onClick={() => {
-                                        setActiveLineIndex(idx);
-                                        setIsRentalCostModalOpen(true);
-                                      }}
-                                    >
-                                      <Truck className="w-3.5 h-3.5" />
-                                    </Button>
-                                    <span className={`text-[9px] font-black uppercase ${line.U_ItemLoc ? 'text-evo-teal' : 'text-indigo-400'}`}>
-                                      {line.U_ItemLoc ? `#${line.U_ItemLoc}` : 'PENDENTE'}
-                                    </span>
+                                    <div className="flex flex-col gap-1">
+                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                      <div className="flex items-center gap-2">
+                                        <Button 
+                                          size="sm" 
+                                          variant="ghost" 
+                                          className={`h-8 w-8 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                          onClick={() => {
+                                            setActiveLineIndex(idx);
+                                            setIsRentalCostModalOpen(true);
+                                          }}
+                                        >
+                                          <Truck className="w-3.5 h-3.5" />
+                                        </Button>
+                                        <span className={`text-[9px] font-black uppercase ${itemLocVal ? 'text-evo-teal' : 'text-indigo-400'}`}>
+                                          {itemLocVal ? `#${itemLocVal}` : 'PENDENTE'}
+                                        </span>
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="px-6 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10">
                               R$ {(line.Quantity * line.Price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -5825,10 +5951,13 @@ function QuotationsView({
         onSelect={(item) => {
           if (lineIndexForLookup !== null) {
             const newLines = [...selectedQuote.DocumentLines];
+            const desc = item.ItemName || item.ItemDescription || '';
             newLines[lineIndexForLookup] = { 
               ...newLines[lineIndexForLookup], 
               ItemCode: item.ItemCode, 
-              ItemDescription: item.ItemName 
+              ItemDescription: desc,
+              ItemName: desc,
+              Dscription: desc
             };
             setSelectedQuote({ ...selectedQuote, DocumentLines: newLines });
           }
@@ -5874,9 +6003,11 @@ function QuotationsView({
         onClose={() => setIsPersCostModalOpen(false)}
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
-        onSaved={(id) => {
+        existingCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].U_nItem || selectedQuote.DocumentLines[activeLineIndex].U_nITEM) : null}
+        onSaved={(code) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_nITEM', id.toString());
+            updateLine(activeLineIndex, 'U_nItem', code);
+            updateLine(activeLineIndex, 'U_nITEM', code);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -5888,9 +6019,11 @@ function QuotationsView({
         onClose={() => setIsRentalCostModalOpen(false)}
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
-        onSaved={(id) => {
+        existingCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].U_ItemLoc || selectedQuote.DocumentLines[activeLineIndex].U_ITEMLOC) : null}
+        onSaved={(code) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_ItemLoc', id.toString());
+            updateLine(activeLineIndex, 'U_ItemLoc', code);
+            updateLine(activeLineIndex, 'U_ITEMLOC', code);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -6037,6 +6170,21 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   const handleEdit = async (order: any) => {
     try {
       const fullOrder = await sapService.getOrder(order.DocEntry);
+      if (fullOrder && fullOrder.DocumentLines) {
+        fullOrder.DocumentLines = fullOrder.DocumentLines.map((l: any) => {
+          const nItem = l.U_nItem ?? l.U_nITEM ?? '';
+          const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
+          return {
+            ...l,
+            ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
+            U_nItem: nItem,
+            U_nITEM: nItem,
+            U_ItemLoc: itemLoc,
+            U_ITEMLOC: itemLoc,
+            Price: l.Price ?? l.UnitPrice ?? 0
+          };
+        });
+      }
       setSelectedOrder(fullOrder);
       setIsModalOpen(true);
     } catch (error) {
@@ -6052,17 +6200,37 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     }
     setIsSaving(true);
     try {
+      const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
+      const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => ({
+        ...line,
+        CostingCode: line.CostingCode || 'BR',
+        CostingCode2: line.CostingCode2 || 'MATRIZ',
+        CostingCode3: line.CostingCode3 || 'OPER_OFF',
+        CostingCode4: line.CostingCode4 || line.ProjectCode || proj,
+        ProjectCode: line.ProjectCode || proj
+      }));
+
+      const orderToSave = {
+        ...selectedOrder,
+        U_Projeto: proj,
+        Project: proj,
+        ProjectCode: proj,
+        CostingCode4: proj,
+        DocumentLines: preparedLines
+      };
+
       if (selectedOrder.DocEntry) {
-        await sapService.updateOrder(selectedOrder.DocEntry, selectedOrder);
+        await sapService.updateOrder(selectedOrder.DocEntry, orderToSave);
         toast.success('Pedido de Venda atualizado!');
       } else {
-        await sapService.createOrder(selectedOrder);
+        await sapService.createOrder(orderToSave);
         toast.success('Pedido de Venda criado com sucesso no SAP!');
       }
       fetchOrders();
       setIsModalOpen(false);
-    } catch (error) {
-      toast.error('Erro ao salvar pedido de venda.');
+    } catch (error: any) {
+      const errDetail = error?.response?.data?.error?.message?.value || error?.message || '';
+      toast.error(`Erro ao salvar pedido de venda: ${errDetail}`);
     } finally {
       setIsSaving(false);
     }
@@ -6085,11 +6253,24 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   };
 
   const handleAddLine = () => {
+    const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
     setSelectedOrder({
       ...selectedOrder,
       DocumentLines: [
         ...selectedOrder.DocumentLines,
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, CostingCode: '', ProjectCode: selectedOrder.U_Projeto || '', U_nITEM: '', U_ItemLoc: '' }
+        { 
+          ItemCode: '', 
+          ItemDescription: '', 
+          Quantity: 1, 
+          Price: 0, 
+          CostingCode: 'BR', 
+          CostingCode2: 'MATRIZ',
+          CostingCode3: 'OPER_OFF',
+          CostingCode4: proj,
+          ProjectCode: proj, 
+          U_nITEM: '', 
+          U_ItemLoc: '' 
+        }
       ]
     });
   };
@@ -6397,19 +6578,34 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
                     <Input 
-                      value={selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
+                      list="order-projects-list"
+                      value={selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
                       onChange={(e) => {
                         const val = e.target.value;
+                        const updatedLines = (selectedOrder.DocumentLines || []).map((l: any) => ({
+                          ...l,
+                          CostingCode4: val,
+                          ProjectCode: val
+                        }));
                         setSelectedOrder({ 
                           ...selectedOrder, 
                           U_Projeto: val,
                           Project: val,
-                          ProjectCode: val
+                          ProjectCode: val,
+                          CostingCode4: val,
+                          DocumentLines: updatedLines
                         });
                       }}
                       placeholder="EX: WO 2040 OU PROJETO"
                       className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
                     />
+                    <datalist id="order-projects-list">
+                      {projects.map((p) => (
+                        <option key={p.Code} value={p.Code}>
+                          {p.Name}
+                        </option>
+                      ))}
+                    </datalist>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
@@ -6459,7 +6655,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                     <Table className="min-w-[1200px]">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Cód. Item</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Quant.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-28 text-center">Preço Unit.</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Centro de Custo</TableHead>
@@ -6472,32 +6668,47 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                       <TableBody>
                         {selectedOrder.DocumentLines.map((line: any, idx: number) => (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-4 py-4">
-                              <div className="space-y-1">
-                                <div className="flex gap-1">
+                            <TableCell className="px-4 py-4 min-w-[280px]">
+                              <div className="space-y-1.5">
+                                <div className="flex gap-1.5">
                                   <Input 
-                                    value={line.ItemCode}
+                                    value={line.ItemCode || ''}
                                     onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    className="h-10 rounded-none text-xs border-evo-bg bg-transparent font-bold focus:bg-white flex-1 min-w-[120px]"
-                                    placeholder="EX: ITEM-001"
+                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 min-w-[120px]"
+                                    placeholder="CÓDIGO (EX: ITEM-001)"
                                   />
                                   <Button 
                                     size="sm" 
                                     variant="outline" 
-                                    className="h-10 w-10 p-0 rounded-none border-evo-bg shrink-0"
+                                    className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
                                     onClick={() => {
                                       setLineIndexForLookup(idx);
                                       setIsItemLookupOpen(true);
                                     }}
+                                    title="Pesquisar Item no SAP"
                                   >
                                     <Search className="w-3.5 h-3.5" />
                                   </Button>
                                 </div>
-                                {(line.ItemDescription || line.ItemName) && (
-                                  <p className="text-[10px] font-black text-evo-teal uppercase tracking-tight truncate max-w-[200px] mt-1 bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal">
-                                    {line.ItemDescription || line.ItemName}
-                                  </p>
-                                )}
+                                <div className="space-y-1">
+                                  <Input 
+                                    value={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      updateLine(idx, 'ItemDescription', val);
+                                      updateLine(idx, 'ItemName', val);
+                                      updateLine(idx, 'Dscription', val);
+                                    }}
+                                    className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
+                                    placeholder="Descrição do item ou serviço..."
+                                    title={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                  />
+                                  {(line.ItemDescription || line.ItemName || line.Dscription) && (
+                                    <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
+                                      {line.ItemDescription || line.ItemName || line.Dscription}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell className="px-2 py-4">
@@ -6535,8 +6746,12 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                             </TableCell>
                             <TableCell className="px-4 py-4">
                               <select 
-                                value={line.ProjectCode || ''}
-                                onChange={(e) => updateLine(idx, 'ProjectCode', e.target.value)}
+                                value={line.CostingCode4 || line.ProjectCode || ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  updateLine(idx, 'CostingCode4', val);
+                                  updateLine(idx, 'ProjectCode', val);
+                                }}
                                 className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
                               >
                                 <option value="">Nenhum Projeto</option>
@@ -6548,49 +6763,55 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                               </select>
                             </TableCell>
                             <TableCell className="px-4 py-4">
-                              <div className="flex items-center gap-4">
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
-                                  <div className="flex items-center gap-1.5">
-                                    <Button 
-                                      size="sm" 
-                                      variant="ghost" 
-                                      className={`h-7 w-7 p-0 border rounded-none transition-all ${line.U_nITEM ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
-                                      onClick={() => {
-                                        setActiveLineIndex(idx);
-                                        setIsPersCostModalOpen(true);
-                                      }}
-                                    >
-                                      <User className="w-3 h-3" />
-                                    </Button>
-                                    <span className={`text-[8px] font-black uppercase ${line.U_nITEM ? 'text-evo-teal' : 'text-rose-400'}`}>
-                                      {line.U_nITEM ? `#${line.U_nITEM}` : 'S/ CUSTO'}
-                                    </span>
-                                  </div>
-                                </div>
+                              {(() => {
+                                const nItemVal = line.U_nItem || line.U_nITEM;
+                                const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
+                                return (
+                                  <div className="flex items-center gap-4">
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <Button 
+                                          size="sm" 
+                                          variant="ghost" 
+                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                          onClick={() => {
+                                            setActiveLineIndex(idx);
+                                            setIsPersCostModalOpen(true);
+                                          }}
+                                        >
+                                          <User className="w-3 h-3" />
+                                        </Button>
+                                        <span className={`text-[8px] font-black uppercase ${nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
+                                          {nItemVal ? `#${nItemVal}` : 'S/ CUSTO'}
+                                        </span>
+                                      </div>
+                                    </div>
 
-                                <div className="w-[1px] h-7 bg-evo-bg" />
+                                    <div className="w-[1px] h-7 bg-evo-bg" />
 
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
-                                  <div className="flex items-center gap-1.5">
-                                    <Button 
-                                      size="sm" 
-                                      variant="ghost" 
-                                      className={`h-7 w-7 p-0 border rounded-none transition-all ${line.U_ItemLoc ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
-                                      onClick={() => {
-                                        setActiveLineIndex(idx);
-                                        setIsRentalCostModalOpen(true);
-                                      }}
-                                    >
-                                      <Truck className="w-3 h-3" />
-                                    </Button>
-                                    <span className={`text-[8px] font-black uppercase ${line.U_ItemLoc ? 'text-evo-teal' : 'text-indigo-400'}`}>
-                                      {line.U_ItemLoc ? `#${line.U_ItemLoc}` : 'S/ CUSTO'}
-                                    </span>
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <Button 
+                                          size="sm" 
+                                          variant="ghost" 
+                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                          onClick={() => {
+                                            setActiveLineIndex(idx);
+                                            setIsRentalCostModalOpen(true);
+                                          }}
+                                        >
+                                          <Truck className="w-3 h-3" />
+                                        </Button>
+                                        <span className={`text-[8px] font-black uppercase ${itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
+                                          {itemLocVal ? `#${itemLocVal}` : 'S/ CUSTO'}
+                                        </span>
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="px-4 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10">
                               R$ {(line.Quantity * (line.Price || line.UnitPrice || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -6677,10 +6898,13 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         onSelect={(item: any) => {
           if (lineIndexForLookup !== null) {
             const newLines = [...selectedOrder.DocumentLines];
+            const desc = item.ItemName || item.ItemDescription || '';
             newLines[lineIndexForLookup] = { 
               ...newLines[lineIndexForLookup], 
               ItemCode: item.ItemCode, 
-              ItemDescription: item.ItemName 
+              ItemDescription: desc,
+              ItemName: desc,
+              Dscription: desc
             };
             setSelectedOrder({ ...selectedOrder, DocumentLines: newLines });
           }
@@ -6701,9 +6925,11 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         onClose={() => setIsPersCostModalOpen(false)}
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
-        onSaved={(id) => {
+        existingCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].U_nItem || selectedOrder.DocumentLines[activeLineIndex].U_nITEM) : null}
+        onSaved={(code) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_nITEM', id.toString());
+            updateLine(activeLineIndex, 'U_nItem', code);
+            updateLine(activeLineIndex, 'U_nITEM', code);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -6715,9 +6941,11 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         onClose={() => setIsRentalCostModalOpen(false)}
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
-        onSaved={(id) => {
+        existingCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].U_ItemLoc || selectedOrder.DocumentLines[activeLineIndex].U_ITEMLOC) : null}
+        onSaved={(code) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_ItemLoc', id.toString());
+            updateLine(activeLineIndex, 'U_ItemLoc', code);
+            updateLine(activeLineIndex, 'U_ITEMLOC', code);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -6843,20 +7071,24 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
 }
 
 // Sub-components for linking costs
-function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: { 
+function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existingCode }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (id: number) => void,
+  onSaved: (code: string) => void,
   docEntry?: number,
-  lineIndex: number | null
+  lineIndex: number | null,
+  existingCode?: string | number | null
 }) {
+  const initialStartDate = new Date().toISOString().split('T')[0];
+  const initialFinalDate = new Date().toISOString().split('T')[0];
+
   const [formData, setFormData] = useState({
-    U_DataInicial: new Date().toISOString().split('T')[0],
-    U_DataFinal: new Date().toISOString().split('T')[0],
+    U_DataInicial: initialStartDate,
+    U_DataFinal: initialFinalDate,
     U_Colaborador: '',
     U_VlNormal: 0,
     U_StandBy: 0,
-    U_QtdDiarias: 0,
+    U_QtdDiarias: calculateNormalDiarias(initialStartDate, initialFinalDate, 0, 0),
     U_QtdDiariasSt: 0,
     U_NotNor: 0,
     U_NotNob: 0,
@@ -6866,7 +7098,87 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingExisting, setIsFetchingExisting] = useState(false);
   const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
+
+  // Recalcula Qtd Diárias (Normal) automaticamente fiel à fórmula Excel: =SE(B41="";0;C41-B41+1-K41-L41)
+  const updateDatesOrDeductions = (updates: Partial<typeof formData>) => {
+    setFormData(prev => {
+      const next = { ...prev, ...updates };
+      const calculatedNormal = calculateNormalDiarias(
+        next.U_DataInicial,
+        next.U_DataFinal,
+        next.U_QtdDiariasSt,
+        next.U_NotNor
+      );
+      return {
+        ...next,
+        U_QtdDiarias: calculatedNormal
+      };
+    });
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (existingCode) {
+      setIsFetchingExisting(true);
+      sapService.getPersonnelCost(String(existingCode))
+        .then((existing: any) => {
+          if (existing) {
+            const start = existing.U_DataInicial ? existing.U_DataInicial.split('T')[0] : initialStartDate;
+            const end = existing.U_DataFinal ? existing.U_DataFinal.split('T')[0] : initialFinalDate;
+            const vlNormal = Number(existing.U_VlNormal) || 0;
+            const diariasNormal = Number(existing.U_QtdDiarias) || calculateNormalDiarias(start, end, Number(existing.U_QtdDiariasSt) || 0, Number(existing.U_NotNor) || 0);
+            const diariasStandBy = Number(existing.U_QtdDiariasSt) || 0;
+            const notNor = Number(existing.U_NotNor) || 0;
+            const notNob = Number(existing.U_NotNob) || 0;
+            const hExtraDiu = Number(existing.U_HExtraDiu) || 0;
+            const hExtraNot = Number(existing.U_HExtraNot) || 0;
+            const total = Number(existing.U_Total) || 0;
+
+            setFormData({
+              U_DataInicial: start,
+              U_DataFinal: end,
+              U_Colaborador: existing.U_Colaborador || '',
+              U_VlNormal: vlNormal,
+              U_StandBy: Number(existing.U_StandBy) || (vlNormal / 2),
+              U_QtdDiarias: diariasNormal,
+              U_QtdDiariasSt: diariasStandBy,
+              U_NotNor: notNor,
+              U_NotNob: notNob,
+              U_HExtraDiu: hExtraDiu,
+              U_HExtraNot: hExtraNot,
+              U_Total: total
+            });
+          }
+        })
+        .catch((err) => {
+          console.error('Erro ao buscar custo pessoal existente:', err);
+          toast.error(`Não foi possível carregar os dados vinculados #${existingCode}`);
+        })
+        .finally(() => {
+          setIsFetchingExisting(false);
+        });
+    } else {
+      const start = new Date().toISOString().split('T')[0];
+      const end = new Date().toISOString().split('T')[0];
+      setFormData({
+        U_DataInicial: start,
+        U_DataFinal: end,
+        U_Colaborador: '',
+        U_VlNormal: 0,
+        U_StandBy: 0,
+        U_QtdDiarias: calculateNormalDiarias(start, end, 0, 0),
+        U_QtdDiariasSt: 0,
+        U_NotNor: 0,
+        U_NotNob: 0,
+        U_HExtraDiu: 0,
+        U_HExtraNot: 0,
+        U_Total: 0
+      });
+    }
+  }, [isOpen, existingCode]);
 
   // Computa o breakdown de custos fiel à planilha Excel e ao SAP
   const currentBreakdown = calculatePersonnelCost({
@@ -6880,6 +7192,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
   });
 
   useEffect(() => {
+    if (isFetchingExisting) return;
     if (formData.U_StandBy !== currentBreakdown.standByRate || formData.U_Total !== currentBreakdown.totalGeral) {
       setFormData(prev => ({ 
         ...prev, 
@@ -6888,6 +7201,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
       }));
     }
   }, [
+    isFetchingExisting,
     formData.U_VlNormal, 
     formData.U_QtdDiarias, 
     formData.U_QtdDiariasSt, 
@@ -6903,20 +7217,56 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const code = `${docEntry}-${(lineIndex || 0) + 1}`;
-      const payload = {
-        ...formData,
-        Code: code,
-        Name: code
-      };
-      
-      console.log('Gravando custo pessoal:', payload);
-      const response = await sapService.createPersonnelCost(payload);
-      toast.success('Custo Pessoal vinculado!');
-      onSaved(response.DocEntry || response.AbsoluteEntry || 0);
+      if (existingCode) {
+        // Atualiza registro existente na tabela @CUSTOSPESSOAL
+        const cleanCode = String(existingCode).trim();
+        const payload = {
+          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
+          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
+          U_Colaborador: formData.U_Colaborador,
+          U_VlNormal: Number(formData.U_VlNormal) || 0,
+          U_StandBy: Number(formData.U_StandBy) || 0,
+          U_QtdDiarias: Number(formData.U_QtdDiarias) || 0,
+          U_QtdDiariasSt: Number(formData.U_QtdDiariasSt) || 0,
+          U_NotNor: Number(formData.U_NotNor) || 0,
+          U_NotNob: Number(formData.U_NotNob) || 0,
+          U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
+          U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_Total: Number(formData.U_Total) || 0
+        };
+
+        console.log(`Atualizando registro de custo pessoal #${cleanCode} em @CUSTOSPESSOAL:`, payload);
+        await sapService.updatePersonnelCost(cleanCode, payload);
+        toast.success(`Custo Pessoal #${cleanCode} atualizado com sucesso no SAP!`);
+        onSaved(cleanCode);
+      } else {
+        // Cria novo registro com código sequencial em @CUSTOSPESSOAL
+        const newCode = await sapService.getNextPersonnelCostCode();
+        const payload = {
+          Code: newCode,
+          Name: newCode,
+          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
+          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
+          U_Colaborador: formData.U_Colaborador,
+          U_VlNormal: Number(formData.U_VlNormal) || 0,
+          U_StandBy: Number(formData.U_StandBy) || 0,
+          U_QtdDiarias: Number(formData.U_QtdDiarias) || 0,
+          U_QtdDiariasSt: Number(formData.U_QtdDiariasSt) || 0,
+          U_NotNor: Number(formData.U_NotNor) || 0,
+          U_NotNob: Number(formData.U_NotNob) || 0,
+          U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
+          U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_Total: Number(formData.U_Total) || 0
+        };
+        
+        console.log(`Criando novo registro em @CUSTOSPESSOAL #${newCode}:`, payload);
+        await sapService.createPersonnelCost(payload);
+        toast.success(`Custo Pessoal #${newCode} criado e vinculado com sucesso!`);
+        onSaved(newCode);
+      }
     } catch (error: any) {
       console.error('Falha ao salvar custo pessoal:', error.response?.data || error);
-      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo.';
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo pessoal.';
       toast.error(errorMsg);
     } finally {
       setIsLoading(false);
@@ -6927,169 +7277,194 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="uppercase tracking-tight font-black">Vincular Custo Pessoal</DialogTitle>
-          <DialogDescription className="text-[10px] uppercase tracking-widest">Lançamento de diárias e horas extras para esta linha</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6 py-4">
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador</Label>
-                <div className="flex gap-1">
-                  <Input 
-                    value={formData.U_Colaborador}
-                    onChange={(e) => setFormData({ ...formData, U_Colaborador: e.target.value })}
-                    className="rounded-none h-10 border-evo-bg flex-1 font-bold"
-                    placeholder="Selecione o Colaborador"
-                    required
-                  />
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    className="rounded-none h-10 w-10 p-0 border-evo-bg"
-                    onClick={() => setIsCollabLookupOpen(true)}
-                  >
-                    <Search className="w-4 h-4" />
-                  </Button>
-                </div>
-
-                <LookupDialog 
-                  isOpen={isCollabLookupOpen}
-                  onClose={() => setIsCollabLookupOpen(false)}
-                  title="Pesquisar Colaborador (CO)"
-                  placeholder="Nome ou código..."
-                  onSelect={(collab: any) => {
-                    setFormData({ ...formData, U_Colaborador: collab.CardName || collab.CardCode });
-                    setIsCollabLookupOpen(false);
-                  }}
-                  searchFn={sapService.getCollaborators}
-                  renderItem={(collab: any) => (
-                    <div className="flex justify-between items-center w-full">
-                      <span className="font-black text-xs">{collab.CardCode}</span>
-                      <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{collab.CardName}</span>
-                    </div>
-                  )}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
-                  <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
-                  <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4 border-t border-evo-bg pt-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Normal (R$)</Label>
-                  <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({...formData, U_VlNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
-                  <Input type="number" step="0.5" value={formData.U_QtdDiarias} onChange={e => setFormData({...formData, U_QtdDiarias: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5 opacity-60">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Stand-by Rate (R$) - Automático</Label>
-                  <Input type="number" step="0.01" value={formData.U_StandBy} readOnly className="rounded-none h-10 border-evo-bg bg-evo-bg/50 cursor-not-allowed" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
-                  <Input type="number" step="0.5" value={formData.U_QtdDiariasSt} onChange={e => setFormData({...formData, U_QtdDiariasSt: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
-                  <Input type="number" value={formData.U_NotNor} onChange={e => setFormData({...formData, U_NotNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Nob</Label>
-                  <Input type="number" value={formData.U_NotNob} onChange={e => setFormData({...formData, U_NotNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
-                  <Input type="number" value={formData.U_HExtraDiu} onChange={e => setFormData({...formData, U_HExtraDiu: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
-                  <Input type="number" value={formData.U_HExtraNot} onChange={e => setFormData({...formData, U_HExtraNot: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-
-              <div className="p-4 bg-evo-dark text-white rounded-none mt-2 space-y-2 border-l-4 border-evo-teal">
-                <div className="flex justify-between items-center text-[10px] uppercase text-white/60 font-semibold border-b border-white/10 pb-1">
-                  <span>Detalhamento dos Cálculos (Excel / SAP)</span>
-                  <span>Multiplicadores</span>
-                </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
-                  <div className="flex justify-between text-white/80">
-                    <span>Diárias Normais:</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasNormal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-white/80">
-                    <span>Diárias Stand-by (50%):</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasStandBy.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-white/80">
-                    <span>Noturno Normal (8%):</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNormal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-white/80">
-                    <span>Noturno Dobrado:</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNob.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-white/80">
-                    <span>H.E. Diurna (1.5x):</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraDiurna.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-white/80">
-                    <span>H.E. Noturna (1.5x + 8%):</span>
-                    <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraNoturna.toFixed(2)}</span>
-                  </div>
-                </div>
-                <div className="pt-2 border-t border-white/10 flex justify-between items-center">
-                  <div>
-                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
-                    <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
-                      R$ {currentBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </h3>
-                  </div>
-                  <div className="text-right text-[9px] text-white/60">
-                    <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentBreakdown.taxasNoturnas.toFixed(2)}</span></div>
-                    <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentBreakdown.valorHora.toFixed(2)}</span></div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-4">
+            <DialogTitle className="uppercase tracking-tight font-black flex items-center gap-3">
+              <span>{existingCode ? 'Editar Custo Pessoal' : 'Vincular Custo Pessoal'}</span>
+              {existingCode && (
+                <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-400 px-2.5 py-0.5 tracking-normal">
+                  @CUSTOSPESSOAL Code #{existingCode}
+                </span>
+              )}
+            </DialogTitle>
           </div>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
-            <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
-              {isLoading ? 'Gravando...' : 'Gravar e Vincular'}
-            </Button>
-          </DialogFooter>
-        </form>
+          <DialogDescription className="text-[10px] uppercase tracking-widest">
+            {existingCode 
+              ? `Registro vinculado pelo campo U_nItem (#${existingCode}) na linha do pedido. Alterações atualizam a tabela @CUSTOSPESSOAL.` 
+              : 'Lançamento de diárias, horas extras e taxas para esta linha de pedido'}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isFetchingExisting ? (
+          <div className="py-16 flex flex-col items-center justify-center gap-3 text-evo-teal">
+            <RotateCw className="w-8 h-8 animate-spin" />
+            <p className="text-xs font-black uppercase tracking-widest text-evo-dark">Carregando dados de @CUSTOSPESSOAL (#{existingCode})...</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6 py-4">
+            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador</Label>
+                  <div className="flex gap-1">
+                    <Input 
+                      value={formData.U_Colaborador}
+                      onChange={(e) => setFormData({ ...formData, U_Colaborador: e.target.value })}
+                      className="rounded-none h-10 border-evo-bg flex-1 font-bold"
+                      placeholder="Selecione o Colaborador"
+                      required
+                    />
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      className="rounded-none h-10 w-10 p-0 border-evo-bg"
+                      onClick={() => setIsCollabLookupOpen(true)}
+                    >
+                      <Search className="w-4 h-4" />
+                    </Button>
+                  </div>
+
+                  <LookupDialog 
+                    isOpen={isCollabLookupOpen}
+                    onClose={() => setIsCollabLookupOpen(false)}
+                    title="Pesquisar Colaborador (CO)"
+                    placeholder="Nome ou código..."
+                    onSelect={(collab: any) => {
+                      setFormData({ ...formData, U_Colaborador: collab.CardName || collab.CardCode });
+                      setIsCollabLookupOpen(false);
+                    }}
+                    searchFn={sapService.getCollaborators}
+                    renderItem={(collab: any) => (
+                      <div className="flex justify-between items-center w-full">
+                        <span className="font-black text-xs">{collab.CardCode}</span>
+                        <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{collab.CardName}</span>
+                      </div>
+                    )}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
+                    <Input type="date" value={formData.U_DataInicial} onChange={e => updateDatesOrDeductions({ U_DataInicial: e.target.value })} className="rounded-none h-10 border-evo-bg" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
+                    <Input type="date" value={formData.U_DataFinal} onChange={e => updateDatesOrDeductions({ U_DataFinal: e.target.value })} className="rounded-none h-10 border-evo-bg" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 border-t border-evo-bg pt-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Normal (R$)</Label>
+                    <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({...formData, U_VlNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tighter" title="Fórmula Excel: =SE(B41=&quot;&quot;;0;C41-B41+1-K41-L41)">Auto (Excel)</span>
+                    </div>
+                    <Input type="number" step="0.5" value={formData.U_QtdDiarias} onChange={e => setFormData({...formData, U_QtdDiarias: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5 opacity-60">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Stand-by Rate (R$) - Automático</Label>
+                    <Input type="number" step="0.01" value={formData.U_StandBy} readOnly className="rounded-none h-10 border-evo-bg bg-evo-bg/50 cursor-not-allowed font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Stand-by)</Label>
+                    <Input type="number" step="0.5" value={formData.U_QtdDiariasSt} onChange={e => updateDatesOrDeductions({ U_QtdDiariasSt: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Normal</Label>
+                    <Input type="number" value={formData.U_NotNor} onChange={e => updateDatesOrDeductions({ U_NotNor: parseInt(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">NOTURNO DOBRADO</Label>
+                    <Input type="number" value={formData.U_NotNob} onChange={e => setFormData({...formData, U_NotNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
+                    <Input type="number" value={formData.U_HExtraDiu} onChange={e => setFormData({...formData, U_HExtraDiu: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
+                    <Input type="number" value={formData.U_HExtraNot} onChange={e => setFormData({...formData, U_HExtraNot: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-evo-dark text-white rounded-none mt-2 space-y-2 border-l-4 border-evo-teal">
+                  <div className="flex justify-between items-center text-[10px] uppercase text-white/60 font-semibold border-b border-white/10 pb-1">
+                    <span>Detalhamento dos Cálculos (Excel / SAP)</span>
+                    <span>Multiplicadores</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                    <div className="flex justify-between text-white/80">
+                      <span>Diárias Normais:</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasNormal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>Diárias Stand-by (50%):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalDiariasStandBy.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>Noturno Normal (8%):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNormal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>Noturno Dobrado:</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalNoturnoNob.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>H.E. Diurna (1.5x):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraDiurna.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>H.E. Noturna (1.5x + 8%):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraNoturna.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
+                      <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
+                        R$ {currentBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </h3>
+                    </div>
+                    <div className="text-right text-[9px] text-white/60">
+                      <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentBreakdown.taxasNoturnas.toFixed(2)}</span></div>
+                      <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentBreakdown.valorHora.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+              <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
+                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações no Custo Pessoal' : 'Gravar e Vincular')}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );
 }
 
 // Rental Cost Sub-Modal
-function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: { 
+function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existingCode }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (id: number) => void,
+  onSaved: (code: string) => void,
   docEntry?: number,
-  lineIndex: number | null
+  lineIndex: number | null,
+  existingCode?: string | number | null
 }) {
   const [formData, setFormData] = useState({
     U_DataInicial: new Date().toISOString().split('T')[0],
@@ -7104,8 +7479,53 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingExisting, setIsFetchingExisting] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (existingCode) {
+      setIsFetchingExisting(true);
+      sapService.getRentalCost(String(existingCode))
+        .then((existing: any) => {
+          if (existing) {
+            setFormData({
+              U_DataInicial: existing.U_DataInicial ? existing.U_DataInicial.split('T')[0] : new Date().toISOString().split('T')[0],
+              U_DataFinal: existing.U_DataFinal ? existing.U_DataFinal.split('T')[0] : new Date().toISOString().split('T')[0],
+              U_Recurso: existing.U_Recurso || '',
+              U_ValorBase: Number(existing.U_ValorBase) || 0,
+              U_HorasNor: Number(existing.U_HorasNor) || 0,
+              U_HorasNob: Number(existing.U_HorasNob) || 0,
+              U_HENor: Number(existing.U_HENor) || 0,
+              U_HENob: Number(existing.U_HENob) || 0,
+              U_Total: Number(existing.U_Total) || 0
+            });
+          }
+        })
+        .catch((err) => {
+          console.error('Erro ao buscar custo de locação existente:', err);
+          toast.error(`Não foi possível carregar os dados de locação #${existingCode}`);
+        })
+        .finally(() => {
+          setIsFetchingExisting(false);
+        });
+    } else {
+      setFormData({
+        U_DataInicial: new Date().toISOString().split('T')[0],
+        U_DataFinal: new Date().toISOString().split('T')[0],
+        U_Recurso: '',
+        U_ValorBase: 0,
+        U_HorasNor: 0,
+        U_HorasNob: 0,
+        U_HENor: 0,
+        U_HENob: 0,
+        U_Total: 0
+      });
+    }
+  }, [isOpen, existingCode]);
 
   const calculateTotal = () => {
+    if (isFetchingExisting) return;
     const total = (Number(formData.U_ValorBase) * (Number(formData.U_HorasNor) + Number(formData.U_HorasNob))) + 
                 (Number(formData.U_HENor) * (Number(formData.U_ValorBase) * 1.5)) + 
                 (Number(formData.U_HENob) * (Number(formData.U_ValorBase) * 2.0));
@@ -7120,18 +7540,44 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const code = `${docEntry}-${(lineIndex || 0) + 1}`;
-      const payload = {
-        ...formData,
-        Code: code,
-        Name: code
-      };
-      const response = await sapService.createRentalCost(payload);
-      toast.success('Custo Locação vinculado!');
-      onSaved(response.DocEntry || response.AbsoluteEntry || 0);
+      if (existingCode) {
+        const cleanCode = String(existingCode).trim();
+        const payload = {
+          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
+          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
+          U_Recurso: formData.U_Recurso,
+          U_ValorBase: Number(formData.U_ValorBase) || 0,
+          U_HorasNor: Number(formData.U_HorasNor) || 0,
+          U_HorasNob: Number(formData.U_HorasNob) || 0,
+          U_HENor: Number(formData.U_HENor) || 0,
+          U_HENob: Number(formData.U_HENob) || 0,
+          U_Total: Number(formData.U_Total) || 0
+        };
+        await sapService.updateRentalCost(cleanCode, payload);
+        toast.success(`Custo Locação #${cleanCode} atualizado com sucesso!`);
+        onSaved(cleanCode);
+      } else {
+        const newCode = await sapService.getNextRentalCostCode();
+        const payload = {
+          Code: newCode,
+          Name: newCode,
+          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
+          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
+          U_Recurso: formData.U_Recurso,
+          U_ValorBase: Number(formData.U_ValorBase) || 0,
+          U_HorasNor: Number(formData.U_HorasNor) || 0,
+          U_HorasNob: Number(formData.U_HorasNob) || 0,
+          U_HENor: Number(formData.U_HENor) || 0,
+          U_HENob: Number(formData.U_HENob) || 0,
+          U_Total: Number(formData.U_Total) || 0
+        };
+        await sapService.createRentalCost(payload);
+        toast.success(`Custo Locação #${newCode} criado e vinculado com sucesso!`);
+        onSaved(newCode);
+      }
     } catch (error: any) {
       console.error('Falha ao salvar custo locação:', error.response?.data || error);
-      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo.';
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo de locação.';
       toast.error(errorMsg);
     } finally {
       setIsLoading(false);
@@ -7142,81 +7588,102 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex }: {
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="uppercase tracking-tight font-black">Vincular Custo Locação</DialogTitle>
-          <DialogDescription className="text-[10px] uppercase tracking-widest">Controle de custos de equipamentos e recursos externos</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6 py-4">
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso</Label>
-                <Input 
-                  value={formData.U_Recurso}
-                  onChange={(e) => setFormData({ ...formData, U_Recurso: e.target.value })}
-                  className="rounded-none h-10 border-evo-bg"
-                  placeholder="Descrição do Recurso"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
-                  <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
-                  <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-              <div className="space-y-1.5 border-t border-evo-bg pt-4">
-                <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base (R$)</Label>
-                <Input 
-                  type="number" 
-                  step="0.01" 
-                  value={formData.U_ValorBase} 
-                  onChange={e => setFormData({...formData, U_ValorBase: parseFloat(e.target.value) || 0})} 
-                  className="rounded-none h-10 border-evo-bg" 
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
-                  <Input type="number" value={formData.U_HorasNor} onChange={e => setFormData({...formData, U_HorasNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
-                  <Input type="number" value={formData.U_HorasNob} onChange={e => setFormData({...formData, U_HorasNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
-                  <Input type="number" value={formData.U_HENor} onChange={e => setFormData({...formData, U_HENor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
-                  <Input type="number" value={formData.U_HENob} onChange={e => setFormData({...formData, U_HENob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
-                </div>
-              </div>
-
-              <div className="p-6 bg-evo-dark text-white rounded-none mt-4">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
-                <h3 className="text-3xl font-black tracking-tighter text-evo-teal">
-                  R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                </h3>
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-4">
+            <DialogTitle className="uppercase tracking-tight font-black flex items-center gap-3">
+              <span>{existingCode ? 'Editar Custo Locação' : 'Vincular Custo Locação'}</span>
+              {existingCode && (
+                <span className="text-[10px] font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-400 px-2.5 py-0.5 tracking-normal">
+                  @CUSTOSLOC Code #{existingCode}
+                </span>
+              )}
+            </DialogTitle>
           </div>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
-            <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
-              {isLoading ? 'Gravando...' : 'Gravar e Vincular'}
-            </Button>
-          </DialogFooter>
-        </form>
+          <DialogDescription className="text-[10px] uppercase tracking-widest">
+            {existingCode 
+              ? `Registro vinculado pelo campo U_ItemLoc (#${existingCode}) na linha do pedido.`
+              : 'Controle de custos de equipamentos e recursos externos'}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isFetchingExisting ? (
+          <div className="py-16 flex flex-col items-center justify-center gap-3 text-indigo-600">
+            <RotateCw className="w-8 h-8 animate-spin" />
+            <p className="text-xs font-black uppercase tracking-widest text-evo-dark">Carregando dados de @CUSTOSLOC (#{existingCode})...</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6 py-4">
+            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso</Label>
+                  <Input 
+                    value={formData.U_Recurso}
+                    onChange={(e) => setFormData({ ...formData, U_Recurso: e.target.value })}
+                    className="rounded-none h-10 border-evo-bg font-bold"
+                    placeholder="Descrição do Recurso"
+                    required
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
+                    <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
+                    <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+                <div className="space-y-1.5 border-t border-evo-bg pt-4">
+                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base (R$)</Label>
+                  <Input 
+                    type="number" 
+                    step="0.01" 
+                    value={formData.U_ValorBase} 
+                    onChange={e => setFormData({...formData, U_ValorBase: parseFloat(e.target.value) || 0})} 
+                    className="rounded-none h-10 border-evo-bg font-bold" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
+                    <Input type="number" value={formData.U_HorasNor} onChange={e => setFormData({...formData, U_HorasNor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
+                    <Input type="number" value={formData.U_HorasNob} onChange={e => setFormData({...formData, U_HorasNob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
+                    <Input type="number" value={formData.U_HENor} onChange={e => setFormData({...formData, U_HENor: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
+                    <Input type="number" value={formData.U_HENob} onChange={e => setFormData({...formData, U_HENob: parseInt(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                  </div>
+                </div>
+
+                <div className="p-6 bg-evo-dark text-white rounded-none mt-4 border-l-4 border-indigo-400">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
+                  <h3 className="text-3xl font-black tracking-tighter text-indigo-400">
+                    R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </h3>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+              <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
+                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações no Custo' : 'Gravar e Vincular')}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

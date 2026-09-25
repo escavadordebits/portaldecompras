@@ -186,7 +186,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
     const rentals: any[] = [];
 
     rawLines.forEach((line: any, idx: number) => {
-      const desc = (line.ItemDescription || line.ItemName || '').toLowerCase();
+      const desc = (line.ItemDescription || line.ItemName || line.Dscription || '').toLowerCase();
       const code = (line.ItemCode || '').toLowerCase();
       const isRental = line.U_ItemLoc || desc.includes('equipamento') || desc.includes('loca') || desc.includes('kit') || desc.includes('rope') || code.includes('eq') || code.includes('loc');
 
@@ -197,7 +197,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : '03/04/2025',
           final: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : '20/04/2025',
           qtde: Number(line.Quantity || 13).toFixed(2).replace('.', ','),
-          descricao: line.ItemDescription || line.ItemName || 'Rope Access Kits - Each',
+          descricao: line.ItemDescription || line.ItemName || line.Dscription || 'Rope Access Kits - Each',
           qtdeDias: 13,
           vlrOnSite: Number(line.Price || 60).toFixed(2).replace('.', ','),
           vlrInTransit: (Number(line.Price || 60) * 0.5).toFixed(2).replace('.', ','),
@@ -212,7 +212,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         services.push({
           inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : (idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
           fim: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : (idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
-          cargo: line.ItemDescription || line.ItemName || 'SERVICO - LOGISTICA',
+          cargo: line.ItemDescription || line.ItemName || line.Dscription || 'SERVICO - LOGISTICA',
           colaborador: line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
           vlrNormal: vlrNormal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
           standByRate: standByRate.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
