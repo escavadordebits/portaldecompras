@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, CheckCircle2, Trash2, Download, Paperclip, Mail, FileSpreadsheet, FileCheck } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, Trash2, Download, Paperclip, Plus, FileUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 
 export interface StoredAttachment {
+  id?: string;
   name: string;
   size: number;
   type: string;
@@ -12,7 +13,9 @@ export interface StoredAttachment {
   uploadedAt: string;
 }
 
+// Backward compatibility: state can contain files array or legacy 3 keys
 export interface DocumentAttachmentsState {
+  files?: StoredAttachment[];
   poCliente?: StoredAttachment | null;
   cotacaoQualitech?: StoredAttachment | null;
   emailAprovacao?: StoredAttachment | null;
@@ -25,101 +28,102 @@ interface DocumentAttachmentsSectionProps {
   readOnly?: boolean;
 }
 
+export function loadStoredAttachments(documentType: 'quotation' | 'order', docId?: string | number | null): StoredAttachment[] {
+  try {
+    const currentKey = `sap_attachments_${documentType}_${docId || 'draft'}`;
+    const saved = localStorage.getItem(currentKey);
+    if (!saved) return [];
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed.files)) {
+      return parsed.files;
+    }
+    // Convert legacy format if present
+    const legacyFiles: StoredAttachment[] = [];
+    if (parsed.poCliente) legacyFiles.push({ ...parsed.poCliente, id: 'poCliente' });
+    if (parsed.cotacaoQualitech) legacyFiles.push({ ...parsed.cotacaoQualitech, id: 'cotacaoQualitech' });
+    if (parsed.emailAprovacao) legacyFiles.push({ ...parsed.emailAprovacao, id: 'emailAprovacao' });
+    return legacyFiles;
+  } catch (e) {
+    console.error('Error loading attachments:', e);
+    return [];
+  }
+}
+
 export function DocumentAttachmentsSection({
   documentType,
   docId,
   onAttachmentsChange,
   readOnly = false
 }: DocumentAttachmentsSectionProps) {
-  const storageKey = `sap_attachments_${documentType}_${docId || 'draft'}`;
-
-  const [attachments, setAttachments] = useState<DocumentAttachmentsState>(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {
-      console.error('Error loading attachments from storage:', e);
-    }
-    return {
-      poCliente: null,
-      cotacaoQualitech: null,
-      emailAprovacao: null
-    };
+  const [fileList, setFileList] = useState<StoredAttachment[]>(() => {
+    return loadStoredAttachments(documentType, docId);
   });
 
   // Re-load when docId changes
   useEffect(() => {
-    try {
-      const currentKey = `sap_attachments_${documentType}_${docId || 'draft'}`;
-      const saved = localStorage.getItem(currentKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setAttachments(parsed);
-        if (onAttachmentsChange) onAttachmentsChange(parsed);
-      } else {
-        setAttachments({
-          poCliente: null,
-          cotacaoQualitech: null,
-          emailAprovacao: null
-        });
-      }
-    } catch (e) {
-      console.error('Error re-reading attachments:', e);
+    const list = loadStoredAttachments(documentType, docId);
+    setFileList(list);
+    if (onAttachmentsChange) {
+      onAttachmentsChange({ files: list });
     }
   }, [docId, documentType]);
 
-  const saveAttachments = (newAttachments: DocumentAttachmentsState) => {
-    setAttachments(newAttachments);
+  const saveFileList = (newList: StoredAttachment[]) => {
+    setFileList(newList);
     try {
       const currentKey = `sap_attachments_${documentType}_${docId || 'draft'}`;
-      localStorage.setItem(currentKey, JSON.stringify(newAttachments));
+      localStorage.setItem(currentKey, JSON.stringify({ files: newList }));
     } catch (e) {
       console.warn('LocalStorage save error (file might be large):', e);
     }
     if (onAttachmentsChange) {
-      onAttachmentsChange(newAttachments);
+      onAttachmentsChange({ files: newList });
     }
   };
 
-  const handleFileUpload = (field: keyof DocumentAttachmentsState, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
-      const dataUrl = uploadEvent.target?.result as string;
-      const newAttachment: StoredAttachment = {
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        dataUrl: dataUrl,
-        uploadedAt: new Date().toISOString()
+    const filesArray: File[] = Array.from(files);
+    let loadedCount = 0;
+    const newItems: StoredAttachment[] = [];
+
+    filesArray.forEach((file: File) => {
+      const reader = new FileReader();
+      reader.onload = (uploadEvent) => {
+        const dataUrl = uploadEvent.target?.result as string;
+        newItems.push({
+          id: `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          dataUrl: dataUrl,
+          uploadedAt: new Date().toISOString()
+        });
+
+        loadedCount++;
+        if (loadedCount === filesArray.length) {
+          const updated = [...fileList, ...newItems];
+          saveFileList(updated);
+          toast.success(
+            filesArray.length === 1
+              ? `Arquivo "${filesArray[0].name}" anexado com sucesso!`
+              : `${filesArray.length} arquivos anexados com sucesso!`
+          );
+        }
       };
 
-      const updated = {
-        ...attachments,
-        [field]: newAttachment
-      };
+      reader.readAsDataURL(file);
+    });
 
-      saveAttachments(updated);
-      toast.success(`Anexo "${file.name}" anexado com sucesso!`);
-    };
-
-    // Read as DataURL for persistence & download
-    reader.readAsDataURL(file);
-    // Reset file input value so re-uploading the same file triggers onChange
     e.target.value = '';
   };
 
-  const handleRemove = (field: keyof DocumentAttachmentsState, fieldName: string) => {
-    const updated = {
-      ...attachments,
-      [field]: null
-    };
-    saveAttachments(updated);
-    toast.info(`Anexo ${fieldName} removido.`);
+  const handleRemove = (indexToRemove: number, fileName: string) => {
+    const updated = fileList.filter((_, idx) => idx !== indexToRemove);
+    saveFileList(updated);
+    toast.info(`Anexo "${fileName}" removido.`);
   };
 
   const handleDownload = (attachment: StoredAttachment) => {
@@ -144,38 +148,11 @@ export function DocumentAttachmentsSection({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  const fieldsConfig: {
-    key: keyof DocumentAttachmentsState;
-    label: string;
-    description: string;
-    icon: React.ElementType;
-    badgeColor: string;
-  }[] = [
-    {
-      key: 'poCliente',
-      label: 'PO do Cliente (Purchase Order)',
-      description: 'Documento oficial ou espelho da PO enviada pelo cliente',
-      icon: FileSpreadsheet,
-      badgeColor: 'border-blue-500 text-blue-600 bg-blue-50'
-    },
-    {
-      key: 'cotacaoQualitech',
-      label: 'Cotação Qualitech',
-      description: 'Cópia da proposta comercial formalizada e precificada',
-      icon: FileCheck,
-      badgeColor: 'border-evo-teal text-evo-teal bg-evo-teal/10'
-    },
-    {
-      key: 'emailAprovacao',
-      label: 'E-mail de Aprovação',
-      description: 'Comprovante em PDF ou mensagem de aprovação formal do cliente',
-      icon: Mail,
-      badgeColor: 'border-emerald-500 text-emerald-600 bg-emerald-50'
-    }
-  ];
+  const inputId = `file-input-single-${documentType}-${docId || 'draft'}`;
 
   return (
-    <div className="space-y-4 bg-white p-8 border border-evo-bg shadow-sm">
+    <div className="space-y-4 bg-white p-6 border border-evo-bg shadow-sm">
+      {/* Header */}
       <div className="flex items-center justify-between border-b border-evo-bg pb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-none bg-evo-dark text-white flex items-center justify-center">
@@ -183,135 +160,114 @@ export function DocumentAttachmentsSection({
           </div>
           <div>
             <h3 className="text-sm font-black uppercase tracking-widest text-evo-dark">
-              Anexos e Comprovações da Venda
+              Anexos do Documento
             </h3>
-            <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-widest">
-              Anexe os 3 documentos essenciais para rastreabilidade e auditoria (PO, Cotação e Aprovação)
+            <p className="text-[9px] font-bold text-evo-dark/50 uppercase tracking-widest">
+              Faça o upload dos arquivos que serão anexados e enviados junto com a Draft Invoice
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {Object.values(attachments).filter(Boolean).length === 3 ? (
+          {fileList.length > 0 ? (
             <Badge className="bg-emerald-600 text-white rounded-none text-[9px] font-black uppercase tracking-widest px-3 py-1 flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" /> 3/3 Anexos Carregados
+              <CheckCircle2 className="w-3.5 h-3.5" /> {fileList.length} {fileList.length === 1 ? 'Anexo Disponível' : 'Anexos Disponíveis'}
             </Badge>
           ) : (
-            <Badge className="bg-amber-100 text-amber-800 border border-amber-300 rounded-none text-[9px] font-black uppercase tracking-widest px-3 py-1">
-              {Object.values(attachments).filter(Boolean).length}/3 Anexos Anexados
+            <Badge className="bg-slate-100 text-slate-600 border border-slate-300 rounded-none text-[9px] font-black uppercase tracking-widest px-3 py-1">
+              Nenhum anexo
             </Badge>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-        {fieldsConfig.map(({ key, label, description, icon: Icon, badgeColor }) => {
-          const currentFile = attachments[key];
-          const inputId = `file-input-${documentType}-${docId || 'draft'}-${key}`;
+      {/* Upload Zone / Drop Area */}
+      {!readOnly && (
+        <div>
+          <input 
+            type="file"
+            id={inputId}
+            multiple
+            className="hidden"
+            onChange={handleFileUpload}
+            disabled={readOnly}
+          />
+          <label 
+            htmlFor={inputId}
+            className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-evo-dark/20 hover:border-evo-teal bg-slate-50 hover:bg-slate-100/80 cursor-pointer transition-all group"
+          >
+            <div className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <Upload className="w-5 h-5 text-evo-teal" />
+            </div>
+            <span className="text-xs font-black uppercase tracking-wider text-evo-dark mb-1">
+              Clique para selecionar ou arraste arquivos para anexar
+            </span>
+            <span className="text-[10px] text-evo-dark/50 font-medium">
+              PO do cliente, Cotação, E-mail de aprovação, boletins de medição ou quaisquer outros comprovantes (PDF, XLSX, DOCX, Imagens)
+            </span>
+          </label>
+        </div>
+      )}
 
-          return (
-            <div 
-              key={key} 
-              className={`p-5 border-2 transition-all flex flex-col justify-between rounded-none ${
-                currentFile 
-                  ? 'border-emerald-400 bg-emerald-50/20' 
-                  : 'border-dashed border-evo-dark/20 bg-slate-50 hover:bg-slate-100/70'
-              }`}
-            >
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 bg-evo-dark/5 text-evo-dark flex items-center justify-center">
-                      <Icon className="w-4 h-4 text-evo-teal" />
+      {/* List of Attachments */}
+      {fileList.length > 0 && (
+        <div className="pt-2">
+          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-2">
+            Arquivos Anexados ({fileList.length})
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {fileList.map((file, idx) => (
+              <div 
+                key={file.id || idx}
+                className="bg-slate-50 border border-slate-200 p-3.5 flex flex-col justify-between hover:border-evo-teal/50 transition-colors shadow-xs"
+              >
+                <div>
+                  <div className="flex items-start gap-2.5 mb-2">
+                    <div className="w-8 h-8 rounded bg-white border border-slate-200 flex items-center justify-center text-slate-700 shrink-0">
+                      <FileText className="w-4 h-4 text-evo-teal" />
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-evo-dark">
-                      {label}
-                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-bold text-slate-800 truncate" title={file.name}>
+                        {file.name}
+                      </p>
+                      <div className="flex items-center gap-2 text-[9px] text-slate-500 font-medium">
+                        <span>{formatFileSize(file.size)}</span>
+                        <span>•</span>
+                        <span>{new Date(file.uploadedAt).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                    </div>
                   </div>
-                  {currentFile ? (
-                    <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      <CheckCircle2 className="w-3 h-3" /> Anexado
-                    </span>
-                  ) : (
-                    <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-slate-200 text-slate-600">
-                      Pendente
-                    </span>
-                  )}
                 </div>
 
-                <p className="text-[9px] text-evo-dark/50 leading-relaxed min-h-[32px] mb-4">
-                  {description}
-                </p>
-
-                {currentFile ? (
-                  <div className="bg-white p-3 border border-emerald-200 shadow-sm mb-4 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span className="text-[10px] font-black text-evo-dark truncate" title={currentFile.name}>
-                        {currentFile.name}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-[8px] font-bold text-evo-dark/40 pt-1 border-t border-slate-100">
-                      <span>{formatFileSize(currentFile.size)}</span>
-                      <span>{new Date(currentFile.uploadedAt).toLocaleDateString('pt-BR')}</span>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="pt-2">
-                {currentFile ? (
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-200/60 mt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDownload(file)}
+                    className="flex-1 rounded-none h-7 text-[9px] font-black uppercase tracking-wider bg-white hover:bg-evo-dark hover:text-white border-slate-300 transition-all flex items-center justify-center gap-1"
+                  >
+                    <Download className="w-3 h-3" />
+                    Baixar
+                  </Button>
+                  {!readOnly && (
                     <Button
                       type="button"
                       size="sm"
-                      variant="outline"
-                      onClick={() => handleDownload(currentFile)}
-                      className="flex-1 rounded-none h-8 text-[9px] font-black uppercase tracking-wider border-emerald-300 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all flex items-center justify-center gap-1.5"
+                      variant="ghost"
+                      onClick={() => handleRemove(idx, file.name)}
+                      className="rounded-none h-7 w-7 p-0 text-rose-500 hover:bg-rose-50 hover:text-rose-700 border border-rose-200"
+                      title="Remover anexo"
                     >
-                      <Download className="w-3 h-3" />
-                      Baixar
+                      <Trash2 className="w-3 h-3" />
                     </Button>
-                    {!readOnly && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRemove(key, label)}
-                        className="rounded-none h-8 w-8 p-0 text-rose-500 hover:bg-rose-50 hover:text-rose-700 border border-rose-200"
-                        title="Remover anexo"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <input 
-                      type="file"
-                      id={inputId}
-                      className="hidden"
-                      onChange={(e) => handleFileUpload(key, e)}
-                      disabled={readOnly}
-                    />
-                    <label 
-                      htmlFor={inputId}
-                      className={`w-full h-9 flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest cursor-pointer transition-all border ${
-                        readOnly 
-                          ? 'opacity-40 cursor-not-allowed bg-slate-100 border-slate-300 text-slate-500' 
-                          : 'bg-white hover:bg-evo-dark hover:text-white border-evo-dark/20 text-evo-dark shadow-sm'
-                      }`}
-                    >
-                      <Upload className="w-3.5 h-3.5 text-evo-teal" />
-                      Selecionar Arquivo
-                    </label>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -274,3 +274,85 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
     totalGeral
   };
 }
+
+/**
+ * Utilitário de Cálculos de Custos de Locação (Equipamentos Locados)
+ * Fiel 100% às fórmulas do Excel oficial (Modelo de DI.xlsx):
+ * - Qtd diárias a bordo (J85): =SE(B85="";0;C85-B85+1)
+ * - Valor In Transit (I85): =H85 * (Percentual In Transit / 100)  [ex: H85 * 50%]
+ * - Diárias On Site (L85): =J85 - N85  [Diárias a bordo - Diárias In Transit]
+ * - Total (P85): =(N85*I85)*D85 + (L85*H85)*D85
+ *   [(Diárias In Transit * Valor In Transit * Qtd) + (Diárias On Site * Valor On Site * Qtd)]
+ */
+export interface RentalCostInput {
+  dataInicial?: string;        // B85 - Início Período (ex: "2025-04-03")
+  dataFinal?: string;          // C85 - Final Período (ex: "2025-04-20")
+  quantidade: number;          // D85 - QTD de Equipamentos (ex: 13 ou 2)
+  recurso?: string;            // F85/G85 - Descrição do Equipamento/Recurso
+  valorOnSite: number;         // H85 - Valor On site (R$ / Lista de Preço 1, ex: 60.00)
+  percInTransit: number;       // I82 - Percentual In Transit (% padrão 50%)
+  diariasInTransit: number;    // N85 - Quantidade de diárias cobradas: In transit (ex: 0 ou 10)
+  diariasOnSiteManual?: number; // Opcional se usuário quiser sobrescrever diárias On site
+}
+
+export interface RentalCostBreakdown {
+  dataInicial: string;
+  dataFinal: string;
+  quantidade: number;
+  recurso: string;
+  valorOnSite: number;         // H85 - Valor: On site
+  percInTransit: number;       // I82 - % In Transit (ex: 50%)
+  valorInTransit: number;      // I85 = H85 * (percInTransit / 100)
+  diariasABordo: number;       // J85 = Final - Inicio + 1
+  diariasInTransit: number;    // N85
+  diariasOnSite: number;       // L85 = J85 - N85
+  totalInTransit: number;      // (N85 * I85) * D85
+  totalOnSite: number;         // (L85 * H85) * D85
+  totalGeral: number;          // P85 = (N85*I85)*D85 + (L85*H85)*D85
+}
+
+export function calculateRentalCost(input: Partial<RentalCostInput>): RentalCostBreakdown {
+  const dataInicial = input.dataInicial || '';
+  const dataFinal = input.dataFinal || input.dataInicial || '';
+  const qtd = Math.max(1, Number(input.quantidade) || 1);
+  const recurso = input.recurso || '';
+  const valorOnSite = Math.max(0, Number(input.valorOnSite) || 0);
+  const percInTransit = (input.percInTransit !== undefined && input.percInTransit !== null && !isNaN(Number(input.percInTransit))) 
+    ? Number(input.percInTransit) 
+    : 50; // Padrão 50% conforme Excel
+  
+  // I85: Valor In Transit
+  const valorInTransit = valorOnSite * (percInTransit / 100);
+
+  // J85: Diárias a bordo = SE(B85="";0;C85-B85+1)
+  const diariasABordo = calculateDaysBetween(dataInicial, dataFinal);
+
+  // N85: Diárias cobradas In Transit (definido pelo usuário)
+  const diariasInTransit = Math.max(0, Number(input.diariasInTransit) || 0);
+
+  // L85: Diárias On site = J85 - N85
+  const diariasOnSite = input.diariasOnSiteManual !== undefined && Number(input.diariasOnSiteManual) >= 0
+    ? Number(input.diariasOnSiteManual)
+    : Math.max(0, diariasABordo - diariasInTransit);
+
+  // P85: =(N85*I85)*D85 + (L85*H85)*D85
+  const totalInTransit = (diariasInTransit * valorInTransit) * qtd;
+  const totalOnSite = (diariasOnSite * valorOnSite) * qtd;
+  const totalGeral = totalInTransit + totalOnSite;
+
+  return {
+    dataInicial,
+    dataFinal,
+    quantidade: qtd,
+    recurso,
+    valorOnSite,
+    percInTransit,
+    valorInTransit,
+    diariasABordo,
+    diariasInTransit,
+    diariasOnSite,
+    totalInTransit,
+    totalOnSite,
+    totalGeral
+  };
+}

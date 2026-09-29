@@ -43,6 +43,7 @@ import {
   enviarEmailComAnexoReal, 
   parseEmailRecipients 
 } from '../services/microsoftGraphEmailService';
+import { loadStoredAttachments, StoredAttachment } from './DocumentAttachmentsSection';
 import { 
   getStoredMicrosoftAccount, 
   getStoredMicrosoftConfig, 
@@ -108,6 +109,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
   const [saveToken, setSaveToken] = useState(true);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [pdfFileForEmail, setPdfFileForEmail] = useState<File | null>(null);
+  const [extraAttachmentsForEmail, setExtraAttachmentsForEmail] = useState<StoredAttachment[]>([]);
+  const [selectedExtraAttachmentIds, setSelectedExtraAttachmentIds] = useState<string[]>([]);
 
   // Load detailed order & BP data when modal opens
   useEffect(() => {
@@ -906,6 +909,13 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const file = getPdfFile(layoutLang);
       setPdfFileForEmail(file);
 
+      // Load document attachments (PO, Quotation, approval emails, etc.)
+      const docEntryId = fullOrder?.DocEntry || order?.DocEntry || 'draft';
+      const stored = loadStoredAttachments('order', docEntryId);
+      setExtraAttachmentsForEmail(stored);
+      // Select all stored attachments by default so they go along with the draft
+      setSelectedExtraAttachmentIds(stored.map((a, idx) => a.id || String(idx)));
+
       setIsEmailModalOpen(true);
     } catch (err) {
       console.error('Erro ao preparar arquivo PDF para envio:', err);
@@ -1083,9 +1093,29 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
 
     setIsSendingEmail(true);
     try {
+      // Build attachments array: Draft PDF + any attached documents from the order
+      const allFilesToSend: (File | { name: string; type: string; contentBytes: string })[] = [
+        pdfFileForEmail
+      ];
+
+      extraAttachmentsForEmail.forEach((att, idx) => {
+        const id = att.id || String(idx);
+        if (selectedExtraAttachmentIds.includes(id) && att.dataUrl) {
+          // Extract base64 content
+          const base64Data = att.dataUrl.includes(',') 
+            ? att.dataUrl.split(',')[1] 
+            : att.dataUrl;
+          allFilesToSend.push({
+            name: att.name,
+            type: att.type || 'application/octet-stream',
+            contentBytes: base64Data
+          });
+        }
+      });
+
       await enviarEmailComAnexoReal(
         tokenToSend,
-        pdfFileForEmail,
+        allFilesToSend,
         recipientList,
         emailSubject.trim(),
         emailBody.trim()
@@ -1093,7 +1123,10 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const recipientSummary = recipientList.length === 1 
         ? recipientList[0] 
         : `${recipientList.length} destinatários (${recipientList.join('; ')})`;
-      toast.success(`E-mail com anexo enviado com sucesso para ${recipientSummary}!`);
+      const filesCount = allFilesToSend.length;
+      toast.success(
+        `E-mail com ${filesCount} anexo(s) (Draft Invoice + anexos) enviado com sucesso para ${recipientSummary}!`
+      );
       setIsEmailModalOpen(false);
     } catch (err: any) {
       console.error('Erro ao enviar e-mail via Microsoft Graph:', err);
@@ -1328,7 +1361,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                           <div className="flex justify-between items-start pb-6 border-b border-slate-100">
                             {/* Left Company Header */}
                             <div className="space-y-1">
-                              <div className="flex items-center gap-3 mb-2">
+                              <div className="flex items-center mb-2">
                                 <img 
                                   src="/qualitech-logo.svg" 
                                   alt="Qualitech" 
@@ -1338,7 +1371,6 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
-                                <span className="text-2xl font-black tracking-tight text-[#0B4F8A]">Qualitech</span>
                               </div>
                               <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                                 {layoutLang === 'en' 
@@ -1456,7 +1488,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                           <div className="flex justify-between items-start pb-4 border-b border-slate-200">
                             {/* Left Company Header */}
                             <div className="space-y-1">
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center mb-1">
                                 <img 
                                   src="/qualitech-logo.svg" 
                                   alt="Qualitech" 
@@ -1465,7 +1497,6 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
-                                <span className="text-xl font-black tracking-tight text-[#0B4F8A]">Qualitech</span>
                               </div>
                               <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                                 {layoutLang === 'en' 
@@ -2214,26 +2245,99 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
             </div>
 
             {/* Attachment Display */}
-            <div className="space-y-1.5">
-              <Label className="text-[10px] font-black uppercase tracking-widest text-slate-600">
-                {emailLang === 'en' ? 'Attached Draft PDF' : 'Anexo da Draft Selecionada'}
-              </Label>
-              <div className="flex items-center justify-between p-3 border border-blue-200 bg-blue-50/50 rounded">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-[10px] font-black uppercase tracking-widest text-slate-600">
+                  {emailLang === 'en' ? 'Attachments to be sent' : 'Arquivos Anexados ao E-mail'}
+                </Label>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  {1 + selectedExtraAttachmentIds.length} {emailLang === 'en' ? 'file(s) attached' : 'arquivo(s) anexado(s)'}
+                </span>
+              </div>
+
+              {/* 1. Main Draft PDF Attachment */}
+              <div className="flex items-center justify-between p-3 border border-blue-200 bg-blue-50/60 rounded">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded bg-red-100 text-red-600 flex items-center justify-center font-bold text-xs">
+                  <div className="w-8 h-8 rounded bg-red-100 text-red-600 flex items-center justify-center font-black text-xs shrink-0">
                     PDF
                   </div>
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-slate-800">{pdfFileForEmail?.name || `Draft_Invoice_${docNum}_Qualitech.pdf`}</span>
                     <span className="text-[10px] text-slate-500 font-mono">
-                      {pdfFileForEmail ? `${(pdfFileForEmail.size / 1024).toFixed(1)} KB` : 'Pronto para envio'} • {emailLang === 'en' ? 'Draft Invoice (English Layout)' : 'Espelho Draft Invoice (Português)'}
+                      {pdfFileForEmail ? `${(pdfFileForEmail.size / 1024).toFixed(1)} KB` : 'Pronto para envio'} • {emailLang === 'en' ? 'Draft Invoice (Main Document)' : 'Espelho da Draft Invoice (Documento Principal)'}
                     </span>
                   </div>
                 </div>
-                <span className="text-[9px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded uppercase">
-                  {emailLang === 'en' ? 'Attached' : 'Anexado'}
+                <span className="text-[9px] font-black text-blue-700 bg-blue-100 px-2 py-0.5 rounded uppercase">
+                  {emailLang === 'en' ? 'Draft PDF' : 'Draft Principal'}
                 </span>
               </div>
+
+              {/* 2. Extra Order Attachments (PO, Quotation, Approvals, etc.) */}
+              {extraAttachmentsForEmail.length > 0 && (
+                <div className="pt-1 space-y-1.5">
+                  <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
+                    <span>{emailLang === 'en' ? 'Attachments linked to this order:' : 'Anexos vinculados a este pedido:'}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedExtraAttachmentIds.length === extraAttachmentsForEmail.length) {
+                          setSelectedExtraAttachmentIds([]);
+                        } else {
+                          setSelectedExtraAttachmentIds(extraAttachmentsForEmail.map((a, idx) => a.id || String(idx)));
+                        }
+                      }}
+                      className="text-[10px] text-blue-600 hover:text-blue-800 font-bold lowercase underline cursor-pointer"
+                    >
+                      {selectedExtraAttachmentIds.length === extraAttachmentsForEmail.length 
+                        ? (emailLang === 'en' ? 'deselect all' : 'desmarcar todos') 
+                        : (emailLang === 'en' ? 'select all' : 'selecionar todos')}
+                    </button>
+                  </div>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {extraAttachmentsForEmail.map((att, idx) => {
+                      const id = att.id || String(idx);
+                      const isChecked = selectedExtraAttachmentIds.includes(id);
+                      return (
+                        <label
+                          key={id}
+                          className={`flex items-center justify-between p-2.5 border rounded cursor-pointer transition-colors ${
+                            isChecked ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white opacity-70 hover:opacity-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedExtraAttachmentIds([...selectedExtraAttachmentIds, id]);
+                                } else {
+                                  setSelectedExtraAttachmentIds(selectedExtraAttachmentIds.filter(x => x !== id));
+                                }
+                              }}
+                              className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                            />
+                            <div className="flex flex-col truncate">
+                              <span className="text-xs font-semibold text-slate-800 truncate" title={att.name}>
+                                {att.name}
+                              </span>
+                              <span className="text-[9px] text-slate-500">
+                                {att.size ? `${(att.size / 1024).toFixed(1)} KB` : 'Anexo'} • {new Date(att.uploadedAt).toLocaleDateString('pt-BR')}
+                              </span>
+                            </div>
+                          </div>
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${
+                            isChecked ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {isChecked ? (emailLang === 'en' ? 'Will Send' : 'Será Enviado') : (emailLang === 'en' ? 'Omitted' : 'Omitido')}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

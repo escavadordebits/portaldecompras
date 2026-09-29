@@ -677,11 +677,49 @@ apiRouter.all('/sap/*', async (req, res) => {
     }
   }
 
-  const endpoint = req.params[0];
+  let endpoint = req.params[0];
+  // Auto-quote string keys in OData UDT endpoints if unquoted, e.g. CustosLoc(2) -> CustosLoc('2')
+  endpoint = endpoint.replace(/^(CustosLoc|CustosPessoal|U_CustosLoc|U_CustosPessoal)\(([^'"][^)]*)\)$/, "$1('$2')");
+
   const method = req.method;
   const query = req.query;
-  const body = req.body;
+  let body = req.body;
   const sapConfig = getSapConfig(req);
+
+  // Sanitize body for CustosLoc: strip non-existent UDT fields like U_Recurso and map to Name
+  if (endpoint.includes('CustosLoc') && body && typeof body === 'object') {
+    body = { ...body };
+    if (!body.Name && body.U_Recurso) {
+      body.Name = body.U_Recurso;
+    }
+    if (!body.U_VlOnSite && body.U_ValorBase) {
+      body.U_VlOnSite = Number(body.U_ValorBase) || 0;
+    }
+    delete body.U_Recurso;
+    delete body.U_ValorBase;
+    delete body.U_HorasNor;
+    delete body.U_HorasNob;
+    delete body.U_HENor;
+    delete body.U_HENob;
+  }
+
+  // Sanitize body for Orders and Quotations: leave financial Project/ProjectCode blank and ensure distribution rule defaults
+  if ((endpoint.startsWith('Orders') || endpoint.startsWith('Quotations')) && body && typeof body === 'object') {
+    body = { ...body };
+    // Leave financial Project blank as requested
+    delete body.Project;
+    if (Array.isArray(body.DocumentLines)) {
+      body.DocumentLines = body.DocumentLines.map((line: any) => {
+        if (!line) return line;
+        const copy = { ...line };
+        delete copy.ProjectCode;
+        if (!copy.CostingCode) copy.CostingCode = 'BR';
+        if (!copy.CostingCode2) copy.CostingCode2 = 'MATRIZ';
+        if (!copy.CostingCode3) copy.CostingCode3 = 'OPER_OFF';
+        return copy;
+      });
+    }
+  }
 
   if (method !== 'GET') {
     console.log(`SAP Proxy Request: ${method} ${endpoint}`, JSON.stringify(body, null, 2));

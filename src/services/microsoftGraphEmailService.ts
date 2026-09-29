@@ -41,7 +41,8 @@ export function parseEmailRecipients(input: string | string[]): string[] {
 
 export interface SendEmailOptions {
   graphAccessToken: string;
-  arquivo: File;
+  arquivo?: File;
+  arquivos?: (File | { name: string; type: string; contentBytes: string })[];
   toEmail: string | string[];
   ccEmail?: string | string[];
   subject?: string;
@@ -50,7 +51,7 @@ export interface SendEmailOptions {
 
 export async function enviarEmailComAnexoReal(
   graphAccessToken: string, 
-  arquivo: File, 
+  arquivoOuArquivos: File | (File | { name: string; type: string; contentBytes: string })[], 
   toEmail: string | string[] = "destinatario@outlook.com",
   subject: string = "Espelho Pedido de Venda / Draft",
   bodyContent: string = "Olá, segue o arquivo em anexo enviado pelo app React.",
@@ -66,7 +67,28 @@ export async function enviarEmailComAnexoReal(
     throw new Error("Nenhum endereço de e-mail de destinatário válido foi informado.");
   }
 
-  const arquivoBase64 = await fileToBase64(arquivo);
+  const rawList = Array.isArray(arquivoOuArquivos) ? arquivoOuArquivos : [arquivoOuArquivos];
+  const attachmentsList = [];
+
+  for (const item of rawList) {
+    if (!item) continue;
+    if ('contentBytes' in item && typeof item.contentBytes === 'string') {
+      attachmentsList.push({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: item.name,
+        contentType: item.type || "application/octet-stream",
+        contentBytes: item.contentBytes,
+      });
+    } else if (item instanceof File) {
+      const base64 = await fileToBase64(item);
+      attachmentsList.push({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: item.name,
+        contentType: item.type || "application/pdf",
+        contentBytes: base64,
+      });
+    }
+  }
 
   const toRecipients = recipientList.map((addr) => ({
     emailAddress: {
@@ -89,14 +111,7 @@ export async function enviarEmailComAnexoReal(
         content: bodyContent,
       },
       toRecipients: toRecipients,
-      attachments: [
-        {
-          "@odata.type": "#microsoft.graph.fileAttachment",
-          name: arquivo.name,
-          contentType: arquivo.type || "application/pdf",
-          contentBytes: arquivoBase64,
-        },
-      ],
+      attachments: attachmentsList,
     },
   };
 

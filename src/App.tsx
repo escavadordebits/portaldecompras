@@ -74,8 +74,8 @@ import {
   sendPasswordResetEmail,
   signOut 
 } from 'firebase/auth';
-import { sapService, normalizeSapCompany } from './services/sapService';
-import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween } from './utils/costCalculations';
+import { sapService, normalizeSapCompany, resolveSapFinancialProject } from './services/sapService';
+import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost } from './utils/costCalculations';
 import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
@@ -615,6 +615,7 @@ export default function App() {
   const [isMeasurementsModalOpen, setIsMeasurementsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [menuSearch, setMenuSearch] = useState('');
 
   // Login State
   const [isRegistering, setIsRegistering] = useState(false);
@@ -992,6 +993,308 @@ export default function App() {
     setSelectedDownPaymentEntry(docEntry);
     setCurrentView('list-down-payments');
   };
+
+  // Menu items definition for searchable sidebar (must be called unconditionally before any early returns)
+  const menuSections = useMemo(() => [
+    {
+      title: 'Compras',
+      visible: !!activeModules.procurement,
+      items: [
+        {
+          id: 'create-order',
+          label: 'Pedido de Compra',
+          icon: <Plus />,
+          active: currentView === 'create-order',
+          onClick: () => {
+            setCurrentView('create-order');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['pedido', 'compra', 'novo']
+        },
+        {
+          id: 'list-orders',
+          label: 'Listar Pedidos',
+          icon: <Search />,
+          active: currentView === 'list-orders',
+          onClick: () => {
+            setSelectedOrderEntry(null);
+            setCurrentView('list-orders');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['pedidos', 'compras', 'listar', 'buscar']
+        }
+      ]
+    },
+    {
+      title: 'Solicitações',
+      visible: !!activeModules.procurement,
+      items: [
+        {
+          id: 'create-request',
+          label: 'Nova Solicitação',
+          icon: <Plus />,
+          active: currentView === 'create-request',
+          onClick: () => {
+            setCurrentView('create-request');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['solicitação', 'solicitacao', 'nova', 'solicitar']
+        },
+        {
+          id: 'list-requests',
+          label: 'Listar Solicitações',
+          icon: <Search />,
+          active: currentView === 'list-requests',
+          onClick: () => {
+            setSelectedRequestEntry(null);
+            setCurrentView('list-requests');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['solicitações', 'solicitacoes', 'listar']
+        }
+      ]
+    },
+    {
+      title: 'Aprovações',
+      visible: !!activeModules.approvals,
+      items: [
+        {
+          id: 'approvals',
+          label: 'Minhas Aprovações',
+          icon: <CheckSquare />,
+          active: currentView === 'approvals',
+          onClick: () => {
+            setCurrentView('approvals');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['aprovações', 'aprovacoes', 'aprovar']
+        }
+      ]
+    },
+    {
+      title: 'Negociações',
+      visible: !!activeModules.negotiations,
+      items: [
+        {
+          id: 'create-quotation',
+          label: 'Nova Oferta',
+          icon: <Plus />,
+          active: currentView === 'create-quotation',
+          onClick: () => {
+            setCurrentView('create-quotation');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['oferta', 'cotação', 'cotacao', 'negociação', 'fornecedor']
+        },
+        {
+          id: 'list-quotations',
+          label: 'Listar Ofertas',
+          icon: <Search />,
+          active: currentView === 'list-quotations',
+          onClick: () => {
+            setSelectedQuotationEntry(null);
+            setCurrentView('list-quotations');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['ofertas', 'cotações', 'cotacoes', 'listar']
+        },
+        {
+          id: 'bid-map',
+          label: 'Mapa Comparativo (BID)',
+          icon: <Calculator />,
+          active: currentView === 'bid-map',
+          onClick: () => {
+            setCurrentView('bid-map');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['bid', 'mapa', 'comparativo', 'quadro']
+        }
+      ]
+    },
+    {
+      title: 'Indústria & Qualidade',
+      visible: !!(activeModules.quality || activeModules.maintenance || activeModules.calibration),
+      items: [
+        ...(activeModules.quality ? [{
+          id: 'quality',
+          label: 'Qualidade (QLDADE)',
+          icon: <CheckCircle />,
+          active: currentView === 'quality',
+          onClick: () => {
+            setCurrentView('quality');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['qualidade', 'qldade', 'inspeção', 'inspecao']
+        }] : []),
+        ...(activeModules.maintenance ? [{
+          id: 'maintenance',
+          label: 'Manutenção (CAB)',
+          icon: <Settings />,
+          active: currentView === 'maintenance',
+          onClick: () => {
+            setCurrentView('maintenance');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['manutenção', 'manutencao', 'cab', 'equipamento']
+        }] : []),
+        ...(activeModules.calibration ? [{
+          id: 'calibration',
+          label: 'Calibração',
+          icon: <Clock />,
+          active: currentView === 'calibration',
+          onClick: () => {
+            setCurrentView('calibration');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['calibração', 'calibracao', 'aferição', 'afericao', 'instrumento']
+        }] : [])
+      ]
+    },
+    {
+      title: 'Gestão',
+      visible: !!(activeModules.costs || activeModules.quotations || activeModules.salesOrders),
+      items: [
+        ...(activeModules.costs ? [{
+          id: 'costs',
+          label: 'Controle de Receitas',
+          icon: <FileText />,
+          active: currentView === 'costs',
+          onClick: () => {
+            setCurrentView('costs');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['receitas', 'custos', 'pessoal', 'locação', 'locacao', 'financeiro']
+        }] : []),
+        ...(activeModules.quotations ? [{
+          id: 'quotations',
+          label: 'Cotações',
+          icon: <FileText />,
+          active: currentView === 'quotations',
+          onClick: () => {
+            setCurrentView('quotations');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['cotações', 'cotacoes', 'venda', 'proposta', 'comercial']
+        }] : []),
+        {
+          id: 'measurements',
+          label: 'Resumo de Medições',
+          icon: <Ruler />,
+          active: false,
+          onClick: () => {
+            setIsMeasurementsModalOpen(true);
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['medições', 'medicoes', 'resumo', 'locação', 'pessoal']
+        },
+        ...(activeModules.salesOrders ? [{
+          id: 'sales-orders',
+          label: 'Pedido de Venda',
+          icon: <ShoppingCart />,
+          active: currentView === 'sales-orders',
+          onClick: () => {
+            setCurrentView('sales-orders');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['venda', 'pedido de venda', 'wo', 'po cliente', 'orders']
+        }] : [])
+      ]
+    },
+    {
+      title: 'Financeiro',
+      visible: !!activeModules.procurement,
+      items: [
+        {
+          id: 'create-down-payment',
+          label: 'Novo Adiantamento',
+          icon: <Plus />,
+          active: currentView === 'create-down-payment',
+          onClick: () => {
+            setCurrentView('create-down-payment');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['adiantamento', 'novo adiantamento', 'down payment', 'financeiro']
+        },
+        {
+          id: 'list-down-payments',
+          label: 'Lista Adiantamentos',
+          icon: <Search />,
+          active: currentView === 'list-down-payments',
+          onClick: () => {
+            setSelectedDownPaymentEntry(null);
+            setCurrentView('list-down-payments');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['adiantamentos', 'listar adiantamentos', 'down payments']
+        }
+      ]
+    },
+    {
+      title: 'Administração',
+      visible: userProfile?.role === 'admin',
+      items: [
+        {
+          id: 'users',
+          label: 'Usuários & Acessos',
+          icon: <Settings />,
+          active: currentView === 'users',
+          onClick: () => {
+            setCurrentView('users');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['usuários', 'usuarios', 'acessos', 'admin', 'permissões', 'permissoes']
+        }
+      ]
+    }
+  ], [activeModules, currentView, userProfile?.role]);
+
+  const normalizedSearch = menuSearch.trim().toLowerCase();
+
+  const isDashboardMatch = useMemo(() => {
+    if (!normalizedSearch) return true;
+    return 'visão geral'.includes(normalizedSearch) || 'visao geral'.includes(normalizedSearch) || 'dashboard'.includes(normalizedSearch);
+  }, [normalizedSearch]);
+
+  const filteredMenuSections = useMemo(() => {
+    if (!normalizedSearch) {
+      return menuSections.filter(s => s.visible && s.items.length > 0);
+    }
+    return menuSections
+      .filter(s => s.visible && s.items.length > 0)
+      .map(section => {
+        const matchingItems = section.items.filter(item => {
+          const matchLabel = item.label.toLowerCase().includes(normalizedSearch);
+          const matchSection = section.title.toLowerCase().includes(normalizedSearch);
+          const matchKeywords = item.keywords?.some(k => k.toLowerCase().includes(normalizedSearch));
+          return matchLabel || matchSection || matchKeywords;
+        });
+        return {
+          ...section,
+          items: matchingItems
+        };
+      })
+      .filter(s => s.items.length > 0);
+  }, [menuSections, normalizedSearch]);
+
+  const allFilteredItems = useMemo(() => {
+    const items = filteredMenuSections.flatMap(s => s.items);
+    if (normalizedSearch && isDashboardMatch) {
+      return [
+        {
+          id: 'dashboard',
+          label: 'Visão Geral',
+          icon: <LayoutDashboard />,
+          active: currentView === 'dashboard',
+          onClick: () => {
+            setCurrentView('dashboard');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          }
+        },
+        ...items
+      ];
+    }
+    return items;
+  }, [filteredMenuSections, normalizedSearch, isDashboardMatch, currentView]);
 
   // Handle Portal View
   if (currentView === 'quotation-portal' && portalDocEntry) {
@@ -1388,257 +1691,116 @@ export default function App() {
           transition-all duration-300 bg-evo-dark text-white/70 flex flex-col overflow-hidden
           fixed lg:relative z-40 h-[calc(100vh-4rem)] lg:h-auto border-r border-white/5 shadow-2xl lg:shadow-none
         `}>
-          <nav className="flex-1 py-6">
-            <SidebarItem 
-              icon={<LayoutDashboard />} 
-              label="Visão Geral" 
-              active={currentView === 'dashboard'} 
-              expanded={sidebarOpen}
-              onClick={() => {
-                setCurrentView('dashboard');
-                if (window.innerWidth < 1024) setSidebarOpen(false);
-              }}
-            />
-            
-            {activeModules.procurement && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Compras</div>
-                <SidebarItem 
-                  icon={<Plus />} 
-                  label="Pedido de Compra" 
-                  active={currentView === 'create-order'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('create-order');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                <SidebarItem 
-                  icon={<Search />} 
-                  label="Listar Pedidos" 
-                  active={currentView === 'list-orders'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setSelectedOrderEntry(null);
-                    setCurrentView('list-orders');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Solicitações</div>
-                <SidebarItem 
-                  icon={<Plus />} 
-                  label="Nova Solicitação" 
-                  active={currentView === 'create-request'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('create-request');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                <SidebarItem 
-                  icon={<Search />} 
-                  label="Listar Solicitações" 
-                  active={currentView === 'list-requests'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setSelectedRequestEntry(null); // Clear selection when going to list
-                    setCurrentView('list-requests');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-              </>
-            )}
-
-            {activeModules.approvals && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Aprovações</div>
-                <SidebarItem 
-                  icon={<CheckSquare />} 
-                  label="Minhas Aprovações" 
-                  active={currentView === 'approvals'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('approvals');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-              </>
-            )}
-
-            {activeModules.negotiations && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Negociações</div>
-                <SidebarItem 
-                  icon={<Plus />} 
-                  label="Nova Oferta" 
-                  active={currentView === 'create-quotation'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('create-quotation');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                <SidebarItem 
-                  icon={<Search />} 
-                  label="Listar Ofertas" 
-                  active={currentView === 'list-quotations'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setSelectedQuotationEntry(null);
-                    setCurrentView('list-quotations');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                <SidebarItem 
-                  icon={<Calculator />} 
-                  label="Mapa Comparativo (BID)" 
-                  active={currentView === 'bid-map'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('bid-map');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-              </>
-            )}
-
-            {(activeModules.quality || activeModules.maintenance || activeModules.calibration) && (
-              <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Indústria & Qualidade</div>
-            )}
-            
-            {activeModules.quality && (
+          {/* Top of Sidebar: Visão Geral + Campo de Pesquisa de Menus */}
+          <div className="pt-4 pb-2 border-b border-white/5 shrink-0">
+            {(!normalizedSearch || isDashboardMatch) && (
               <SidebarItem 
-                icon={<CheckCircle />} 
-                label="Qualidade (QLDADE)" 
-                active={currentView === 'quality'} 
+                icon={<LayoutDashboard />} 
+                label="Visão Geral" 
+                badge={normalizedSearch ? "Principal" : undefined}
+                active={currentView === 'dashboard'} 
                 expanded={sidebarOpen}
                 onClick={() => {
-                  setCurrentView('quality');
-                  if (window.innerWidth < 1024) setSidebarOpen(false);
-                }}
-              />
-            )}
-            
-            {activeModules.maintenance && (
-              <SidebarItem 
-                icon={<Settings />} 
-                label="Manutenção (CAB)" 
-                active={currentView === 'maintenance'} 
-                expanded={sidebarOpen}
-                onClick={() => {
-                  setCurrentView('maintenance');
+                  setCurrentView('dashboard');
                   if (window.innerWidth < 1024) setSidebarOpen(false);
                 }}
               />
             )}
 
-            {activeModules.calibration && (
-              <SidebarItem 
-                icon={<Clock />} 
-                label="Calibração" 
-                active={currentView === 'calibration'} 
-                expanded={sidebarOpen}
-                onClick={() => {
-                  setCurrentView('calibration');
-                  if (window.innerWidth < 1024) setSidebarOpen(false);
-                }}
-              />
-            )}
-
-            {(activeModules.costs || activeModules.quotations || activeModules.salesOrders) && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Gestão</div>
-                {activeModules.costs && (
-                  <SidebarItem 
-                    icon={<FileText />} 
-                    label="Controle de Receitas" 
-                    active={currentView === 'costs'} 
-                    expanded={sidebarOpen}
-                    onClick={() => {
-                      setCurrentView('costs');
-                      if (window.innerWidth < 1024) setSidebarOpen(false);
+            {/* Campo de pesquisa de menus para acesso rápido */}
+            <div className="px-4 py-2 mt-1">
+              {sidebarOpen ? (
+                <div className="relative flex items-center">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 text-white/40 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={menuSearch}
+                    onChange={(e) => setMenuSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && allFilteredItems.length > 0) {
+                        e.preventDefault();
+                        allFilteredItems[0].onClick();
+                      } else if (e.key === 'Escape') {
+                        setMenuSearch('');
+                      }
                     }}
+                    placeholder="Pesquisar menu..."
+                    className="w-full h-8 pl-8 pr-7 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-xs text-white placeholder-white/30 focus:outline-none focus:border-evo-teal focus:bg-white/10 transition-all font-medium"
                   />
-                )}
-                {activeModules.quotations && (
-                  <SidebarItem 
-                    icon={<FileText />} 
-                    label="Cotações" 
-                    active={currentView === 'quotations'} 
-                    expanded={sidebarOpen}
-                    onClick={() => {
-                      setCurrentView('quotations');
-                      if (window.innerWidth < 1024) setSidebarOpen(false);
-                    }}
-                  />
-                )}
-                <SidebarItem 
-                  icon={<Ruler />} 
-                  label="Resumo de Medições" 
-                  active={false} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setIsMeasurementsModalOpen(true);
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                {activeModules.salesOrders && (
-                  <SidebarItem 
-                    icon={<ShoppingCart />} 
-                    label="Pedido de Venda" 
-                    active={currentView === 'sales-orders'} 
-                    expanded={sidebarOpen}
-                    onClick={() => {
-                      setCurrentView('sales-orders');
-                      if (window.innerWidth < 1024) setSidebarOpen(false);
-                    }}
-                  />
-                )}
-              </>
-            )}
+                  {menuSearch ? (
+                    <button
+                      onClick={() => setMenuSearch('')}
+                      className="absolute right-2 text-white/40 hover:text-white p-0.5 transition-colors"
+                      title="Limpar pesquisa"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2 text-[9px] font-mono text-white/20 pointer-events-none">
+                      ↵
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setSidebarOpen(true)}
+                  className="w-full flex justify-center py-2 text-white/40 hover:text-white hover:bg-white/5 rounded transition-all"
+                  title="Pesquisar menu"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+              )}
+            </div>
 
-            {activeModules.procurement && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Financeiro</div>
-                <SidebarItem 
-                  icon={<Plus />} 
-                  label="Novo Adiantamento" 
-                  active={currentView === 'create-down-payment'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('create-down-payment');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-                <SidebarItem 
-                  icon={<Search />} 
-                  label="Lista Adiantamentos" 
-                  active={currentView === 'list-down-payments'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setSelectedDownPaymentEntry(null);
-                    setCurrentView('list-down-payments');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-              </>
+            {/* Search count indicator when typing */}
+            {sidebarOpen && normalizedSearch && (
+              <div className="px-5 pt-1 text-[9px] font-black uppercase tracking-widest text-evo-teal/80 flex items-center justify-between">
+                <span>{allFilteredItems.length} menu(s)</span>
+                <span className="text-[8px] text-white/30 lowercase font-normal">[enter para abrir]</span>
+              </div>
             )}
+          </div>
 
-            {userProfile?.role === 'admin' && (
-              <>
-                <div className="mt-4 px-6 py-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.2em]">Administração</div>
-                <SidebarItem 
-                  icon={<Settings />} 
-                  label="Usuários & Acessos" 
-                  active={currentView === 'users'} 
-                  expanded={sidebarOpen}
-                  onClick={() => {
-                    setCurrentView('users');
-                    if (window.innerWidth < 1024) setSidebarOpen(false);
-                  }}
-                />
-              </>
+          {/* Scrollable Navigation Menu List */}
+          <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20">
+            {allFilteredItems.length === 0 && normalizedSearch ? (
+              <div className="px-5 py-8 text-center text-white/40">
+                <Search className="w-6 h-6 mx-auto mb-2 opacity-30 text-evo-teal" />
+                <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">Nenhum menu encontrado</p>
+                <p className="text-[10px] text-white/30 mt-1">"{menuSearch}"</p>
+                <button
+                  onClick={() => setMenuSearch('')}
+                  className="mt-3 px-3 py-1 text-[10px] uppercase font-bold text-evo-teal border border-evo-teal/30 hover:bg-evo-teal/10 rounded transition-colors"
+                >
+                  Limpar busca
+                </button>
+              </div>
+            ) : (
+              filteredMenuSections.map((section) => (
+                <div key={section.title} className="mb-2">
+                  {sidebarOpen && (
+                    <div className="px-6 py-1.5 text-[9px] font-black text-white/30 uppercase tracking-[0.2em] flex items-center justify-between">
+                      <span>{section.title}</span>
+                      {normalizedSearch && (
+                        <span className="text-[8px] text-white/20 font-mono">
+                          {section.items.length}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {section.items.map((item) => (
+                    <SidebarItem
+                      key={item.id}
+                      icon={item.icon}
+                      label={item.label}
+                      badge={normalizedSearch ? section.title : undefined}
+                      active={item.active}
+                      expanded={sidebarOpen}
+                      onClick={item.onClick}
+                    />
+                  ))}
+                </div>
+              ))
             )}
           </nav>
           
@@ -1862,19 +2024,28 @@ export default function App() {
   );
 }
 
-function SidebarItem({ icon, label, active, expanded, onClick }: any) {
+function SidebarItem({ icon, label, badge, active, expanded, onClick }: any) {
   return (
     <button 
       onClick={onClick}
       className={`
-        w-full flex items-center gap-4 px-6 py-3 transition-all duration-200 border-l-4
+        w-full flex items-center justify-between px-6 py-2.5 transition-all duration-200 border-l-4 text-left group
         ${active 
           ? 'bg-white/5 text-white border-evo-teal' 
           : 'border-transparent hover:bg-white/5 hover:text-white'}
       `}
     >
-      <span className={`shrink-0 transition-colors ${active ? 'text-evo-teal' : ''}`}>{React.cloneElement(icon, { size: 18 })}</span>
-      {expanded && <span className="text-xs font-bold uppercase tracking-wider whitespace-nowrap">{label}</span>}
+      <div className="flex items-center gap-3.5 min-w-0">
+        <span className={`shrink-0 transition-colors ${active ? 'text-evo-teal' : 'text-white/60 group-hover:text-white'}`}>
+          {React.cloneElement(icon, { size: 18 })}
+        </span>
+        {expanded && <span className="text-xs font-bold uppercase tracking-wider truncate">{label}</span>}
+      </div>
+      {expanded && badge && (
+        <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/10 text-white/40 shrink-0">
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
@@ -2743,7 +2914,7 @@ function CreateOrderView({
       setLastAddedIdx(existingIdx);
       targetIdx = existingIdx;
     } else {
-      const newItems = [...orderItems, { ...item, Quantity: 1, Price: 0 }];
+      const newItems = [...orderItems, { ...item, Quantity: 1, Price: 0, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE' }];
       setOrderItems(newItems);
       setLastAddedIdx(newItems.length - 1);
       targetIdx = newItems.length - 1;
@@ -4779,19 +4950,20 @@ function CostsView() {
     e.preventDefault();
     setIsSubmitLoading(true);
     try {
-      const payload = {
-        ...rentalFormData,
-        U_ValorBase: Number(rentalFormData.U_ValorBase) || 0,
-        U_HorasNor: Number(rentalFormData.U_HorasNor) || 0,
-        U_HorasNob: Number(rentalFormData.U_HorasNob) || 0,
-        U_HENor: Number(rentalFormData.U_HENor) || 0,
-        U_HENob: Number(rentalFormData.U_HENob) || 0,
+      const payload: any = {
+        Name: rentalFormData.U_Recurso || 'LOCAÇÃO EQUIP.',
+        U_DtInicial: rentalFormData.U_DataInicial ? `${rentalFormData.U_DataInicial}T00:00:00Z` : null,
+        U_DtFinal: rentalFormData.U_DataFinal ? `${rentalFormData.U_DataFinal}T00:00:00Z` : null,
+        U_VlOnSite: Number(rentalFormData.U_ValorBase) || 0,
         U_Total: Number(rentalFormData.U_Total) || 0
       };
       if (editingId) {
         await sapService.updateRentalCost(editingId, payload);
         toast.success('Receita de locação atualizada com sucesso!');
       } else {
+        const nextCode = await sapService.getNextRentalCostCode();
+        payload.Code = nextCode;
+        if (!payload.Name) payload.Name = nextCode;
         await sapService.createRentalCost(payload);
         toast.success('Receita de locação registrada com sucesso!');
       }
@@ -4823,27 +4995,27 @@ function CostsView() {
       U_PercDobra: item.U_PercDobra || 50,
       U_Total: item.U_Total || 0
     });
-    setEditingId(item.DocEntry);
+    setEditingId(item.Code || item.DocEntry);
     setIsPersDialogOpen(true);
   };
 
   const handleEditRental = (item: any) => {
     setRentalFormData({
-      U_DataInicial: item.U_DataInicial?.split('T')[0] || '',
-      U_DataFinal: item.U_DataFinal?.split('T')[0] || '',
-      U_Recurso: item.U_Recurso || '',
-      U_ValorBase: item.U_ValorBase || 0,
+      U_DataInicial: (item.U_DtInicial || item.U_DataInicial)?.split('T')[0] || '',
+      U_DataFinal: (item.U_DtFinal || item.U_DataFinal)?.split('T')[0] || '',
+      U_Recurso: item.Name || item.U_Recurso || '',
+      U_ValorBase: item.U_VlOnSite || item.U_ValorBase || 0,
       U_HorasNor: item.U_HorasNor || 0,
       U_HorasNob: item.U_HorasNob || 0,
       U_HENor: item.U_HENor || 0,
       U_HENob: item.U_HENob || 0,
       U_Total: item.U_Total || 0
     });
-    setEditingId(item.DocEntry);
+    setEditingId(item.Code || item.DocEntry);
     setIsRentalDialogOpen(true);
   };
 
-  const handleDeletePers = async (id: number) => {
+  const handleDeletePers = async (id: any) => {
     if (!window.confirm('Tem certeza que deseja excluir este registro de pessoal?')) return;
     try {
       await sapService.deletePersonnelCost(id);
@@ -4854,7 +5026,7 @@ function CostsView() {
     }
   };
 
-  const handleDeleteRental = async (id: number) => {
+  const handleDeleteRental = async (id: any) => {
     if (!window.confirm('Tem certeza que deseja excluir este registro de locação?')) return;
     try {
       await sapService.deleteRentalCost(id);
@@ -5299,15 +5471,15 @@ function CostsView() {
                 <TableRow><TableCell colSpan={4} className="text-center py-10 text-[9px] font-black uppercase tracking-widest opacity-20">Sem registros de locação</TableCell></TableRow>
               ) : rental.map((r, i) => (
                 <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                  <TableCell className="px-6 py-4 uppercase font-black text-[10px] text-evo-dark">{r.U_Recurso || 'LOCAÇÃO EQUIP.'}</TableCell>
-                  <TableCell className="px-6 py-4 text-[10px] font-bold text-evo-dark/40">R$ {Number(r.U_ValorBase || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="px-6 py-4 uppercase font-black text-[10px] text-evo-dark">{r.Name || r.U_Recurso || 'LOCAÇÃO EQUIP.'}</TableCell>
+                  <TableCell className="px-6 py-4 text-[10px] font-bold text-evo-dark/40">R$ {Number(r.U_VlOnSite || r.U_ValorBase || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell className="px-6 py-4 font-black text-xs text-evo-teal">R$ {Number(r.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
                        <button onClick={() => handleEditRental(r)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
                          <Edit className="w-3.5 h-3.5" />
                        </button>
-                       <button onClick={() => handleDeleteRental(r.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
+                       <button onClick={() => handleDeleteRental(r.Code || r.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
                          <Trash2 className="w-3.5 h-3.5" />
                        </button>
                     </div>
@@ -5352,6 +5524,8 @@ function QuotationsView({
   const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
   const [projects, setProjects] = useState<any[]>([]);
+  const [costCenters, setCostCenters] = useState<any[]>([]);
+  const [isProjectLookupOpen, setIsProjectLookupOpen] = useState(false);
 
   // Effect to auto-open if initialDocEntry is passed
   useEffect(() => {
@@ -5394,10 +5568,14 @@ function QuotationsView({
 
   const loadAuxData = async () => {
     try {
-      const projData = await sapService.getProjects();
+      const [projData, ccData] = await Promise.all([
+        sapService.getProjects(),
+        sapService.getDistributionRules()
+      ]);
       setProjects(projData || []);
+      setCostCenters(ccData || []);
     } catch (e) {
-      console.warn('Erro ao carregar projetos:', e);
+      console.warn('Erro ao carregar projetos ou centros de custo:', e);
     }
   };
 
@@ -5462,12 +5640,13 @@ function QuotationsView({
       CardName: '',
       DocDueDate: new Date().toISOString().split('T')[0],
       U_Projeto: '',
+      CostingCode4: '',
       NumAtCard: '',
       Comments: '',
       DiscountPercent: 0,
       TotalDiscount: 0,
       DocumentLines: [
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -5484,6 +5663,10 @@ function QuotationsView({
             ...l,
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
             DiscountPercent: Number(l.DiscountPercent) || 0,
+            CostingCode: l.CostingCode || 'BR',
+            CostingCode2: l.CostingCode2 || 'MATRIZ',
+            CostingCode3: l.CostingCode3 || 'OPER_OFF',
+            CostingCode4: l.CostingCode4 || fullQuote.CostingCode4 || fullQuote.U_Projeto || fullQuote.Project || fullQuote.ProjectCode || 'BASE',
             U_nItem: nItem,
             U_nITEM: nItem,
             U_ItemLoc: itemLoc,
@@ -5508,23 +5691,24 @@ function QuotationsView({
     setIsOrderLoading(true);
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
+      const financialProj = resolveSapFinancialProject(proj);
       const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => ({
         ...line,
         DiscountPercent: Number(line.DiscountPercent) || 0,
         CostingCode: line.CostingCode || 'BR',
         CostingCode2: line.CostingCode2 || 'MATRIZ',
         CostingCode3: line.CostingCode3 || 'OPER_OFF',
-        CostingCode4: line.CostingCode4 || line.ProjectCode || proj,
-        ProjectCode: line.ProjectCode || proj
+        CostingCode4: line.CostingCode4 || proj,
+        ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
       }));
 
       const quoteToSave = {
         ...selectedQuote,
         DiscountPercent: selectedQuote.DiscountPercent !== undefined ? Number(selectedQuote.DiscountPercent) : 0,
         TotalDiscount: selectedQuote.TotalDiscount !== undefined ? Number(selectedQuote.TotalDiscount) : 0,
-        U_Projeto: proj,
-        Project: proj,
-        ProjectCode: proj,
+        U_Projeto: proj !== 'BASE' ? proj : undefined,
+        Project: financialProj || undefined,
+        ProjectCode: financialProj || undefined,
         CostingCode4: proj,
         DocumentLines: preparedLines
       };
@@ -5574,12 +5758,13 @@ function QuotationsView({
     setIsOrderLoading(true);
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
+      const financialProj = resolveSapFinancialProject(proj);
       await sapService.createOrderFromQuotation({
         ...selectedQuote,
-        U_Projeto: proj,
+        U_Projeto: proj !== 'BASE' ? proj : undefined,
         CostingCode4: proj,
-        Project: proj,
-        ProjectCode: proj
+        Project: financialProj || undefined,
+        ProjectCode: financialProj || undefined
       });
       toast.success('Pedido de Venda criado com sucesso! Cotação encerrada.');
       fetchQuotations();
@@ -5592,33 +5777,97 @@ function QuotationsView({
     }
   };
 
+  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number) => {
+    setSelectedQuote((prev: any) => {
+      if (!prev) return prev;
+      const lines = [...(prev.DocumentLines || [])];
+      const line = lines[lineIdx];
+      if (!line) return prev;
+      const currentRentalCost = Number(line.lineRentalCost ?? 0);
+      const newPersonnelCost = Number(personnelTotal) || 0;
+      const combinedTotal = newPersonnelCost + currentRentalCost;
+      const qty = Math.max(1, Number(line.Quantity) || 1);
+      const newUnitPrice = combinedTotal > 0 ? (combinedTotal / qty) : (Number(line.Price) || 0);
+
+      lines[lineIdx] = {
+        ...line,
+        U_nItem: code,
+        U_nITEM: code,
+        linePersonnelCost: newPersonnelCost,
+        Price: combinedTotal > 0 ? newUnitPrice : line.Price,
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+      };
+      return { ...prev, DocumentLines: lines };
+    });
+    toast.success(`Custo de pessoal (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+  };
+
+  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
+    setSelectedQuote((prev: any) => {
+      if (!prev) return prev;
+      const lines = [...(prev.DocumentLines || [])];
+      const line = lines[lineIdx];
+      if (!line) return prev;
+      const currentPersonnelCost = Number(line.linePersonnelCost ?? 0);
+      const newRentalCost = Number(rentalTotal) || 0;
+      const combinedTotal = currentPersonnelCost + newRentalCost;
+      const qty = Math.max(1, Number(line.Quantity) || 1);
+      const newUnitPrice = combinedTotal > 0 ? (combinedTotal / qty) : (Number(line.Price) || 0);
+
+      lines[lineIdx] = {
+        ...line,
+        U_ItemLoc: code,
+        U_ITEMLOC: code,
+        lineRentalCost: newRentalCost,
+        Price: combinedTotal > 0 ? newUnitPrice : line.Price,
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+      };
+      return { ...prev, DocumentLines: lines };
+    });
+    toast.success(`Custo de locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+  };
+
   const handleAddLine = () => {
     const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
-    setSelectedQuote({
-      ...selectedQuote,
-      DocumentLines: [
-        ...selectedQuote.DocumentLines,
-        { 
-          ItemCode: '', 
-          ItemDescription: '', 
-          Quantity: 1, 
-          Price: 0, 
-          CostingCode: 'BR',
-          CostingCode2: 'MATRIZ',
-          CostingCode3: 'OPER_OFF',
-          CostingCode4: proj,
-          ProjectCode: proj, 
-          U_nITEM: '', 
-          U_ItemLoc: '' 
-        }
-      ]
-    });
+    const currentLines = selectedQuote?.DocumentLines || [];
+    const newIdx = currentLines.length;
+    const newLine = { 
+      ItemCode: '', 
+      ItemDescription: '', 
+      Quantity: 1, 
+      Price: 0, 
+      UnitPrice: 0,
+      CostingCode: 'BR',
+      CostingCode2: 'MATRIZ',
+      CostingCode3: 'OPER_OFF',
+      CostingCode4: proj,
+      ProjectCode: resolveSapFinancialProject(proj) || '', 
+      U_nITEM: '', 
+      U_ItemLoc: '',
+      U_nItem: '',
+      DiscountPercent: 0
+    };
+    setSelectedQuote((prev: any) => ({
+      ...prev,
+      DocumentLines: [...(prev?.DocumentLines || []), newLine]
+    }));
+    setLineIndexForLookup(newIdx);
+    setIsItemLookupOpen(true);
   };
 
   const updateLine = (index: number, field: string, value: any) => {
-    const newLines = [...selectedQuote.DocumentLines];
-    newLines[index] = { ...newLines[index], [field]: value };
-    setSelectedQuote({ ...selectedQuote, DocumentLines: newLines });
+    setSelectedQuote((prev: any) => {
+      if (!prev) return prev;
+      const newLines = [...(prev.DocumentLines || [])];
+      if (newLines[index]) {
+        newLines[index] = { 
+          ...newLines[index], 
+          [field]: value,
+          ...(field === 'CostingCode4' ? { ProjectCode: value } : {})
+        };
+      }
+      return { ...prev, DocumentLines: newLines };
+    });
   };
 
   return (
@@ -5854,36 +6103,45 @@ function QuotationsView({
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
-                    <Input 
-                      list="quotation-projects-list"
-                      value={selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const updatedLines = (selectedQuote.DocumentLines || []).map((l: any) => ({
-                          ...l,
-                          CostingCode4: val,
-                          ProjectCode: val
-                        }));
-                        setSelectedQuote({ 
-                          ...selectedQuote, 
-                          U_Projeto: val,
-                          Project: val,
-                          ProjectCode: val,
-                          CostingCode4: val,
-                          DocumentLines: updatedLines
-                        });
-                      }}
-                      placeholder="EX: WO 2040 OU PROJETO"
-                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
-                    />
-                    <datalist id="quotation-projects-list">
-                      {projects.map((p) => (
-                        <option key={p.Code} value={p.Code}>
-                          {p.Name}
-                        </option>
-                      ))}
-                    </datalist>
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
+                      <span className="text-[8px] font-bold text-evo-teal uppercase">Dimensão 4</span>
+                    </div>
+                    <div className="flex gap-1">
+                      <Input 
+                        value={selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
+                        onChange={(e) => {
+                          const val = e.target.value.toUpperCase();
+                          setSelectedQuote((prev: any) => {
+                            if (!prev) return prev;
+                            const updatedLines = (prev.DocumentLines || []).map((l: any) => ({
+                              ...l,
+                              CostingCode4: val,
+                              ProjectCode: val
+                            }));
+                            return {
+                              ...prev,
+                              U_Projeto: val,
+                              Project: val,
+                              ProjectCode: val,
+                              CostingCode4: val,
+                              DocumentLines: updatedLines
+                            };
+                          });
+                        }}
+                        placeholder="EX: WO 2040 OU PROJETO"
+                        className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal flex-1"
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0 hover:bg-evo-dark hover:text-white"
+                        onClick={() => setIsProjectLookupOpen(true)}
+                        title="Pesquisar Projeto / WO"
+                      >
+                        <Search className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
@@ -5928,21 +6186,28 @@ function QuotationsView({
                   </div>
                   
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
-                    <Table className="min-w-[800px]">
+                    <Table className="min-w-[1300px]">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-28 text-center">Quant.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 w-36 text-center">Preço Unit.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 w-24 text-center">Desc. %</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Vinculação de Custos (Pessoal / Locação)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 min-w-[260px]">Item / Descrição</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-24 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Desc. %</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px]">País (Dim 1)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px]">Empresa (Dim 2)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Unidade (Dim 3)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Projeto / WO (Dim 4)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 text-right">Total Linha</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {selectedQuote.DocumentLines.map((line: any, idx: number) => {
                           const lineDiscPct = Number(line.DiscountPercent) || 0;
-                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price)) * (1 - lineDiscPct / 100);
+                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price || line.UnitPrice || 0)) * (1 - lineDiscPct / 100);
+                          const hasPersMeasurement = Number(line.linePersonnelCost) > 0;
+                          const hasRentalMeasurement = Number(line.lineRentalCost) > 0;
+
                           return (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
                             <TableCell className="px-6 py-4 min-w-[280px]">
@@ -5951,8 +6216,13 @@ function QuotationsView({
                                   <Input 
                                     value={line.ItemCode || ''}
                                     onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1"
+                                    onClick={() => {
+                                      setLineIndexForLookup(idx);
+                                      setIsItemLookupOpen(true);
+                                    }}
+                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 cursor-pointer"
                                     placeholder="CÓDIGO (EX: ITEM-001)"
+                                    title="Clique para pesquisar itens no SAP"
                                   />
                                   <Button 
                                     size="sm" 
@@ -5976,6 +6246,12 @@ function QuotationsView({
                                       updateLine(idx, 'ItemName', val);
                                       updateLine(idx, 'Dscription', val);
                                     }}
+                                    onClick={() => {
+                                      if (!line.ItemCode) {
+                                        setLineIndexForLookup(idx);
+                                        setIsItemLookupOpen(true);
+                                      }
+                                    }}
                                     className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
                                     placeholder="Descrição do item ou serviço..."
                                     title={line.ItemDescription || line.ItemName || line.Dscription || ''}
@@ -5991,6 +6267,7 @@ function QuotationsView({
                             <TableCell className="px-4 py-4">
                               <Input 
                                 type="number"
+                                min="1"
                                 value={line.Quantity}
                                 onChange={(e) => updateLine(idx, 'Quantity', Number(e.target.value))}
                                 className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
@@ -6000,8 +6277,8 @@ function QuotationsView({
                               <div className="relative">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-evo-dark/30">R$</span>
                                 <Input 
-                                  type="number"
-                                  value={line.Price}
+                                  type="number" 
+                                  value={line.Price || line.UnitPrice || 0}
                                   onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
                                   className="h-10 rounded-none text-xs border-evo-bg pl-8 text-right font-bold"
                                 />
@@ -6021,53 +6298,169 @@ function QuotationsView({
                                 />
                               </div>
                             </TableCell>
+                            {/* Dim 1: País (CostingCode) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode || 'BR'}
+                                onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 1: País (CostingCode)"
+                              >
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
+                                  <option value="BR">BR - Brasil</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                                {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
+                                  <option value={line.CostingCode}>{line.CostingCode}</option>
+                                )}
+                              </select>
+                            </TableCell>
+
+                            {/* Dim 2: Empresa (CostingCode2) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode2 || 'MATRIZ'}
+                                onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 2: Empresa (CostingCode2)"
+                              >
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
+                                  <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                                {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
+                                  <option value={line.CostingCode2}>{line.CostingCode2}</option>
+                                )}
+                              </select>
+                            </TableCell>
+
+                            {/* Dim 3: Unidade / Operação (CostingCode3) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode3 || 'OPER_OFF'}
+                                onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 3: Unidade / Operação (CostingCode3)"
+                              >
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
+                                  <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                                {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
+                                  <option value={line.CostingCode3}>{line.CostingCode3}</option>
+                                )}
+                              </select>
+                            </TableCell>
+
+                            {/* Dim 4: Projeto / WO (CostingCode4) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode4 || line.ProjectCode || selectedQuote.CostingCode4 || selectedQuote.U_Projeto || 'BASE'}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setSelectedQuote((prev: any) => {
+                                    if (!prev) return prev;
+                                    const newLines = [...(prev.DocumentLines || [])];
+                                    if (newLines[idx]) {
+                                      newLines[idx] = {
+                                        ...newLines[idx],
+                                        CostingCode4: val,
+                                        ProjectCode: val
+                                      };
+                                    }
+                                    return { ...prev, DocumentLines: newLines };
+                                  });
+                                }}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 4: Projeto / WO (CostingCode4)"
+                              >
+                                <option value="">Nenhum Projeto</option>
+                                {projects.map((p) => (
+                                  <option key={p.Code} value={p.Code}>
+                                    {p.Code} - {p.Name}
+                                  </option>
+                                ))}
+                                {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
+                                  <option value={line.CostingCode4}>{line.CostingCode4}</option>
+                                )}
+                              </select>
+                            </TableCell>
                             <TableCell className="px-6 py-4">
                               {(() => {
                                 const nItemVal = line.U_nItem || line.U_nITEM;
                                 const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
                                 return (
-                                  <div className="flex items-center gap-6">
-                                    <div className="flex flex-col gap-1">
-                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
-                                      <div className="flex items-center gap-2">
-                                        <Button 
-                                          size="sm" 
-                                          variant="ghost" 
-                                          className={`h-8 w-8 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
-                                          onClick={() => {
-                                            setActiveLineIndex(idx);
-                                            setIsPersCostModalOpen(true);
-                                          }}
-                                        >
-                                          <User className="w-3.5 h-3.5" />
-                                        </Button>
-                                        <span className={`text-[9px] font-black uppercase ${nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
-                                          {nItemVal ? `#${nItemVal}` : 'PENDENTE'}
-                                        </span>
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center gap-6">
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                        <div className="flex items-center gap-2">
+                                          <Button 
+                                            size="sm" 
+                                            variant="ghost" 
+                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                            onClick={() => {
+                                              setActiveLineIndex(idx);
+                                              setIsPersCostModalOpen(true);
+                                            }}
+                                            title={nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
+                                          >
+                                            <User className="w-3.5 h-3.5" />
+                                          </Button>
+                                          <span className={`text-[9px] font-black uppercase font-mono ${nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                            {nItemVal ? `#${nItemVal}` : 'PENDENTE'}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className="w-[1px] h-8 bg-evo-bg" />
+
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                        <div className="flex items-center gap-2">
+                                          <Button 
+                                            size="sm" 
+                                            variant="ghost" 
+                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                            onClick={() => {
+                                              setActiveLineIndex(idx);
+                                              setIsRentalCostModalOpen(true);
+                                            }}
+                                            title={itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
+                                          >
+                                            <Truck className="w-3.5 h-3.5" />
+                                          </Button>
+                                          <span className={`text-[9px] font-black uppercase font-mono ${itemLocVal ? 'text-indigo-600' : 'text-indigo-400'}`}>
+                                            {itemLocVal ? `#${itemLocVal}` : 'PENDENTE'}
+                                          </span>
+                                        </div>
                                       </div>
                                     </div>
 
-                                    <div className="w-[1px] h-8 bg-evo-bg" />
-
-                                    <div className="flex flex-col gap-1">
-                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
-                                      <div className="flex items-center gap-2">
-                                        <Button 
-                                          size="sm" 
-                                          variant="ghost" 
-                                          className={`h-8 w-8 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
-                                          onClick={() => {
-                                            setActiveLineIndex(idx);
-                                            setIsRentalCostModalOpen(true);
-                                          }}
-                                        >
-                                          <Truck className="w-3.5 h-3.5" />
-                                        </Button>
-                                        <span className={`text-[9px] font-black uppercase ${itemLocVal ? 'text-evo-teal' : 'text-indigo-400'}`}>
-                                          {itemLocVal ? `#${itemLocVal}` : 'PENDENTE'}
-                                        </span>
+                                    {(hasPersMeasurement || hasRentalMeasurement) && (
+                                      <div className="text-[8px] font-bold text-slate-500 font-mono flex items-center gap-2 bg-slate-50 p-1 border border-slate-200">
+                                        <span>Medição:</span>
+                                        {hasPersMeasurement && (
+                                          <span className="text-teal-700">Pessoal: R$ {Number(line.linePersonnelCost).toFixed(2)}</span>
+                                        )}
+                                        {hasPersMeasurement && hasRentalMeasurement && <span>+</span>}
+                                        {hasRentalMeasurement && (
+                                          <span className="text-indigo-700">Locação: R$ {Number(line.lineRentalCost).toFixed(2)}</span>
+                                        )}
                                       </div>
-                                    </div>
+                                    )}
                                   </div>
                                 );
                               })()}
@@ -6251,18 +6644,62 @@ function QuotationsView({
         onClose={() => setIsItemLookupOpen(false)}
         title="Pesquisar Item"
         placeholder="Digite o código ou nome do item..."
-        onSelect={(item) => {
+        onSelect={async (item) => {
           if (lineIndexForLookup !== null) {
-            const newLines = [...selectedQuote.DocumentLines];
+            const targetIdx = lineIndexForLookup;
             const desc = item.ItemName || item.ItemDescription || '';
-            newLines[lineIndexForLookup] = { 
-              ...newLines[lineIndexForLookup], 
-              ItemCode: item.ItemCode, 
-              ItemDescription: desc,
-              ItemName: desc,
-              Dscription: desc
-            };
-            setSelectedQuote({ ...selectedQuote, DocumentLines: newLines });
+            
+            // Check PriceList 1 in itemPrices if already attached, or query SAP PriceLists(1)
+            let unitPrice = 0;
+            let foundPrice = false;
+
+            if (Array.isArray(item.ItemPrices)) {
+              const p1 = item.ItemPrices.find((p: any) => Number(p.PriceList) === 1);
+              if (p1 && Number(p1.Price) > 0) {
+                unitPrice = Number(p1.Price);
+                foundPrice = true;
+              }
+            }
+
+            if (!foundPrice && item.ItemCode) {
+              try {
+                const priceInfo = await sapService.getItemPriceList1(item.ItemCode);
+                if (priceInfo.foundInList1 && Number(priceInfo.price) > 0) {
+                  unitPrice = Number(priceInfo.price);
+                  foundPrice = true;
+                }
+              } catch (e) {
+                console.warn('Erro ao consultar preço da Lista 1:', e);
+              }
+            }
+
+            if (!foundPrice || unitPrice === 0) {
+              toast.warning(`Atenção: O item "${item.ItemCode} - ${desc}" não consta na Lista de Preço padrão (Lista 1) ou possui valor zerado.`, {
+                duration: 6000
+              });
+            } else {
+              toast.success(`Item "${item.ItemCode}" selecionado com preço da Lista de Preço 1: R$ ${unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
+            }
+
+            setSelectedQuote((prev: any) => {
+              if (!prev) return prev;
+              const newLines = [...(prev.DocumentLines || [])];
+              if (targetIdx >= 0 && targetIdx < newLines.length) {
+                const proj = prev.CostingCode4 || prev.U_Projeto || prev.Project || prev.ProjectCode || 'BASE';
+                newLines[targetIdx] = { 
+                  ...newLines[targetIdx], 
+                  ItemCode: item.ItemCode, 
+                  ItemDescription: desc,
+                  ItemName: desc,
+                  Dscription: desc,
+                  Price: unitPrice,
+                  UnitPrice: unitPrice,
+                  CostingCode4: newLines[targetIdx].CostingCode4 || proj,
+                  ProjectCode: resolveSapFinancialProject(newLines[targetIdx].ProjectCode) || resolveSapFinancialProject(proj) || ''
+                };
+              }
+              return { ...prev, DocumentLines: newLines };
+            });
           }
           setIsItemLookupOpen(false);
         }}
@@ -6282,13 +6719,14 @@ function QuotationsView({
         title="Pesquisar Cliente"
         placeholder="Digite o código ou razão social do cliente..."
         onSelect={(bp) => {
-          if (selectedQuote) {
-            setSelectedQuote({
-              ...selectedQuote,
+          setSelectedQuote((prev: any) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
               CardCode: bp.CardCode,
               CardName: bp.CardName
-            });
-          }
+            };
+          });
           setIsBPLookupOpen(false);
         }}
         searchFn={sapService.getCustomers}
@@ -6300,6 +6738,54 @@ function QuotationsView({
         )}
       />
 
+      {/* Project / WO Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isProjectLookupOpen}
+        onClose={() => setIsProjectLookupOpen(false)}
+        title="Pesquisar Projeto / WO (Dimensão 4)"
+        placeholder="Digite o código ou nome do projeto..."
+        onSelect={(p: any) => {
+          const projCode = p.Code || p.ProjectCode || p.CenterCode || '';
+          setSelectedQuote((prev: any) => {
+            if (!prev) return prev;
+            const updatedLines = (prev.DocumentLines || []).map((l: any) => ({
+              ...l,
+              CostingCode4: projCode,
+              ProjectCode: projCode
+            }));
+            return {
+              ...prev,
+              U_Projeto: projCode,
+              Project: projCode,
+              ProjectCode: projCode,
+              CostingCode4: projCode,
+              DocumentLines: updatedLines
+            };
+          });
+          toast.success(`Projeto "${projCode}" aplicado com sucesso ao cabeçalho e às linhas!`);
+          setIsProjectLookupOpen(false);
+        }}
+        searchFn={async (query: string) => {
+          try {
+            const all = projects.length > 0 ? projects : await sapService.getProjects();
+            if (!query.trim()) return all;
+            const term = normalizeSearchText(query);
+            return all.filter((p: any) => 
+              normalizeSearchText(p.Code).includes(term) || 
+              normalizeSearchText(p.Name).includes(term)
+            );
+          } catch {
+            return projects;
+          }
+        }}
+        renderItem={(p: any) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{p.Code}</span>
+            <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{p.Name}</span>
+          </div>
+        )}
+      />
+
       {/* Personnel Cost Sub-Modal */}
       <PersonnelCostModal 
         isOpen={isPersCostModalOpen} 
@@ -6307,10 +6793,9 @@ function QuotationsView({
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].U_nItem || selectedQuote.DocumentLines[activeLineIndex].U_nITEM) : null}
-        onSaved={(code) => {
+        onSaved={(code, calculatedTotal) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_nItem', code);
-            updateLine(activeLineIndex, 'U_nITEM', code);
+            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -6323,10 +6808,13 @@ function QuotationsView({
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].U_ItemLoc || selectedQuote.DocumentLines[activeLineIndex].U_ITEMLOC) : null}
-        onSaved={(code) => {
+        itemDescription={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].ItemDescription || selectedQuote.DocumentLines[activeLineIndex].ItemName || selectedQuote.DocumentLines[activeLineIndex].Dscription || '') : ''}
+        itemCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? selectedQuote.DocumentLines[activeLineIndex].ItemCode : ''}
+        initialUnitPrice={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? Number(selectedQuote.DocumentLines[activeLineIndex].Price || selectedQuote.DocumentLines[activeLineIndex].UnitPrice || 0) : 0}
+        lineQuantity={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? Number(selectedQuote.DocumentLines[activeLineIndex].Quantity || 1) : 1}
+        onSaved={(code, calculatedTotal) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_ItemLoc', code);
-            updateLine(activeLineIndex, 'U_ITEMLOC', code);
+            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -6358,6 +6846,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
   const [isBPLookupOpen, setIsBPLookupOpen] = useState(false);
   const [lineIndexForLookup, setLineIndexForLookup] = useState<number | null>(null);
+  const [isProjectLookupOpen, setIsProjectLookupOpen] = useState(false);
 
   // Print Layout Modal
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
@@ -6460,13 +6949,14 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       CardName: '',
       DocDueDate: new Date().toISOString().split('T')[0],
       U_Projeto: '',
+      CostingCode4: '',
       NumAtCard: '',
       Comments: '',
       DiscountPercent: 0,
       TotalDiscount: 0,
       BPL_IDAssignedToInvoice: 1,
       DocumentLines: [
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, CostingCode: '', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -6483,6 +6973,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
             ...l,
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
             DiscountPercent: Number(l.DiscountPercent) || 0,
+            CostingCode: l.CostingCode || 'BR',
+            CostingCode2: l.CostingCode2 || 'MATRIZ',
+            CostingCode3: l.CostingCode3 || 'OPER_OFF',
+            CostingCode4: l.CostingCode4 || fullOrder.CostingCode4 || fullOrder.U_Projeto || fullOrder.Project || fullOrder.ProjectCode || 'BASE',
             U_nItem: nItem,
             U_nITEM: nItem,
             U_ItemLoc: itemLoc,
@@ -6511,23 +7005,24 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     setIsSaving(true);
     try {
       const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
+      const financialProj = resolveSapFinancialProject(proj);
       const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => ({
         ...line,
         DiscountPercent: Number(line.DiscountPercent) || 0,
         CostingCode: line.CostingCode || 'BR',
         CostingCode2: line.CostingCode2 || 'MATRIZ',
         CostingCode3: line.CostingCode3 || 'OPER_OFF',
-        CostingCode4: line.CostingCode4 || line.ProjectCode || proj,
-        ProjectCode: line.ProjectCode || proj
+        CostingCode4: line.CostingCode4 || proj,
+        ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
       }));
 
       const orderToSave = {
         ...selectedOrder,
         DiscountPercent: selectedOrder.DiscountPercent !== undefined ? Number(selectedOrder.DiscountPercent) : 0,
         TotalDiscount: selectedOrder.TotalDiscount !== undefined ? Number(selectedOrder.TotalDiscount) : 0,
-        U_Projeto: proj,
-        Project: proj,
-        ProjectCode: proj,
+        U_Projeto: proj !== 'BASE' ? proj : undefined,
+        Project: financialProj || undefined,
+        ProjectCode: financialProj || undefined,
         CostingCode4: proj,
         DocumentLines: preparedLines
       };
@@ -6565,38 +7060,105 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     }
   };
 
+  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number) => {
+    setSelectedOrder((prev: any) => {
+      if (!prev) return prev;
+      const lines = [...(prev.DocumentLines || [])];
+      const line = lines[lineIdx];
+      if (!line) return prev;
+      const currentRentalCost = Number(line.lineRentalCost ?? 0);
+      const newPersonnelCost = Number(personnelTotal) || 0;
+      const combinedTotal = newPersonnelCost + currentRentalCost;
+      const qty = Math.max(1, Number(line.Quantity) || 1);
+      const newUnitPrice = combinedTotal > 0 ? (combinedTotal / qty) : (Number(line.Price) || 0);
+
+      lines[lineIdx] = {
+        ...line,
+        U_nItem: code,
+        U_nITEM: code,
+        linePersonnelCost: newPersonnelCost,
+        Price: combinedTotal > 0 ? newUnitPrice : line.Price,
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+      };
+      return { ...prev, DocumentLines: lines };
+    });
+    toast.success(`Custo de pessoal (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+  };
+
+  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
+    setSelectedOrder((prev: any) => {
+      if (!prev) return prev;
+      const lines = [...(prev.DocumentLines || [])];
+      const line = lines[lineIdx];
+      if (!line) return prev;
+      const currentPersonnelCost = Number(line.linePersonnelCost ?? 0);
+      const newRentalCost = Number(rentalTotal) || 0;
+      const combinedTotal = currentPersonnelCost + newRentalCost;
+      const qty = Math.max(1, Number(line.Quantity) || 1);
+      const newUnitPrice = combinedTotal > 0 ? (combinedTotal / qty) : (Number(line.Price) || 0);
+
+      lines[lineIdx] = {
+        ...line,
+        U_ItemLoc: code,
+        U_ITEMLOC: code,
+        lineRentalCost: newRentalCost,
+        Price: combinedTotal > 0 ? newUnitPrice : line.Price,
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+      };
+      return { ...prev, DocumentLines: lines };
+    });
+    toast.success(`Custo de locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+  };
+
   const handleAddLine = () => {
     const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
-    setSelectedOrder({
-      ...selectedOrder,
-      DocumentLines: [
-        ...selectedOrder.DocumentLines,
-        { 
-          ItemCode: '', 
-          ItemDescription: '', 
-          Quantity: 1, 
-          Price: 0, 
-          CostingCode: 'BR', 
-          CostingCode2: 'MATRIZ',
-          CostingCode3: 'OPER_OFF',
-          CostingCode4: proj,
-          ProjectCode: proj, 
-          U_nITEM: '', 
-          U_ItemLoc: '' 
-        }
-      ]
-    });
+    const currentLines = selectedOrder?.DocumentLines || [];
+    const newIdx = currentLines.length;
+    const newLine = { 
+      ItemCode: '', 
+      ItemDescription: '', 
+      Quantity: 1, 
+      Price: 0, 
+      UnitPrice: 0,
+      CostingCode: 'BR', 
+      CostingCode2: 'MATRIZ',
+      CostingCode3: 'OPER_OFF',
+      CostingCode4: proj,
+      ProjectCode: resolveSapFinancialProject(proj) || '', 
+      U_nITEM: '', 
+      U_ItemLoc: '',
+      U_nItem: '',
+      DiscountPercent: 0
+    };
+    setSelectedOrder((prev: any) => ({
+      ...prev,
+      DocumentLines: [...(prev?.DocumentLines || []), newLine]
+    }));
+    setLineIndexForLookup(newIdx);
+    setIsItemLookupOpen(true);
   };
 
   const handleRemoveLine = (index: number) => {
-    const updated = selectedOrder.DocumentLines.filter((_: any, i: number) => i !== index);
-    setSelectedOrder({ ...selectedOrder, DocumentLines: updated });
+    setSelectedOrder((prev: any) => {
+      if (!prev) return prev;
+      const updated = (prev.DocumentLines || []).filter((_: any, i: number) => i !== index);
+      return { ...prev, DocumentLines: updated };
+    });
   };
 
   const updateLine = (index: number, field: string, value: any) => {
-    const newLines = [...selectedOrder.DocumentLines];
-    newLines[index] = { ...newLines[index], [field]: value };
-    setSelectedOrder({ ...selectedOrder, DocumentLines: newLines });
+    setSelectedOrder((prev: any) => {
+      if (!prev) return prev;
+      const newLines = [...(prev.DocumentLines || [])];
+      if (newLines[index]) {
+        newLines[index] = { 
+          ...newLines[index], 
+          [field]: value,
+          ...(field === 'CostingCode4' ? { ProjectCode: value } : {})
+        };
+      }
+      return { ...prev, DocumentLines: newLines };
+    });
   };
 
   return (
@@ -6889,36 +7451,45 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
-                    <Input 
-                      list="order-projects-list"
-                      value={selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const updatedLines = (selectedOrder.DocumentLines || []).map((l: any) => ({
-                          ...l,
-                          CostingCode4: val,
-                          ProjectCode: val
-                        }));
-                        setSelectedOrder({ 
-                          ...selectedOrder, 
-                          U_Projeto: val,
-                          Project: val,
-                          ProjectCode: val,
-                          CostingCode4: val,
-                          DocumentLines: updatedLines
-                        });
-                      }}
-                      placeholder="EX: WO 2040 OU PROJETO"
-                      className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal"
-                    />
-                    <datalist id="order-projects-list">
-                      {projects.map((p) => (
-                        <option key={p.Code} value={p.Code}>
-                          {p.Name}
-                        </option>
-                      ))}
-                    </datalist>
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">WO (Projeto)</label>
+                      <span className="text-[8px] font-bold text-evo-teal uppercase">Dimensão 4</span>
+                    </div>
+                    <div className="flex gap-1">
+                      <Input 
+                        value={selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
+                        onChange={(e) => {
+                          const val = e.target.value.toUpperCase();
+                          setSelectedOrder((prev: any) => {
+                            if (!prev) return prev;
+                            const updatedLines = (prev.DocumentLines || []).map((l: any) => ({
+                              ...l,
+                              CostingCode4: val,
+                              ProjectCode: val
+                            }));
+                            return {
+                              ...prev,
+                              U_Projeto: val,
+                              Project: val,
+                              ProjectCode: val,
+                              CostingCode4: val,
+                              DocumentLines: updatedLines
+                            };
+                          });
+                        }}
+                        placeholder="EX: WO 2040 OU PROJETO"
+                        className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal flex-1"
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0 hover:bg-evo-dark hover:text-white"
+                        onClick={() => setIsProjectLookupOpen(true)}
+                        title="Pesquisar Projeto / WO"
+                      >
+                        <Search className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
@@ -6965,15 +7536,17 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                   </div>
                   
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
-                    <Table className="min-w-[1200px]">
+                    <Table className="min-w-[1300px]">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 min-w-[280px]">Item / Descrição</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Quant.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-28 text-center">Preço Unit.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-20 text-center">Desc. %</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Centro de Custo</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Projeto</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 min-w-[260px]">Item / Descrição</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-24 text-center">Preço Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Desc. %</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px]">País (Dim 1)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px]">Empresa (Dim 2)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Unidade (Dim 3)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Projeto / WO (Dim 4)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 text-right">Total Linha</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-12 text-center"></TableHead>
@@ -7061,29 +7634,93 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                 />
                               </div>
                             </TableCell>
-                            <TableCell className="px-4 py-4">
+                            {/* Dim 1: País (CostingCode) */}
+                            <TableCell className="px-2 py-4">
                               <select 
-                                value={line.CostingCode || ''}
+                                value={line.CostingCode || 'BR'}
                                 onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
                                 className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 1: País (CostingCode)"
                               >
-                                <option value="">Nenhum Centro de Custo</option>
-                                {costCenters.map((cc) => (
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
+                                  <option value="BR">BR - Brasil</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
                                   <option key={cc.FactorCode} value={cc.FactorCode}>
                                     {cc.FactorCode} - {cc.FactorDescription}
                                   </option>
                                 ))}
+                                {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
+                                  <option value={line.CostingCode}>{line.CostingCode}</option>
+                                )}
                               </select>
                             </TableCell>
-                            <TableCell className="px-4 py-4">
+
+                            {/* Dim 2: Empresa (CostingCode2) */}
+                            <TableCell className="px-2 py-4">
                               <select 
-                                value={line.CostingCode4 || line.ProjectCode || ''}
+                                value={line.CostingCode2 || 'MATRIZ'}
+                                onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 2: Empresa (CostingCode2)"
+                              >
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
+                                  <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                                {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
+                                  <option value={line.CostingCode2}>{line.CostingCode2}</option>
+                                )}
+                              </select>
+                            </TableCell>
+
+                            {/* Dim 3: Unidade / Operação (CostingCode3) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode3 || 'OPER_OFF'}
+                                onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
+                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 3: Unidade / Operação (CostingCode3)"
+                              >
+                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
+                                  <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
+                                )}
+                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
+                                  <option key={cc.FactorCode} value={cc.FactorCode}>
+                                    {cc.FactorCode} - {cc.FactorDescription}
+                                  </option>
+                                ))}
+                                {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
+                                  <option value={line.CostingCode3}>{line.CostingCode3}</option>
+                                )}
+                              </select>
+                            </TableCell>
+
+                            {/* Dim 4: Projeto / WO (CostingCode4) */}
+                            <TableCell className="px-2 py-4">
+                              <select 
+                                value={line.CostingCode4 || line.ProjectCode || selectedOrder.CostingCode4 || selectedOrder.U_Projeto || 'BASE'}
                                 onChange={(e) => {
                                   const val = e.target.value;
-                                  updateLine(idx, 'CostingCode4', val);
-                                  updateLine(idx, 'ProjectCode', val);
+                                  setSelectedOrder((prev: any) => {
+                                    if (!prev) return prev;
+                                    const newLines = [...(prev.DocumentLines || [])];
+                                    if (newLines[idx]) {
+                                      newLines[idx] = {
+                                        ...newLines[idx],
+                                        CostingCode4: val,
+                                        ProjectCode: val
+                                      };
+                                    }
+                                    return { ...prev, DocumentLines: newLines };
+                                  });
                                 }}
                                 className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                title="Dimensão 4: Projeto / WO (CostingCode4)"
                               >
                                 <option value="">Nenhum Projeto</option>
                                 {projects.map((p) => (
@@ -7091,6 +7728,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                     {p.Code} - {p.Name}
                                   </option>
                                 ))}
+                                {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
+                                  <option value={line.CostingCode4}>{line.CostingCode4}</option>
+                                )}
                               </select>
                             </TableCell>
                             <TableCell className="px-4 py-4">
@@ -7342,10 +7982,13 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         title="Pesquisar Cliente / Parceiro"
         placeholder="Digite o código ou razão social..."
         onSelect={(bp: any) => {
-          setSelectedOrder({
-            ...selectedOrder,
-            CardCode: bp.CardCode,
-            CardName: bp.CardName
+          setSelectedOrder((prev: any) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              CardCode: bp.CardCode,
+              CardName: bp.CardName
+            };
           });
           setIsBPLookupOpen(false);
         }}
@@ -7358,24 +8001,116 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         )}
       />
 
+      {/* Project / WO Lookup Dialog */}
+      <LookupDialog 
+        isOpen={isProjectLookupOpen}
+        onClose={() => setIsProjectLookupOpen(false)}
+        title="Pesquisar Projeto / WO (Dimensão 4)"
+        placeholder="Digite o código ou nome do projeto..."
+        onSelect={(p: any) => {
+          const projCode = p.Code || p.ProjectCode || p.CenterCode || '';
+          setSelectedOrder((prev: any) => {
+            if (!prev) return prev;
+            const updatedLines = (prev.DocumentLines || []).map((l: any) => ({
+              ...l,
+              CostingCode4: projCode,
+              ProjectCode: projCode
+            }));
+            return {
+              ...prev,
+              U_Projeto: projCode,
+              Project: projCode,
+              ProjectCode: projCode,
+              CostingCode4: projCode,
+              DocumentLines: updatedLines
+            };
+          });
+          toast.success(`Projeto "${projCode}" aplicado com sucesso ao cabeçalho e às linhas do pedido!`);
+          setIsProjectLookupOpen(false);
+        }}
+        searchFn={async (query: string) => {
+          try {
+            const all = projects.length > 0 ? projects : await sapService.getProjects();
+            if (!query.trim()) return all;
+            const term = normalizeSearchText(query);
+            return all.filter((p: any) => 
+              normalizeSearchText(p.Code).includes(term) || 
+              normalizeSearchText(p.Name).includes(term)
+            );
+          } catch {
+            return projects;
+          }
+        }}
+        renderItem={(p: any) => (
+          <div className="flex justify-between items-center w-full">
+            <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{p.Code}</span>
+            <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{p.Name}</span>
+          </div>
+        )}
+      />
+
       {/* Item Lookup Dialog */}
       <LookupDialog 
         isOpen={isItemLookupOpen}
         onClose={() => setIsItemLookupOpen(false)}
         title="Pesquisar Item"
         placeholder="Digite o código ou nome do item..."
-        onSelect={(item: any) => {
+        onSelect={async (item: any) => {
           if (lineIndexForLookup !== null) {
-            const newLines = [...selectedOrder.DocumentLines];
+            const targetIdx = lineIndexForLookup;
             const desc = item.ItemName || item.ItemDescription || '';
-            newLines[lineIndexForLookup] = { 
-              ...newLines[lineIndexForLookup], 
-              ItemCode: item.ItemCode, 
-              ItemDescription: desc,
-              ItemName: desc,
-              Dscription: desc
-            };
-            setSelectedOrder({ ...selectedOrder, DocumentLines: newLines });
+            
+            // Check PriceList 1 in itemPrices if already attached, or query SAP PriceLists(1)
+            let unitPrice = 0;
+            let foundPrice = false;
+
+            if (Array.isArray(item.ItemPrices)) {
+              const p1 = item.ItemPrices.find((p: any) => Number(p.PriceList) === 1);
+              if (p1 && Number(p1.Price) > 0) {
+                unitPrice = Number(p1.Price);
+                foundPrice = true;
+              }
+            }
+
+            if (!foundPrice && item.ItemCode) {
+              try {
+                const priceInfo = await sapService.getItemPriceList1(item.ItemCode);
+                if (priceInfo.foundInList1 && Number(priceInfo.price) > 0) {
+                  unitPrice = Number(priceInfo.price);
+                  foundPrice = true;
+                }
+              } catch (e) {
+                console.warn('Erro ao consultar preço da Lista 1:', e);
+              }
+            }
+
+            if (!foundPrice || unitPrice === 0) {
+              toast.warning(`Atenção: O item "${item.ItemCode} - ${desc}" não consta na Lista de Preço padrão (Lista 1) ou possui valor zerado.`, {
+                duration: 6000
+              });
+            } else {
+              toast.success(`Item "${item.ItemCode}" selecionado com preço da Lista de Preço 1: R$ ${unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
+            }
+
+            setSelectedOrder((prev: any) => {
+              if (!prev) return prev;
+              const newLines = [...(prev.DocumentLines || [])];
+              if (targetIdx >= 0 && targetIdx < newLines.length) {
+                const proj = prev.CostingCode4 || prev.U_Projeto || prev.Project || prev.ProjectCode || 'BASE';
+                newLines[targetIdx] = { 
+                  ...newLines[targetIdx], 
+                  ItemCode: item.ItemCode, 
+                  ItemDescription: desc,
+                  ItemName: desc,
+                  Dscription: desc,
+                  Price: unitPrice,
+                  UnitPrice: unitPrice,
+                  CostingCode4: newLines[targetIdx].CostingCode4 || proj,
+                  ProjectCode: resolveSapFinancialProject(newLines[targetIdx].ProjectCode) || resolveSapFinancialProject(proj) || ''
+                };
+              }
+              return { ...prev, DocumentLines: newLines };
+            });
           }
           setIsItemLookupOpen(false);
         }}
@@ -7395,10 +8130,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].U_nItem || selectedOrder.DocumentLines[activeLineIndex].U_nITEM) : null}
-        onSaved={(code) => {
+        onSaved={(code, calculatedTotal) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_nItem', code);
-            updateLine(activeLineIndex, 'U_nITEM', code);
+            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -7411,10 +8145,13 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].U_ItemLoc || selectedOrder.DocumentLines[activeLineIndex].U_ITEMLOC) : null}
-        onSaved={(code) => {
+        itemDescription={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].ItemDescription || selectedOrder.DocumentLines[activeLineIndex].ItemName || selectedOrder.DocumentLines[activeLineIndex].Dscription || '') : ''}
+        itemCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? selectedOrder.DocumentLines[activeLineIndex].ItemCode : ''}
+        initialUnitPrice={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? Number(selectedOrder.DocumentLines[activeLineIndex].Price || selectedOrder.DocumentLines[activeLineIndex].UnitPrice || 0) : 0}
+        lineQuantity={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? Number(selectedOrder.DocumentLines[activeLineIndex].Quantity || 1) : 1}
+        onSaved={(code, calculatedTotal) => {
           if (activeLineIndex !== null) {
-            updateLine(activeLineIndex, 'U_ItemLoc', code);
-            updateLine(activeLineIndex, 'U_ITEMLOC', code);
+            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -7431,11 +8168,21 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   );
 }
 
+// Helper to normalize search text for accent-insensitive and case-insensitive matching
+const normalizeSearchText = (str: any) => 
+  String(str || '')
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
 // Reusable Lookup Dialog
 function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn, renderItem }: any) {
   const [searchTerm, setSearchTerm] = useState('');
   const [rawResults, setRawResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedItemCode, setSelectedItemCode] = useState<string | null>(null);
 
   const loadData = async (query = '') => {
     setIsLoading(true);
@@ -7453,36 +8200,56 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
   useEffect(() => {
     if (isOpen) {
       setSearchTerm('');
+      setIsSelecting(false);
+      setSelectedItemCode(null);
       loadData('');
     } else {
       setSearchTerm('');
       setRawResults([]);
+      setIsSelecting(false);
+      setSelectedItemCode(null);
     }
   }, [isOpen]);
 
+  // Debounced auto-search on typing so typing "locacao" or "mosquetao" triggers global SAP search
+  useEffect(() => {
+    if (!isOpen) return;
+    const trimmed = searchTerm.trim();
+    if (!trimmed) {
+      const timer = setTimeout(() => loadData(''), 250);
+      return () => clearTimeout(timer);
+    }
+
+    const timer = setTimeout(() => {
+      loadData(trimmed);
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, isOpen]);
+
   const handleSearch = async () => {
-    loadData(searchTerm);
+    loadData(searchTerm.trim());
   };
 
-  // Real-time in-memory filter of loaded list
+  // Real-time in-memory filter of loaded list with accent-insensitive matching
   const filteredResults = useMemo(() => {
     if (!searchTerm.trim()) return rawResults;
-    const term = searchTerm.toLowerCase().trim();
+    const term = normalizeSearchText(searchTerm);
     return rawResults.filter((item: any) => {
-      const code = String(item.CardCode || item.ItemCode || item.Code || '').toLowerCase();
-      const name = String(item.CardName || item.ItemName || item.Name || item.Description || '').toLowerCase();
+      const code = normalizeSearchText(item.CardCode || item.ItemCode || item.Code || item.FactorCode || item.CenterCode || '');
+      const name = normalizeSearchText(item.CardName || item.ItemName || item.Name || item.Description || item.ItemDescription || item.FactorDescription || item.CenterName || '');
       return code.includes(term) || name.includes(term);
     });
   }, [rawResults, searchTerm]);
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg w-[95vw] rounded-none border-t-4 border-evo-teal shadow-2xl">
+    <Dialog open={isOpen} onOpenChange={(open) => !isSelecting && onClose()}>
+      <DialogContent className="sm:max-w-xl w-[95vw] rounded-none border-t-4 border-evo-teal shadow-2xl">
         <DialogHeader>
           <div className="flex justify-between items-center pr-4">
             <DialogTitle className="uppercase tracking-tight font-black text-sm text-evo-dark">{title}</DialogTitle>
             <span className="text-[9px] font-bold text-evo-teal uppercase bg-evo-teal/10 px-2 py-0.5">
-              {isLoading ? 'Carregando...' : `${filteredResults.length} Encontrado(s)`}
+              {isLoading ? 'Pesquisando no SAP...' : `${filteredResults.length} Encontrado(s)`}
             </span>
           </div>
         </DialogHeader>
@@ -7499,39 +8266,55 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
                 autoFocus
               />
             </div>
-            <Button onClick={handleSearch} disabled={isLoading} className="evo-button-primary h-10 rounded-none px-4" title="Buscar no Servidor">
+            <Button onClick={handleSearch} disabled={isLoading || isSelecting} className="evo-button-primary h-10 rounded-none px-4" title="Buscar no Servidor">
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             </Button>
           </div>
           
-          <div className="max-h-[340px] overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white">
+          <div className="max-h-[360px] overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white">
             {isLoading && rawResults.length === 0 ? (
               <div className="p-8 text-center text-[10px] font-bold text-evo-dark/40 uppercase tracking-widest flex items-center justify-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-evo-teal" />
-                Listando parceiros...
+                Pesquisando itens no SAP...
               </div>
             ) : filteredResults.length === 0 ? (
               <div className="p-8 text-center text-[10px] font-bold text-evo-dark/30 uppercase tracking-widest">
                 {searchTerm ? 'Nenhum resultado encontrado para o filtro' : 'Nenhum registro disponível'}
               </div>
-            ) : filteredResults.map((item, idx) => (
-              <button 
-                key={idx}
-                type="button"
-                onClick={() => {
-                  onSelect(item);
-                  onClose();
-                }}
-                className="w-full p-3.5 text-left hover:bg-evo-teal/5 transition-colors flex items-center group cursor-pointer border-l-2 border-transparent hover:border-evo-teal"
-              >
-                {renderItem ? renderItem(item) : (
-                  <div className="flex justify-between items-center w-full">
-                    <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{item.CardCode || item.ItemCode}</span>
-                    <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{item.CardName || item.ItemName}</span>
+            ) : filteredResults.map((item, idx) => {
+              const itemKey = item.CardCode || item.ItemCode || item.Code || idx;
+              const isItemBusy = isSelecting && selectedItemCode === itemKey;
+              return (
+                <button 
+                  key={idx}
+                  type="button"
+                  disabled={isSelecting}
+                  onClick={async () => {
+                    setIsSelecting(true);
+                    setSelectedItemCode(itemKey);
+                    try {
+                      await onSelect(item);
+                    } finally {
+                      setIsSelecting(false);
+                      setSelectedItemCode(null);
+                    }
+                  }}
+                  className={`w-full p-3.5 text-left hover:bg-evo-teal/5 transition-colors flex items-center justify-between group cursor-pointer border-l-2 border-transparent hover:border-evo-teal ${isItemBusy ? 'bg-evo-teal/10' : ''}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    {renderItem ? renderItem(item) : (
+                      <div className="flex justify-between items-center w-full">
+                        <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{item.CardCode || item.ItemCode}</span>
+                        <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{item.CardName || item.ItemName}</span>
+                      </div>
+                    )}
                   </div>
-                )}
-              </button>
-            ))}
+                  {isItemBusy && (
+                    <Loader2 className="w-4 h-4 animate-spin text-evo-teal shrink-0 ml-2" />
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       </DialogContent>
@@ -7543,7 +8326,7 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
 function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existingCode }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (code: string) => void,
+  onSaved: (code: string, calculatedTotal: number) => void,
   docEntry?: number,
   lineIndex: number | null,
   existingCode?: string | number | null
@@ -7722,7 +8505,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         console.log(`Atualizando registro de custo pessoal #${cleanCode} em @CUSTOSPESSOAL:`, payload);
         await sapService.updatePersonnelCost(cleanCode, payload);
         toast.success(`Custo Pessoal #${cleanCode} atualizado com sucesso no SAP!`);
-        onSaved(cleanCode);
+        onSaved(cleanCode, currentBreakdown.totalGeral);
       } else {
         // Cria novo registro com código sequencial em @CUSTOSPESSOAL
         const newCode = await sapService.getNextPersonnelCostCode();
@@ -7749,7 +8532,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         console.log(`Criando novo registro em @CUSTOSPESSOAL #${newCode}:`, payload);
         await sapService.createPersonnelCost(payload);
         toast.success(`Custo Pessoal #${newCode} criado e vinculado com sucesso!`);
-        onSaved(newCode);
+        onSaved(newCode, currentBreakdown.totalGeral);
       }
     } catch (error: any) {
       console.error('Falha ao salvar custo pessoal:', error.response?.data || error);
@@ -8030,25 +8813,41 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
   );
 }
 
-// Rental Cost Sub-Modal
-function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existingCode }: { 
+// Rental Cost Sub-Modal (Fiel 100% às fórmulas do Excel oficial e tabela @CUSTOSLOC no SAP)
+function RentalCostModal({ 
+  isOpen, 
+  onClose, 
+  onSaved, 
+  docEntry, 
+  lineIndex, 
+  existingCode,
+  itemDescription,
+  itemCode,
+  initialUnitPrice,
+  lineQuantity
+}: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (code: string) => void,
+  onSaved: (code: string, calculatedTotal: number) => void,
   docEntry?: number,
   lineIndex: number | null,
-  existingCode?: string | number | null
+  existingCode?: string | number | null,
+  itemDescription?: string,
+  itemCode?: string,
+  initialUnitPrice?: number,
+  lineQuantity?: number
 }) {
+  const initialStartDate = new Date().toISOString().split('T')[0];
+  const initialFinalDate = new Date().toISOString().split('T')[0];
+
   const [formData, setFormData] = useState({
-    U_DataInicial: new Date().toISOString().split('T')[0],
-    U_DataFinal: new Date().toISOString().split('T')[0],
-    U_Recurso: '',
-    U_ValorBase: 0,
-    U_HorasNor: 0,
-    U_HorasNob: 0,
-    U_HENor: 0,
-    U_HENob: 0,
-    U_Total: 0
+    U_DtInicial: initialStartDate,
+    U_DtFinal: initialFinalDate,
+    U_Recurso: itemDescription || '',
+    U_VlOnSite: Number(initialUnitPrice) || 0,
+    percInTransit: 50,
+    U_QtdDiariasInTransit: 0,
+    U_Qtd_Dias: Number(lineQuantity) || 1
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -8062,16 +8861,26 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
       sapService.getRentalCost(String(existingCode))
         .then((existing: any) => {
           if (existing) {
+            const dtInit = existing.U_DtInicial ? existing.U_DtInicial.split('T')[0] : initialStartDate;
+            const dtFin = existing.U_DtFinal ? existing.U_DtFinal.split('T')[0] : initialFinalDate;
+            const vlOnSite = Number(existing.U_VlOnSite) || Number(initialUnitPrice) || 0;
+            const vlInTransit = Number(existing.U_InTransit) || 0;
+            const perc = (vlOnSite > 0 && vlInTransit > 0) 
+              ? Math.round((vlInTransit / vlOnSite) * 100) 
+              : 50;
+
+            const resourceName = (existing.U_Recurso && existing.U_Recurso !== existing.Code)
+              ? existing.U_Recurso 
+              : ((existing.Name && existing.Name !== existing.Code) ? existing.Name : (itemDescription || itemCode || ''));
+
             setFormData({
-              U_DataInicial: existing.U_DataInicial ? existing.U_DataInicial.split('T')[0] : new Date().toISOString().split('T')[0],
-              U_DataFinal: existing.U_DataFinal ? existing.U_DataFinal.split('T')[0] : new Date().toISOString().split('T')[0],
-              U_Recurso: existing.U_Recurso || '',
-              U_ValorBase: Number(existing.U_ValorBase) || 0,
-              U_HorasNor: Number(existing.U_HorasNor) || 0,
-              U_HorasNob: Number(existing.U_HorasNob) || 0,
-              U_HENor: Number(existing.U_HENor) || 0,
-              U_HENob: Number(existing.U_HENob) || 0,
-              U_Total: Number(existing.U_Total) || 0
+              U_DtInicial: dtInit,
+              U_DtFinal: dtFin,
+              U_Recurso: resourceName,
+              U_VlOnSite: vlOnSite > 0 ? vlOnSite : (Number(initialUnitPrice) || 0),
+              percInTransit: perc,
+              U_QtdDiariasInTransit: Number(existing.U_QtdDiariasInTransit) || 0,
+              U_Qtd_Dias: Number(existing.U_Qtd_Dias) || Number(lineQuantity) || 1
             });
           }
         })
@@ -8084,30 +8893,33 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
         });
     } else {
       setFormData({
-        U_DataInicial: new Date().toISOString().split('T')[0],
-        U_DataFinal: new Date().toISOString().split('T')[0],
-        U_Recurso: '',
-        U_ValorBase: 0,
-        U_HorasNor: 0,
-        U_HorasNob: 0,
-        U_HENor: 0,
-        U_HENob: 0,
-        U_Total: 0
+        U_DtInicial: initialStartDate,
+        U_DtFinal: initialFinalDate,
+        U_Recurso: itemDescription || '',
+        U_VlOnSite: Number(initialUnitPrice) || 0,
+        percInTransit: 50,
+        U_QtdDiariasInTransit: 0,
+        U_Qtd_Dias: Number(lineQuantity) || 1
       });
     }
-  }, [isOpen, existingCode]);
+  }, [isOpen, existingCode, itemDescription, initialUnitPrice, lineQuantity]);
 
-  const calculateTotal = () => {
-    if (isFetchingExisting) return;
-    const total = (Number(formData.U_ValorBase) * (Number(formData.U_HorasNor) + Number(formData.U_HorasNob))) + 
-                (Number(formData.U_HENor) * (Number(formData.U_ValorBase) * 1.5)) + 
-                (Number(formData.U_HENob) * (Number(formData.U_ValorBase) * 2.0));
-    setFormData(prev => ({ ...prev, U_Total: total }));
-  };
-
-  useEffect(() => {
-    calculateTotal();
-  }, [formData.U_ValorBase, formData.U_HorasNor, formData.U_HorasNob, formData.U_HENor, formData.U_HENob]);
+  // Breakdown 100% fiel às fórmulas do Excel oficial (Modelo de DI.xlsx):
+  // - Diárias a bordo (J85): C85 - B85 + 1
+  // - Valor In Transit (I85): Valor Base (H85) * (Percentual / 100)
+  // - Diárias On Site (L85): Diárias a Bordo - Diárias In Transit
+  // - Total In Transit: (Diárias In Transit * Valor In Transit) * Qtd
+  // - Total On Site: (Diárias On Site * Valor Base) * Qtd
+  // - Total Geral (P85): Total In Transit + Total On Site
+  const currentBreakdown = calculateRentalCost({
+    dataInicial: formData.U_DtInicial,
+    dataFinal: formData.U_DtFinal,
+    quantidade: formData.U_Qtd_Dias,
+    recurso: formData.U_Recurso,
+    valorOnSite: formData.U_VlOnSite,
+    percInTransit: formData.percInTransit,
+    diariasInTransit: formData.U_QtdDiariasInTransit
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -8116,37 +8928,38 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
       if (existingCode) {
         const cleanCode = String(existingCode).trim();
         const payload = {
-          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
-          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
-          U_Recurso: formData.U_Recurso,
-          U_ValorBase: Number(formData.U_ValorBase) || 0,
-          U_HorasNor: Number(formData.U_HorasNor) || 0,
-          U_HorasNob: Number(formData.U_HorasNob) || 0,
-          U_HENor: Number(formData.U_HENor) || 0,
-          U_HENob: Number(formData.U_HENob) || 0,
-          U_Total: Number(formData.U_Total) || 0
+          U_DtInicial: formData.U_DtInicial ? `${formData.U_DtInicial}T00:00:00Z` : null,
+          U_DtFinal: formData.U_DtFinal ? `${formData.U_DtFinal}T00:00:00Z` : null,
+          Name: formData.U_Recurso,
+          U_VlOnSite: Number(formData.U_VlOnSite) || 0,
+          U_InTransit: Number(currentBreakdown.valorInTransit) || 0,
+          U_QtdDiariasBordo: Number(currentBreakdown.diariasABordo) || 0,
+          U_QtdDiariasOnSite: Number(currentBreakdown.diariasOnSite) || 0,
+          U_QtdDiariasInTransit: Number(formData.U_QtdDiariasInTransit) || 0,
+          U_Qtd_Dias: Number(formData.U_Qtd_Dias) || 1,
+          U_Total: Number(currentBreakdown.totalGeral) || 0
         };
         await sapService.updateRentalCost(cleanCode, payload);
-        toast.success(`Custo Locação #${cleanCode} atualizado com sucesso!`);
-        onSaved(cleanCode);
+        toast.success(`Custo Locação #${cleanCode} atualizado com sucesso no SAP!`);
+        onSaved(cleanCode, currentBreakdown.totalGeral);
       } else {
         const newCode = await sapService.getNextRentalCostCode();
         const payload = {
           Code: newCode,
-          Name: newCode,
-          U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
-          U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
-          U_Recurso: formData.U_Recurso,
-          U_ValorBase: Number(formData.U_ValorBase) || 0,
-          U_HorasNor: Number(formData.U_HorasNor) || 0,
-          U_HorasNob: Number(formData.U_HorasNob) || 0,
-          U_HENor: Number(formData.U_HENor) || 0,
-          U_HENob: Number(formData.U_HENob) || 0,
-          U_Total: Number(formData.U_Total) || 0
+          Name: formData.U_Recurso || newCode,
+          U_DtInicial: formData.U_DtInicial ? `${formData.U_DtInicial}T00:00:00Z` : null,
+          U_DtFinal: formData.U_DtFinal ? `${formData.U_DtFinal}T00:00:00Z` : null,
+          U_VlOnSite: Number(formData.U_VlOnSite) || 0,
+          U_InTransit: Number(currentBreakdown.valorInTransit) || 0,
+          U_QtdDiariasBordo: Number(currentBreakdown.diariasABordo) || 0,
+          U_QtdDiariasOnSite: Number(currentBreakdown.diariasOnSite) || 0,
+          U_QtdDiariasInTransit: Number(formData.U_QtdDiariasInTransit) || 0,
+          U_Qtd_Dias: Number(formData.U_Qtd_Dias) || 1,
+          U_Total: Number(currentBreakdown.totalGeral) || 0
         };
         await sapService.createRentalCost(payload);
         toast.success(`Custo Locação #${newCode} criado e vinculado com sucesso!`);
-        onSaved(newCode);
+        onSaved(newCode, currentBreakdown.totalGeral);
       }
     } catch (error: any) {
       console.error('Falha ao salvar custo locação:', error.response?.data || error);
@@ -8171,10 +8984,10 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
               )}
             </DialogTitle>
           </div>
-          <DialogDescription className="text-[10px] uppercase tracking-widest">
+          <DialogDescription className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
             {existingCode 
-              ? `Registro vinculado pelo campo U_ItemLoc (#${existingCode}) na linha do pedido.`
-              : 'Controle de custos de equipamentos e recursos externos'}
+              ? `Registro vinculado pelo campo U_ItemLoc (#${existingCode}) na linha do documento (Fórmulas Oficiais Excel).`
+              : 'Controle de custos de equipamentos e locação conforme fórmula do Excel e tabela @CUSTOSLOC.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -8185,88 +8998,200 @@ function RentalCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existi
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-6 py-4">
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+              {/* Coluna Esquerda: Dados do Equipamento, Datas e Quantidade */}
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso</Label>
+                  <div className="flex justify-between items-center">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso (F85)</Label>
+                    <span className="text-[8px] font-bold text-evo-teal uppercase">Item Selecionado</span>
+                  </div>
                   <Input 
                     value={formData.U_Recurso}
                     onChange={(e) => setFormData({ ...formData, U_Recurso: e.target.value })}
-                    className="rounded-none h-10 border-evo-bg font-bold"
-                    placeholder="Descrição do Recurso"
+                    className="rounded-none h-10 border-evo-bg font-bold bg-slate-50"
+                    placeholder="Descrição do Recurso / Equipamento"
                     required
                   />
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
-                    <Input type="date" value={formData.U_DataInicial} onChange={e => setFormData({...formData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial (B85)</Label>
+                    <Input 
+                      type="date" 
+                      value={formData.U_DtInicial} 
+                      onChange={e => setFormData({...formData, U_DtInicial: e.target.value})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      required
+                    />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
-                    <Input type="date" value={formData.U_DataFinal} onChange={e => setFormData({...formData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg font-bold" />
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final (C85)</Label>
+                    <Input 
+                      type="date" 
+                      value={formData.U_DtFinal} 
+                      onChange={e => setFormData({...formData, U_DtFinal: e.target.value})} 
+                      className="rounded-none h-10 border-evo-bg font-bold" 
+                      required
+                    />
                   </div>
                 </div>
-                <div className="space-y-1.5 border-t border-evo-bg pt-4">
-                  <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base (R$)</Label>
-                  <Input 
-                    type="number" 
-                    step="0.01" 
-                    value={formData.U_ValorBase} 
-                    onChange={e => setFormData({...formData, U_ValorBase: parseFloat(e.target.value) || 0})} 
-                    className="rounded-none h-10 border-evo-bg font-bold" 
-                  />
+
+                <div className="grid grid-cols-2 gap-4 items-end">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Equipamentos (D85)</Label>
+                    <Input 
+                      type="number"
+                      min="1"
+                      value={formData.U_Qtd_Dias} 
+                      onChange={e => setFormData({...formData, U_Qtd_Dias: Math.max(1, parseInt(e.target.value) || 1)})} 
+                      className="rounded-none h-10 border-evo-bg font-bold text-center" 
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Diárias a Bordo (J85)</Label>
+                    <div className="h-10 px-3 bg-slate-100 border border-slate-200 flex items-center justify-between font-mono font-bold text-xs text-slate-800">
+                      <span>{currentBreakdown.diariasABordo} dia(s)</span>
+                      <span className="text-[8px] text-slate-400 font-sans">Final - Início + 1</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-none space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-tight text-blue-900">Diárias On Site vs In Transit</span>
+                    <span className="text-[8px] font-bold text-blue-700 font-mono">Total a Bordo: {currentBreakdown.diariasABordo}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div className="space-y-1">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-blue-900">Diárias In Transit (N85)</Label>
+                      <Input 
+                        type="number"
+                        min="0"
+                        max={currentBreakdown.diariasABordo}
+                        value={formData.U_QtdDiariasInTransit} 
+                        onChange={e => setFormData({...formData, U_QtdDiariasInTransit: Math.max(0, parseInt(e.target.value) || 0)})} 
+                        className="rounded-none h-9 border-blue-300 bg-white font-bold text-center" 
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-blue-900">Diárias On Site (L85)</Label>
+                      <div className="h-9 px-3 bg-white border border-blue-300 flex items-center justify-center font-mono font-bold text-xs text-blue-950">
+                        {currentBreakdown.diariasOnSite} dia(s)
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
+              {/* Coluna Direita: Valores, Percentual e Detalhamento Oficial do Excel */}
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
-                    <DecimalInput value={formData.U_HorasNor} onChange={val => setFormData({...formData, U_HorasNor: val})} className="rounded-none h-10 border-evo-bg font-bold" placeholder="0,0" />
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base / On Site (R$) (H85)</Label>
+                    <span className="text-[8px] font-bold text-evo-teal uppercase">Lista de Preço 1</span>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
-                    <DecimalInput value={formData.U_HorasNob} onChange={val => setFormData({...formData, U_HorasNob: val})} className="rounded-none h-10 border-evo-bg font-bold" placeholder="0,0" />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
-                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
-                    </div>
-                    <DecimalInput 
-                      value={formData.U_HENor} 
-                      onChange={val => setFormData({...formData, U_HENor: val})} 
-                      className="rounded-none h-10 border-evo-bg font-bold" 
-                      placeholder="0,0"
-                      title="Ex: 2,5 ou 2.5 ou 2:30"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
-                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
-                    </div>
-                    <DecimalInput 
-                      value={formData.U_HENob} 
-                      onChange={val => setFormData({...formData, U_HENob: val})} 
-                      className="rounded-none h-10 border-evo-bg font-bold" 
-                      placeholder="0,0"
-                      title="Ex: 2,5 ou 2.5 ou 2:30"
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-evo-dark/40">R$</span>
+                    <Input 
+                      type="number" 
+                      step="0.01" 
+                      value={formData.U_VlOnSite} 
+                      onChange={e => setFormData({...formData, U_VlOnSite: parseFloat(e.target.value) || 0})} 
+                      className="rounded-none h-10 border-evo-bg font-bold pl-9 text-base" 
                     />
                   </div>
                 </div>
 
-                <div className="p-6 bg-evo-dark text-white rounded-none mt-4 border-l-4 border-indigo-400">
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Total Previsto</p>
-                  <h3 className="text-3xl font-black tracking-tighter text-indigo-400">
-                    R$ {formData.U_Total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </h3>
+                {/* Percentual In Transit (% informado pelo usuário - Excel I82 / I85) */}
+                <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-none space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-black uppercase tracking-tight text-indigo-950">Percentual In Transit (%) (I82)</Label>
+                    <span className="text-[9px] font-mono font-bold text-indigo-700">
+                      {formData.percInTransit}% da diária
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1">
+                        {[40, 50].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => setFormData({...formData, percInTransit: pct})}
+                            className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
+                              formData.percInTransit === pct 
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                                : 'bg-white text-evo-dark border-evo-bg hover:bg-indigo-50'
+                            }`}
+                          >
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Input 
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={formData.percInTransit} 
+                        onChange={e => setFormData({...formData, percInTransit: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0))})} 
+                        className="rounded-none h-9 border-indigo-300 bg-white font-bold text-center" 
+                        placeholder="Outro %"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center text-[10px] font-bold text-indigo-900 bg-indigo-100/60 px-2.5 py-1 border-l-2 border-indigo-500">
+                    <span>Valor In Transit (I85):</span>
+                    <span className="font-mono font-black">
+                      R$ {currentBreakdown.valorInTransit.toFixed(2)} (R$ {formData.U_VlOnSite.toFixed(2)} × {formData.percInTransit}%)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Detalhamento dos Cálculos Fiel ao Excel */}
+                <div className="p-4 bg-evo-dark text-white rounded-none space-y-2.5 border-l-4 border-indigo-400">
+                  <div className="flex justify-between items-center text-[10px] uppercase text-white/60 font-semibold border-b border-white/10 pb-1.5">
+                    <span>Fórmulas Oficiais Excel (Modelo de DI)</span>
+                    <span>Cálculo</span>
+                  </div>
+
+                  <div className="space-y-1.5 text-[10px]">
+                    <div className="flex justify-between text-white/80">
+                      <span>Subtotal In Transit ({formData.U_QtdDiariasInTransit} d × R$ {currentBreakdown.valorInTransit.toFixed(2)} × {formData.U_Qtd_Dias} un):</span>
+                      <span className="font-mono font-bold text-indigo-300">R$ {currentBreakdown.totalInTransit.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-white/80">
+                      <span>Subtotal On Site ({currentBreakdown.diariasOnSite} d × R$ {formData.U_VlOnSite.toFixed(2)} × {formData.U_Qtd_Dias} un):</span>
+                      <span className="font-mono font-bold text-teal-300">R$ {currentBreakdown.totalOnSite.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Previsto da Locação (P85)</p>
+                      <h3 className="text-2xl font-black tracking-tighter text-indigo-400">
+                        R$ {currentBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </h3>
+                    </div>
+                    <div className="text-right text-[9px] text-white/60">
+                      <div>Diárias On Site: <span className="font-mono font-bold text-white">{currentBreakdown.diariasOnSite}</span></div>
+                      <div>Diárias In Transit: <span className="font-mono font-bold text-white">{formData.U_QtdDiariasInTransit}</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
+
             <DialogFooter>
               <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
               <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">

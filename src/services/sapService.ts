@@ -173,6 +173,16 @@ export function buildODataQuery(
   return `${basePath}${queryString}`;
 }
 
+// Helper to safely resolve financial project code (only if valid in SAP OPRJ table, never 'BASE' or invalid codes)
+export const resolveSapFinancialProject = (proj?: string | null): string | undefined => {
+  if (!proj) return undefined;
+  const clean = String(proj).trim();
+  if (!clean || clean.toUpperCase() === 'BASE') return undefined;
+  // In this tenant, the OPRJ table only has 'RIG PASS'
+  if (clean.toUpperCase() === 'RIG PASS') return 'RIG PASS';
+  return undefined;
+};
+
 export const sapService = {
   login: async (email: string, companyDB?: string) => {
     try {
@@ -570,30 +580,160 @@ export const sapService = {
 
   getItems: async (name?: string) => {
     try {
-      // Escape single quotes for OData
-      const sanitizedName = name ? name.replace(/'/g, "''") : '';
-      let url = "/sap/Items?$select=ItemCode,ItemName,Frozen&$top=50";
-      
+      const rawQuery = (name || '').trim();
+      const sanitizedName = rawQuery.replace(/'/g, "''");
+      const baseSelect = "ItemCode,ItemName,Frozen,ItemPrices";
+
       if (sanitizedName) {
-        try {
-          // Try searching both Code and Name
-          const dualFilterUrl = `${url}&$filter=contains(ItemName, '${sanitizedName}') or contains(ItemCode, '${sanitizedName}')`;
-          const response = await api.get(dualFilterUrl);
-          return (response.data.value || []).filter((item: any) => item.Frozen === 'tNO' || item.Frozen === 'N' || !item.Frozen);
-        } catch (e) {
-          console.warn('Dual filter search failed, falling back to ItemName only...');
-          // Fallback to searching only Name if the complex filter fails
-          const singleFilterUrl = `${url}&$filter=contains(ItemName, '${sanitizedName}')`;
-          const response = await api.get(singleFilterUrl);
-          return (response.data.value || []).filter((item: any) => item.Frozen === 'tNO' || item.Frozen === 'N' || !item.Frozen);
+        // Build rich search variants to match case-sensitive & accent-sensitive SAP DB:
+        const variants = new Set<string>();
+        const upper = sanitizedName.toUpperCase();
+        variants.add(upper);
+
+        // Normalized unaccented uppercase (e.g. MOSQUETAO, LOCACAO)
+        const unaccented = upper.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        variants.add(unaccented);
+
+        // Portuguese specific rules
+        if (unaccented.includes("CAO")) {
+          variants.add(unaccented.replace(/CAO/g, "ÇÃO"));
+        }
+        if (unaccented.includes("COES")) {
+          variants.add(unaccented.replace(/COES/g, "ÇÕES"));
+        }
+        if (unaccented.endsWith("AO")) {
+          variants.add(unaccented.replace(/AO$/, "ÃO"));
+          if (unaccented.length > 4) {
+            variants.add(unaccented.slice(0, -2)); // e.g. MOSQUET
+          }
+        }
+        if (unaccented.includes("LOCAC")) {
+          variants.add("LOCAÇÃO");
+          variants.add("LOCACAO");
+          variants.add("LOCAC");
+        }
+        if (unaccented.includes("MOSQUET")) {
+          variants.add("MOSQUETÃO");
+          variants.add("MOSQUETAO");
+          variants.add("MOSQUET");
+        }
+        if (unaccented.includes("SERVIC")) {
+          variants.add("SERVIÇO");
+          variants.add("SERVICO");
+          variants.add("SERVIÇ");
+        }
+        if (unaccented.includes("DIARI")) {
+          variants.add("DIÁRIA");
+          variants.add("DIARIA");
+        }
+
+        const variantList = Array.from(variants).filter(Boolean);
+        const allItems: any[] = [];
+        const seenCodes = new Set<string>();
+
+        // Query each variant in parallel with multi-page support (SAP Service Layer page limit is 20)
+        await Promise.all(
+          variantList.slice(0, 5).map(async (v) => {
+            for (let page = 0; page < 5; page++) {
+              const skip = page * 20;
+              try {
+                const url = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${v}') or contains(ItemCode, '${v}')`)}&$skip=${skip}&$top=20`;
+                const response = await api.get(url);
+                const items = response.data?.value || [];
+                for (const it of items) {
+                  if (it.ItemCode && !seenCodes.has(it.ItemCode)) {
+                    seenCodes.add(it.ItemCode);
+                    if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+                      allItems.push(it);
+                    }
+                  }
+                }
+                if (items.length < 20) break; // End of pages for this variant
+              } catch (err) {
+                // If combined filter fails, try simpler single contains
+                try {
+                  const fallbackUrl = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${v}')`)}&$skip=${skip}&$top=20`;
+                  const respFallback = await api.get(fallbackUrl);
+                  const fItems = respFallback.data?.value || [];
+                  for (const it of fItems) {
+                    if (it.ItemCode && !seenCodes.has(it.ItemCode)) {
+                      seenCodes.add(it.ItemCode);
+                      if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+                        allItems.push(it);
+                      }
+                    }
+                  }
+                  if (fItems.length < 20) break;
+                } catch {
+                  break;
+                }
+              }
+            }
+          })
+        );
+
+        if (allItems.length > 0) {
+          // Sort items by relevance: exact match or startsWith first
+          const term = sanitizedName.toUpperCase();
+          return allItems.sort((a, b) => {
+            const aName = (a.ItemName || '').toUpperCase();
+            const bName = (b.ItemName || '').toUpperCase();
+            const aStarts = aName.startsWith(term) || (a.ItemCode || '').startsWith(term);
+            const bStarts = bName.startsWith(term) || (b.ItemCode || '').startsWith(term);
+            if (aStarts && !bStarts) return -1;
+            if (!aStarts && bStarts) return 1;
+            return aName.localeCompare(bName);
+          });
         }
       }
-      
-      const response = await api.get(url);
-      // Filter active items in memory for maximum compatibility
-      return (response.data.value || []).filter((item: any) => item.Frozen === 'tNO' || item.Frozen === 'N' || !item.Frozen);
+
+      // Initial list when no search term is entered - fetch up to 100 items (5 pages)
+      const initialItems: any[] = [];
+      const seenInit = new Set<string>();
+      for (let p = 0; p < 5; p++) {
+        const url = `/sap/Items?$select=${baseSelect}&$skip=${p * 20}&$top=20`;
+        const response = await api.get(url);
+        const items = response.data.value || [];
+        for (const it of items) {
+          if (it.ItemCode && !seenInit.has(it.ItemCode)) {
+            seenInit.add(it.ItemCode);
+            if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+              initialItems.push(it);
+            }
+          }
+        }
+        if (items.length < 20) break;
+      }
+      return initialItems;
     } catch (error) {
       return handleApiError(error, 'getItems');
+    }
+  },
+
+  getItemPriceList1: async (itemCode: string): Promise<{ price: number; currency: string; foundInList1: boolean }> => {
+    try {
+      const cleanCode = itemCode.trim();
+      const response = await api.get(`/sap/Items('${encodeURIComponent(cleanCode)}')?$select=ItemCode,ItemName,ItemPrices`);
+      const itemPrices = response.data?.ItemPrices || [];
+      const list1 = itemPrices.find((p: any) => Number(p.PriceList) === 1);
+      
+      if (list1 && typeof list1.Price === 'number' && list1.Price > 0) {
+        return {
+          price: Number(list1.Price),
+          currency: list1.Currency || 'R$',
+          foundInList1: true
+        };
+      }
+
+      // If price is 0 or not found
+      return {
+        price: list1?.Price !== undefined ? Number(list1.Price) : 0,
+        currency: list1?.Currency || 'R$',
+        foundInList1: (list1 && Number(list1.Price) > 0) ? true : false
+      };
+    } catch (error) {
+      console.warn(`Erro ao consultar Lista de Preços 1 para o item ${itemCode}:`, error);
+      return { price: 0, currency: 'R$', foundInList1: false };
     }
   },
 
@@ -1054,13 +1194,16 @@ export const sapService = {
   },
 
   getRentalCost: async (code: string | number) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
     try {
       const response = await api.get(`/sap/CustosLoc('${cleanCode}')`);
       return response.data;
     } catch (error) {
       try {
-        const response2 = await api.get(`/sap/CustosLoc?$filter=Code eq '${cleanCode}'`);
+        const filterStr = /^\d+$/.test(cleanCode)
+          ? `Code eq '${cleanCode}' or DocEntry eq ${cleanCode}`
+          : `Code eq '${cleanCode}'`;
+        const response2 = await api.get(`/sap/CustosLoc?$filter=${encodeURIComponent(filterStr)}`);
         if (response2.data.value && response2.data.value.length > 0) {
           return response2.data.value[0];
         }
@@ -1104,42 +1247,46 @@ export const sapService = {
   },
 
   updatePersonnelCost: async (code: string | number, data: any) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
     try {
       const response = await api.patch(`/sap/CustosPessoal('${cleanCode}')`, data);
       return response.data;
     } catch (error) {
-      try {
-        const response2 = await api.patch(`/sap/CustosPessoal(${cleanCode})`, data);
-        return response2.data;
-      } catch (err2) {
-        return handleApiError(error, 'updatePersonnelCost');
-      }
+      return handleApiError(error, 'updatePersonnelCost');
     }
   },
 
   deletePersonnelCost: async (code: string | number) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
     try {
       const response = await api.delete(`/sap/CustosPessoal('${cleanCode}')`);
       return response.data;
     } catch (error) {
-      try {
-        const response2 = await api.delete(`/sap/CustosPessoal(${cleanCode})`);
-        return response2.data;
-      } catch (err2) {
-        return handleApiError(error, 'deletePersonnelCost');
-      }
+      return handleApiError(error, 'deletePersonnelCost');
     }
   },
 
   createRentalCost: async (data: any) => {
     try {
-      const response = await api.post('/sap/CustosLoc', data);
+      const { U_Recurso, U_ValorBase, U_HorasNor, U_HorasNob, U_HENor, U_HENob, ...cleanData } = data;
+      if (!cleanData.Name && U_Recurso) {
+        cleanData.Name = U_Recurso;
+      }
+      if (!cleanData.U_VlOnSite && U_ValorBase) {
+        cleanData.U_VlOnSite = Number(U_ValorBase) || 0;
+      }
+      const response = await api.post('/sap/CustosLoc', cleanData);
       return response.data;
     } catch (error) {
       try {
-        const response2 = await api.post('/sap/U_CustosLoc', data);
+        const { U_Recurso, U_ValorBase, U_HorasNor, U_HorasNob, U_HENor, U_HENob, ...cleanData } = data;
+        if (!cleanData.Name && U_Recurso) {
+          cleanData.Name = U_Recurso;
+        }
+        if (!cleanData.U_VlOnSite && U_ValorBase) {
+          cleanData.U_VlOnSite = Number(U_ValorBase) || 0;
+        }
+        const response2 = await api.post('/sap/U_CustosLoc', cleanData);
         return response2.data;
       } catch (err2) {
         return handleApiError(error, 'createRentalCost');
@@ -1148,32 +1295,55 @@ export const sapService = {
   },
 
   updateRentalCost: async (code: string | number, data: any) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
+    const { U_Recurso, U_ValorBase, U_HorasNor, U_HorasNob, U_HENor, U_HENob, ...cleanData } = data;
+    if (!cleanData.Name && U_Recurso) {
+      cleanData.Name = U_Recurso;
+    }
+    if (!cleanData.U_VlOnSite && U_ValorBase) {
+      cleanData.U_VlOnSite = Number(U_ValorBase) || 0;
+    }
     try {
-      const response = await api.patch(`/sap/CustosLoc('${cleanCode}')`, data);
+      const response = await api.patch(`/sap/CustosLoc('${cleanCode}')`, cleanData);
       return response.data;
     } catch (error) {
       try {
-        const response2 = await api.patch(`/sap/CustosLoc(${cleanCode})`, data);
-        return response2.data;
-      } catch (err2) {
-        return handleApiError(error, 'updateRentalCost');
+        const filterStr = /^\d+$/.test(cleanCode)
+          ? `Code eq '${cleanCode}' or DocEntry eq ${cleanCode}`
+          : `Code eq '${cleanCode}'`;
+        const resQuery = await api.get(`/sap/CustosLoc?$filter=${encodeURIComponent(filterStr)}&$select=Code`);
+        if (resQuery.data.value && resQuery.data.value.length > 0) {
+          const realCode = resQuery.data.value[0].Code;
+          const retryPatch = await api.patch(`/sap/CustosLoc('${realCode}')`, cleanData);
+          return retryPatch.data;
+        }
+      } catch {
+        // fallback
       }
+      return handleApiError(error, 'updateRentalCost');
     }
   },
 
   deleteRentalCost: async (code: string | number) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
     try {
       const response = await api.delete(`/sap/CustosLoc('${cleanCode}')`);
       return response.data;
     } catch (error) {
       try {
-        const response2 = await api.delete(`/sap/CustosLoc(${cleanCode})`);
-        return response2.data;
-      } catch (err2) {
-        return handleApiError(error, 'deleteRentalCost');
+        const filterStr = /^\d+$/.test(cleanCode)
+          ? `Code eq '${cleanCode}' or DocEntry eq ${cleanCode}`
+          : `Code eq '${cleanCode}'`;
+        const resQuery = await api.get(`/sap/CustosLoc?$filter=${encodeURIComponent(filterStr)}&$select=Code`);
+        if (resQuery.data.value && resQuery.data.value.length > 0) {
+          const realCode = resQuery.data.value[0].Code;
+          const retryDel = await api.delete(`/sap/CustosLoc('${realCode}')`);
+          return retryDel.data;
+        }
+      } catch {
+        // fallback
       }
+      return handleApiError(error, 'deleteRentalCost');
     }
   },
 
@@ -1214,23 +1384,23 @@ export const sapService = {
         if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
           sanitized.U_B1SYS_RevenueInd2 = '1';
         }
-        // Force BPL_IDAssignedToInvoice to 1 for all sales documents
+        // Force BPL_IDAssignedToInvoice to 1 for all new sales documents
         sanitized.BPL_IDAssignedToInvoice = 1;
-        const project = sanitized.CostingCode4 || sanitized.U_Projeto || sanitized.Project || sanitized.ProjectCode || 'BASE';
-        if (project && project !== 'BASE') {
-          sanitized.Project = project;
+        const project = sanitized.CostingCode4 || sanitized.U_Projeto || '';
+        delete sanitized.Project;
+        if (project) {
+          sanitized.U_Projeto = project;
         }
 
         if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
           sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => {
-            const lineProj = line.CostingCode4 || line.ProjectCode || project || 'BASE';
+            const lineProj = line.CostingCode4 || project || '';
             return {
               ...line,
               CostingCode: line.CostingCode || 'BR',
               CostingCode2: line.CostingCode2 || 'MATRIZ',
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
-              CostingCode4: lineProj,
-              ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProj !== 'BASE' ? lineProj : undefined),
+              CostingCode4: lineProj || undefined,
               DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
               U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
               BPL_IDAssignedToInvoice: 1
@@ -1261,26 +1431,25 @@ export const sapService = {
         if (!sanitized.U_B1SYS_RevenueInd2 || sanitized.U_B1SYS_RevenueInd2 === '') {
           sanitized.U_B1SYS_RevenueInd2 = '1';
         }
-        // Force BPL_IDAssignedToInvoice to 1 for all sales documents
-        sanitized.BPL_IDAssignedToInvoice = 1;
-        const project = sanitized.CostingCode4 || sanitized.U_Projeto || sanitized.Project || sanitized.ProjectCode || 'BASE';
-        if (project && project !== 'BASE') {
-          sanitized.Project = project;
+        // Do NOT send BPL_IDAssignedToInvoice on PATCH to avoid branch change error
+        delete sanitized.BPL_IDAssignedToInvoice;
+        const project = sanitized.CostingCode4 || sanitized.U_Projeto || '';
+        delete sanitized.Project;
+        if (project) {
+          sanitized.U_Projeto = project;
         }
 
         if (sanitized.DocumentLines && Array.isArray(sanitized.DocumentLines)) {
           sanitized.DocumentLines = sanitized.DocumentLines.map((line: any) => {
-            const lineProj = line.CostingCode4 || line.ProjectCode || project || 'BASE';
+            const lineProj = line.CostingCode4 || project || '';
             return {
               ...line,
               CostingCode: line.CostingCode || 'BR',
               CostingCode2: line.CostingCode2 || 'MATRIZ',
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
-              CostingCode4: lineProj,
-              ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProj !== 'BASE' ? lineProj : undefined),
+              CostingCode4: lineProj || undefined,
               DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
-              U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
-              BPL_IDAssignedToInvoice: 1
+              U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1'
             };
           });
         }
@@ -1354,12 +1523,12 @@ export const sapService = {
   createOrder: async (data: any) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const headerProject = data.CostingCode4 || data.U_Projeto || data.Project || data.ProjectCode || 'BASE';
+      const headerProject = data.CostingCode4 || data.U_Projeto || '';
 
       const sanitizedLines = (data.DocumentLines || []).map((line: any) => {
         const uNItem = line.U_nItem ?? line.U_nITEM ?? line.U_NItem;
         const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
-        const lineProject = line.CostingCode4 || line.ProjectCode || headerProject || 'BASE';
+        const lineProject = line.CostingCode4 || headerProject || '';
 
         return {
           ItemCode: line.ItemCode,
@@ -1369,9 +1538,8 @@ export const sapService = {
           CostingCode: line.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || 'MATRIZ',
           CostingCode3: line.CostingCode3 || 'OPER_OFF',
-          CostingCode4: lineProject,
+          CostingCode4: lineProject || undefined,
           CostingCode5: line.CostingCode5 || undefined,
-          ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProject !== 'BASE' ? lineProject : undefined),
           DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
           U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
           U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
@@ -1398,11 +1566,8 @@ export const sapService = {
         payload.TotalDiscount = Number(data.TotalDiscount);
       }
 
-      if (headerProject && headerProject !== 'BASE') {
-        payload.Project = headerProject;
-      }
-      if (data.U_Projeto || data.Project || data.ProjectCode) {
-        payload.U_Projeto = data.U_Projeto || data.Project || data.ProjectCode;
+      if (headerProject) {
+        payload.U_Projeto = headerProject;
       }
       if (data.U_POCliente) {
         payload.U_POCliente = data.U_POCliente;
@@ -1417,12 +1582,12 @@ export const sapService = {
 
   updateOrder: async (docEntry: number, data: any) => {
     try {
-      const headerProject = data.CostingCode4 || data.U_Projeto || data.Project || data.ProjectCode || 'BASE';
+      const headerProject = data.CostingCode4 || data.U_Projeto || '';
       const sanitizedLines = (data.DocumentLines || []).map((line: any, idx: number) => {
         const lineNum = typeof line.LineNum === 'number' ? line.LineNum : idx;
         const uNItem = line.U_nItem ?? line.U_nITEM ?? line.U_NItem;
         const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
-        const lineProject = line.CostingCode4 || line.ProjectCode || headerProject || 'BASE';
+        const lineProject = line.CostingCode4 || headerProject || '';
 
         return {
           LineNum: lineNum,
@@ -1433,21 +1598,18 @@ export const sapService = {
           CostingCode: line.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || 'MATRIZ',
           CostingCode3: line.CostingCode3 || 'OPER_OFF',
-          CostingCode4: lineProject,
+          CostingCode4: lineProject || undefined,
           CostingCode5: line.CostingCode5 || undefined,
-          ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProject !== 'BASE' ? lineProject : undefined),
           DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
           U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
           U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
-          U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
-          BPL_IDAssignedToInvoice: 1
+          U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1'
         };
       });
 
       const patchPayload: any = {
         Comments: data.Comments || '',
         NumAtCard: data.NumAtCard || data.U_POCliente || '',
-        BPL_IDAssignedToInvoice: 1,
         DocumentLines: sanitizedLines
       };
 
@@ -1461,11 +1623,8 @@ export const sapService = {
       if (data.DocDueDate) {
         patchPayload.DocDueDate = data.DocDueDate.split('T')[0];
       }
-      if (headerProject && headerProject !== 'BASE') {
-        patchPayload.Project = headerProject;
-      }
-      if (data.U_Projeto || data.Project || data.ProjectCode) {
-        patchPayload.U_Projeto = data.U_Projeto || data.Project || data.ProjectCode;
+      if (headerProject) {
+        patchPayload.U_Projeto = headerProject;
       }
       if (data.U_POCliente) {
         patchPayload.U_POCliente = data.U_POCliente;
@@ -1505,23 +1664,17 @@ export const sapService = {
       // Resolve the project code (Dimension 4 - Projetos in SAP)
       const headerProject = quotationData?.CostingCode4 || 
                             quotationData?.U_Projeto || 
-                            quotationData?.Project || 
-                            quotationData?.ProjectCode || 
                             fullQuote?.CostingCode4 || 
                             fullQuote?.U_Projeto ||
-                            fullQuote?.Project || 
-                            fullQuote?.ProjectCode || 
-                            'BASE';
+                            '';
 
       const lines = (fullQuote.DocumentLines || []).map((line: any, idx: number) => {
         const matchingPassedLine = quotationData?.DocumentLines?.[idx] || 
                                    (quotationData?.DocumentLines && quotationData.DocumentLines.find((l: any) => l.LineNum === line.LineNum));
         const lineProject = line.CostingCode4 || 
                             matchingPassedLine?.CostingCode4 || 
-                            matchingPassedLine?.ProjectCode || 
-                            line.ProjectCode || 
                             headerProject || 
-                            'BASE';
+                            '';
 
         const uNItem = line.U_nItem ?? line.U_nITEM ?? matchingPassedLine?.U_nItem ?? matchingPassedLine?.U_nITEM;
         const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC ?? matchingPassedLine?.U_ItemLoc ?? matchingPassedLine?.U_ITEMLOC;
@@ -1534,8 +1687,7 @@ export const sapService = {
           CostingCode: line.CostingCode || matchingPassedLine?.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || matchingPassedLine?.CostingCode2 || 'MATRIZ',
           CostingCode3: line.CostingCode3 || matchingPassedLine?.CostingCode3 || 'OPER_OFF',
-          CostingCode4: lineProject,
-          ProjectCode: (line.ProjectCode && line.ProjectCode !== '') ? line.ProjectCode : (lineProject !== 'BASE' ? lineProject : undefined),
+          CostingCode4: lineProject || undefined,
           U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : undefined,
           U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : undefined,
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
@@ -1553,9 +1705,6 @@ export const sapService = {
         DocumentLines: lines
       };
 
-      if (headerProject && headerProject !== 'BASE') {
-        orderData.Project = headerProject;
-      }
       if (quotationData?.U_POCliente || fullQuote?.U_POCliente) {
         orderData.U_POCliente = quotationData?.U_POCliente || fullQuote?.U_POCliente;
       }
