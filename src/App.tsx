@@ -381,11 +381,11 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [portalDocEntry, setPortalDocEntry] = useState<number | null>(null);
 
-  // Inactivity auto-logout (15 minutes of inactivity)
+  // Inactivity auto-logout (5 minutes of inactivity)
   useEffect(() => {
     if (!activeAuthUser && !isSAPLoggedIn) return;
 
-    const INACTIVITY_LIMIT_MS = 15 * 60 * 1000; // 15 minutos
+    const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 minutos
     let inactivityTimer: NodeJS.Timeout;
 
     const resetInactivityTimer = () => {
