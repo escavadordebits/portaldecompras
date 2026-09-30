@@ -137,7 +137,23 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         if (cardCode) {
           try {
             const bp = await sapService.getBusinessPartner(cardCode);
-            if (bp && isMounted) setCustomerBP(bp);
+            if (bp && isMounted) {
+              setCustomerBP(bp);
+              // Ensure emailTo is updated if client email is found and accounts receivable is retained
+              const defaultAR = 'BR-ACCOUNTSRECEIVABLES@qualitechirm.com';
+              const bpEmail = (bp.EmailAddress || bp.Email || '').trim();
+              if (bpEmail) {
+                setEmailTo(prev => {
+                  if (!prev || prev === 'destinatario@outlook.com' || prev === defaultAR) {
+                    return `${bpEmail}, ${defaultAR}`;
+                  }
+                  if (!prev.toLowerCase().includes(bpEmail.toLowerCase())) {
+                    return `${bpEmail}, ${prev}`;
+                  }
+                  return prev;
+                });
+              }
+            }
           } catch (e) {
             console.warn('Erro ao carregar dados do cliente:', e);
           }
@@ -868,11 +884,30 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         setMsAccount(storedAccount);
         setMsGraphToken(storedAccount.accessToken);
       }
-      setEmailTo(customerBP?.Email || currentDoc.ContactEmail || 'destinatario@outlook.com');
+      const defaultAccountsReceivable = 'BR-ACCOUNTSRECEIVABLES@qualitechirm.com';
+      const clientEmail = (
+        customerBP?.EmailAddress ||
+        customerBP?.Email ||
+        currentDoc.ContactEmail ||
+        currentDoc.EmailAddress ||
+        currentDoc.Email ||
+        ''
+      ).trim();
+
+      const initialEmailTo = clientEmail
+        ? `${clientEmail}, ${defaultAccountsReceivable}`
+        : defaultAccountsReceivable;
+
+      setEmailTo(initialEmailTo);
 
       const initialHasPO = Boolean(numPedido && numPedido.trim() !== '' && numPedido !== '0');
       const initialUnit = currentDoc.U_Unidade || currentDoc.U_Plataforma || currentDoc.ShipToCode || 'FPSO Carioca';
-      const initialWO = currentDoc.U_WO || currentDoc.U_NumWO || currentDoc.Project || String(docNum);
+      
+      // Resolve WO from lines if not present at header
+      const lineWO = (currentDoc.DocumentLines || [])
+        .map((l: any) => l.CostingCode4 || l.ProjectCode || l.U_WO || l.U_Projeto || l.Project)
+        .find((v: any) => v && String(v).trim() !== '' && String(v).trim().toUpperCase() !== 'BASE');
+      const initialWO = currentDoc.U_WO || currentDoc.U_NumWO || currentDoc.Project || lineWO || String(docNum);
       const initialPO = numPedido || '';
       const initialScope = escopo || 'Inspeção, Reparo e Manutenção';
       const initialPeriod = docDateFormatted 
@@ -2194,7 +2229,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
               </div>
               <Input
                 type="text"
-                placeholder={emailLang === 'en' ? 'user1@company.com; user2@company.com' : 'destinatario1@empresa.com; destinatario2@empresa.com'}
+                placeholder={emailLang === 'en' ? 'client@company.com; BR-ACCOUNTSRECEIVABLES@qualitechirm.com' : 'cliente@empresa.com, BR-ACCOUNTSRECEIVABLES@qualitechirm.com'}
                 value={emailTo}
                 onChange={(e) => setEmailTo(e.target.value)}
                 className="h-10 text-xs font-semibold rounded-none border-slate-300 focus:border-blue-600"

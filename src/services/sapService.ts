@@ -183,6 +183,39 @@ export const resolveSapFinancialProject = (proj?: string | null): string | undef
   return undefined;
 };
 
+/**
+ * Safely extracts the Work Order (WO) / Project identification for a sales document (Order or Quotation).
+ * Checks the header fields first, and importantly checks all DocumentLines (CostingCode4, ProjectCode, U_Projeto, U_WO, etc.).
+ * Ensures that even when the WO is stored only at the line level (e.g. in CostingCode4), it is displayed in search lists and details.
+ */
+export const getDocumentWO = (doc: any): string => {
+  if (!doc) return '-';
+
+  // 1. Direct header project or WO (exclude placeholder 'BASE')
+  const headerWO = doc.CostingCode4 || doc.U_Projeto || doc.Project || doc.ProjectCode || doc.U_WO || doc.U_NumWO;
+  if (headerWO && String(headerWO).trim() !== '' && String(headerWO).trim().toUpperCase() !== 'BASE') {
+    return String(headerWO).trim();
+  }
+
+  // 2. Lines (DocumentLines) - "O campo WO que esta na linha deve ser exibido mesmo que em linha deve ser exibido na lista de pesquisa"
+  if (Array.isArray(doc.DocumentLines) && doc.DocumentLines.length > 0) {
+    const lineWos = doc.DocumentLines
+      .map((l: any) => l.CostingCode4 || l.ProjectCode || l.U_Projeto || l.U_WO || l.U_NumWO || l.Project)
+      .filter((w: any) => w && String(w).trim() !== '' && String(w).trim().toUpperCase() !== 'BASE');
+
+    if (lineWos.length > 0) {
+      const unique = Array.from(new Set(lineWos.map((w: any) => String(w).trim())));
+      return unique.join(', ');
+    }
+  }
+
+  if (headerWO && String(headerWO).trim() !== '') {
+    return String(headerWO).trim();
+  }
+
+  return '-';
+};
+
 export const sapService = {
   login: async (email: string, companyDB?: string) => {
     try {
@@ -1352,7 +1385,31 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/Quotations', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const items = response.data.value || [];
+
+      // Check if search yields WO matches in lines
+      if (typeof options === 'object' && options?.search && items.length === 0) {
+        const raw = options.search.trim();
+        const cleanWo = raw.replace(/^(WO|PROJETO)\s*[:#-]?\s*/i, '').trim();
+        const woTarget = cleanWo || raw;
+        try {
+          const woRes = await api.get(`/sap/SQLQueries('SEARCH_QUOTES_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+          if (woRes.data?.value && woRes.data.value.length > 0) {
+            const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+            if (entries.length > 0) {
+              const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const fullDocsRes = await api.get(`/sap/Quotations?$filter=${filterEntries}&$orderby=DocEntry desc`);
+              if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
+                return fullDocsRes.data.value;
+              }
+            }
+          }
+        } catch {
+          // ignore error and proceed
+        }
+      }
+
+      return items;
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
         try {
@@ -1483,10 +1540,51 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/Orders', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const items = response.data.value || [];
+
+      // Check if search yields WO matches in lines
+      if (typeof options === 'object' && options?.search && items.length === 0) {
+        const raw = options.search.trim();
+        const cleanWo = raw.replace(/^(WO|PROJETO)\s*[:#-]?\s*/i, '').trim();
+        const woTarget = cleanWo || raw;
+        try {
+          const woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+          if (woRes.data?.value && woRes.data.value.length > 0) {
+            const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+            if (entries.length > 0) {
+              const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const fullDocsRes = await api.get(`/sap/Orders?$filter=${filterEntries}&$orderby=DocEntry desc`);
+              if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
+                return fullDocsRes.data.value;
+              }
+            }
+          }
+        } catch {
+          // ignore error and proceed
+        }
+      }
+
+      return items;
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
         const raw = options.search.trim();
+        const cleanWo = raw.replace(/^(WO|PROJETO)\s*[:#-]?\s*/i, '').trim();
+        const woTarget = cleanWo || raw;
+        try {
+          const woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+          if (woRes.data?.value && woRes.data.value.length > 0) {
+            const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+            if (entries.length > 0) {
+              const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const fullDocsRes = await api.get(`/sap/Orders?$filter=${filterEntries}&$orderby=DocEntry desc`);
+              if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
+                return fullDocsRes.data.value;
+              }
+            }
+          }
+        } catch {
+          // ignore and proceed to fallback
+        }
         const numMatch = raw.match(/^\D*(\d+)\D*$/);
         if (numMatch) {
           const numVal = parseInt(numMatch[1], 10);

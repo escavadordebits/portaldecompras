@@ -30,6 +30,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
+import { getDocumentWO } from '../services/sapService';
 
 export interface MeasurementRecord {
   docEntry: number;
@@ -209,7 +210,8 @@ export function MeasurementsSummaryModal({
       const totBalance = Math.max(0, totQuotation - totMeasured);
       const pct = totQuotation > 0 ? Math.min(100, (totMeasured / totQuotation) * 100) : 0;
 
-      const projectName = q.U_Projeto || q.Project || q.ProjectCode || q.Comments || `wO ${2040 + (idx % 50)}`;
+      const docWO = getDocumentWO(q);
+      const projectName = docWO !== '-' ? docWO : (q.Comments || `WO ${2040 + (idx % 50)}`);
       const poNum = q.NumAtCard || q.U_POCliente || q.U_PedidoCliente || `${7000 + idx}`;
 
       let status: 'aberta' | 'medicao_parcial' | '100%_medida' | 'fechada' = 'aberta';

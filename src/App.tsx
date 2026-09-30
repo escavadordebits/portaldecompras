@@ -74,7 +74,7 @@ import {
   sendPasswordResetEmail,
   signOut 
 } from 'firebase/auth';
-import { sapService, normalizeSapCompany, resolveSapFinancialProject } from './services/sapService';
+import { sapService, normalizeSapCompany, resolveSapFinancialProject, getDocumentWO } from './services/sapService';
 import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost } from './utils/costCalculations';
 import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
@@ -2570,7 +2570,7 @@ function DashboardView({
                           return {
                             docEntry,
                             docNum,
-                            projeto: q.U_Projeto || q.Project || q.ProjectCode || q.Comments || `wO ${2040 + (idx % 20)}`,
+                            projeto: getDocumentWO(q) !== '-' ? getDocumentWO(q) : (q.Comments || `WO ${2040 + (idx % 20)}`),
                             cotacao: `QT ${docNum}`,
                             poCliente: q.NumAtCard || q.U_POCliente || `${7001 + idx}`,
                             cardName: q.CardName || `Cliente #${docEntry}`,
@@ -5631,7 +5631,15 @@ function QuotationsView({
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
-    return matchesStatus;
+    if (!matchesStatus) return false;
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.trim().toLowerCase();
+    const wo = getDocumentWO(q).toLowerCase();
+    const docNum = String(q.DocNum || q.DocEntry || '').toLowerCase();
+    const cardCode = String(q.CardCode || '').toLowerCase();
+    const cardName = String(q.CardName || '').toLowerCase();
+    const poCliente = String(q.NumAtCard || q.U_POCliente || '').toLowerCase();
+    return wo.includes(term) || docNum.includes(term) || cardCode.includes(term) || cardName.includes(term) || poCliente.includes(term);
   });
 
   const handleCreateNew = () => {
@@ -5949,7 +5957,7 @@ function QuotationsView({
               ) : filteredQuotations.length === 0 ? (
                 <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhuma cotação encontrada</TableCell></TableRow>
               ) : filteredQuotations.map((q) => {
-                const wo = q.U_Projeto || q.Project || q.ProjectCode || (q.DocumentLines && q.DocumentLines[0]?.ProjectCode) || '-';
+                const wo = getDocumentWO(q);
                 const poCliente = q.NumAtCard || q.U_POCliente || '-';
                 return (
                   <TableRow key={q.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">
@@ -6940,7 +6948,15 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
-    return matchesStatus;
+    if (!matchesStatus) return false;
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.trim().toLowerCase();
+    const wo = getDocumentWO(o).toLowerCase();
+    const docNum = String(o.DocNum || o.DocEntry || '').toLowerCase();
+    const cardCode = String(o.CardCode || '').toLowerCase();
+    const cardName = String(o.CardName || '').toLowerCase();
+    const poCliente = String(o.NumAtCard || o.U_POCliente || '').toLowerCase();
+    return wo.includes(term) || docNum.includes(term) || cardCode.includes(term) || cardName.includes(term) || poCliente.includes(term);
   });
 
   const handleCreateNew = () => {
@@ -7260,7 +7276,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
               ) : filteredOrders.length === 0 ? (
                 <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
               ) : filteredOrders.map((o) => {
-                const wo = o.U_Projeto || o.Project || o.ProjectCode || (o.DocumentLines && o.DocumentLines[0]?.ProjectCode) || '-';
+                const wo = getDocumentWO(o);
                 const poCliente = o.NumAtCard || o.U_POCliente || '-';
                 return (
                   <TableRow key={o.DocEntry} className="border-evo-bg hover:bg-evo-teal/5 transition-colors group">

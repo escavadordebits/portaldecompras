@@ -52,7 +52,7 @@ export interface SendEmailOptions {
 export async function enviarEmailComAnexoReal(
   graphAccessToken: string, 
   arquivoOuArquivos: File | (File | { name: string; type: string; contentBytes: string })[], 
-  toEmail: string | string[] = "destinatario@outlook.com",
+  toEmail: string | string[] = "BR-ACCOUNTSRECEIVABLES@qualitechirm.com",
   subject: string = "Espelho Pedido de Venda / Draft",
   bodyContent: string = "Olá, segue o arquivo em anexo enviado pelo app React.",
   ccEmail?: string | string[]
