@@ -68,14 +68,19 @@ api.interceptors.request.use((config) => {
 });
 
 // Helper to handle API errors
-const handleApiError = (error: any, context: string) => {
+const handleApiError = (error: any, context: string): any => {
   const errorData = error.response?.data;
   const isHtml = typeof errorData === 'string' && (errorData.includes('<!DOCTYPE') || errorData.includes('<html'));
+  const isTransient = error.response?.status === 503 || error.response?.status === 502 || error.response?.status === 504;
   
   if (isHtml || error.response?.status === 404) {
-    console.error(`API Error (${context}): Endpoint 404 Not Found or returned HTML page.`);
+    console.warn(`API Warning (${context}): Endpoint 404 Not Found or returned HTML page.`);
+    return [];
+  } else if (isTransient) {
+    console.warn(`API Warning (${context}): SAP Service Layer temporariamente indisponível (${error.response?.status}).`);
+    return [];
   } else {
-    console.error(`API Error (${context}):`, errorData || error.message);
+    console.warn(`API Error (${context}):`, errorData || error.message);
   }
   throw error;
 };

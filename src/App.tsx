@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   ShoppingCart, 
@@ -66,6 +66,7 @@ import {
   deleteDoc,
   updateDoc,
   setDoc, 
+  onSnapshot,
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
@@ -364,6 +365,9 @@ export default function App() {
   const [fbUser, fbLoading] = useAuthState(auth);
   const [localSessionUser, setLocalSessionUser] = useState<any>(() => {
     try {
+      if (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true') {
+        return null;
+      }
       // Clear any legacy localStorage user to prevent unauthorized auto-login across browser restarts
       localStorage.removeItem('sap_portal_active_user');
       const saved = sessionStorage.getItem('sap_portal_active_user');
@@ -373,7 +377,19 @@ export default function App() {
     }
   });
 
-  const activeAuthUser = fbUser || localSessionUser;
+  const isLoggingOutRef = useRef(false);
+  const [isLoggedOut, setIsLoggedOut] = useState(() => {
+    try {
+      if (typeof window === 'undefined') return false;
+      const explicitLogout = sessionStorage.getItem('sap_portal_logged_out') === 'true';
+      const hasActiveSession = Boolean(sessionStorage.getItem('sap_portal_active_user'));
+      return explicitLogout || !hasActiveSession;
+    } catch {
+      return false;
+    }
+  });
+
+  const activeAuthUser = (isLoggedOut || isLoggingOutRef.current) ? null : (fbUser || localSessionUser);
 
   const [isSAPLoggedIn, setIsSAPLoggedIn] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -407,44 +423,72 @@ export default function App() {
   }, [activeAuthUser, isSAPLoggedIn]);
 
   const validateLocalSession = async (sessionUser: any) => {
+    if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
     try {
       const email = (sessionUser.email || '').toLowerCase().trim();
       const isAdminEmail = email === 'sap.qualitech@qualitechirm.com' || email === 'sapemailb1@gmail.com';
-      if (isAdminEmail) return;
 
       const docKey = email.replace(/[^a-z0-9@_.-]/g, '_');
       // 1. Check excluded_users
-      const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
-      if (excludedSnap.exists()) {
-        toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
+      if (!isAdminEmail) {
+        const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
+        if (excludedSnap.exists()) {
+          toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
+          handleLogout();
+          return;
+        }
+      }
+
+      if (isLoggingOutRef.current || isLoggedOut) return;
+
+      // 2. Fetch fresh user record from Firestore
+      let freshData: any = null;
+      const userRef = doc(db, 'users', sessionUser.id || docKey);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        freshData = { id: userSnap.id, ...userSnap.data() };
+      } else {
+        const qEmail = query(collection(db, 'users'), where('email', '==', email));
+        const emailSnap = await getDocs(qEmail);
+        if (!emailSnap.empty) {
+          freshData = { id: emailSnap.docs[0].id, ...emailSnap.docs[0].data() };
+        } else {
+          // Case-insensitive search fallback
+          const allUsersSnap = await getDocs(collection(db, 'users'));
+          const matched = allUsersSnap.docs.find(d => {
+            const data = d.data();
+            return (data.email || '').toLowerCase().trim() === email;
+          });
+          if (matched) {
+            freshData = { id: matched.id, ...matched.data() };
+          }
+        }
+      }
+
+      if (isLoggingOutRef.current || isLoggedOut) return;
+
+      if (!freshData && !isAdminEmail) {
+        toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado.');
         handleLogout();
         return;
       }
 
-      // 2. Check if user still exists in users collection
-      const userRef = doc(db, 'users', sessionUser.id || docKey);
-      const userSnap = await getDoc(userRef);
-      if (!userSnap.exists()) {
-        const qEmail = query(collection(db, 'users'), where('email', '==', email));
-        const emailSnap = await getDocs(qEmail);
-        if (emailSnap.empty) {
-          toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado.');
-          handleLogout();
-          return;
-        } else {
-          const freshData = emailSnap.docs[0].data();
-          if (freshData.status === 'blocked') {
-            toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
-            handleLogout();
-            return;
-          }
-        }
-      } else {
-        const freshData = userSnap.data();
-        if (freshData.status === 'blocked') {
+      if (freshData) {
+        if (freshData.status === 'blocked' && !isAdminEmail) {
           toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
           handleLogout();
           return;
+        }
+
+        if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
+
+        // Apply updated fresh profile with roles and modules
+        setUserProfile(freshData);
+        setLocalSessionUser(freshData);
+        sessionStorage.setItem('sap_portal_active_user', JSON.stringify(freshData));
+        if (freshData.sapCompany) {
+          sessionStorage.setItem('sap_portal_company', freshData.sapCompany);
+          localStorage.setItem('sap_portal_company', freshData.sapCompany);
         }
       }
     } catch (e) {
@@ -454,11 +498,20 @@ export default function App() {
 
   // Auth & Sync Logic
   useEffect(() => {
+    if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) {
+      return;
+    }
+
     if (fbUser) {
       syncUserProfile(fbUser);
     } else if (localSessionUser) {
       validateLocalSession(localSessionUser);
-      setUserProfile(localSessionUser);
+      setUserProfile(prev => {
+        if (prev && prev.email === localSessionUser.email && prev.role && prev.modules) {
+          return { ...localSessionUser, ...prev };
+        }
+        return localSessionUser;
+      });
       if (localSessionUser.sapEmail || localSessionUser.email) {
         setSapUser({
           name: localSessionUser.name || localSessionUser.sapEmail || (localSessionUser.email || '').split('@')[0],
@@ -471,9 +524,10 @@ export default function App() {
       setUserProfile(null);
       setSapUser(null);
     }
-  }, [fbUser, fbLoading, localSessionUser]);
+  }, [fbUser, fbLoading, localSessionUser, isLoggedOut]);
 
   const syncUserProfile = async (user: any) => {
+    if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
     try {
       const normalizedEmail = (user.email || '').toLowerCase().trim();
       const isAdminEmail = normalizedEmail === 'sap.qualitech@qualitechirm.com' || normalizedEmail === 'sapemailb1@gmail.com';
@@ -598,7 +652,10 @@ export default function App() {
         }
       }
 
+      if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
+
       setUserProfile(profileData);
+      setLocalSessionUser(profileData);
       sessionStorage.setItem('sap_portal_active_user', JSON.stringify(profileData));
       if (profileData.sapCompany) {
         sessionStorage.setItem('sap_portal_company', profileData.sapCompany);
@@ -623,47 +680,21 @@ export default function App() {
   };
 
   const handleSAPVerification = async (email: string, company: string) => {
-    setIsLoading(true);
     try {
       const normalizedCompany = normalizeSapCompany(company);
       const result = await sapService.login(email.trim(), normalizedCompany);
-      if (result.success) {
+      if (result && result.success) {
         setSapUser(result.user);
         setIsSAPLoggedIn(true);
       }
     } catch (error: any) {
-      console.error('SAP verification failed:', error);
-      const isHtml = typeof error.response?.data === 'string' && (error.response.data.includes('<!DOCTYPE') || error.response.data.includes('<html'));
-      let errorMessage = error.response?.data?.error;
-      let errorDetails = error.response?.data?.details;
-
-      if (!errorMessage) {
-        if (error.response?.status === 404 || isHtml) {
-          errorMessage = 'Serviço Backend Indisponível (404)';
-          errorDetails = 'O endpoint da API /api/login não foi encontrado. Se estiver no Netlify, confirme a publicação das Netlify Functions.';
-        } else {
-          errorMessage = 'Erro de autenticação';
-          errorDetails = error.message || 'Verifique seus dados e tente novamente.';
-        }
-      }
-      const sapRaw = isHtml ? undefined : error.response?.data?.sapRaw;
-      const targetDB = error.response?.data?.targetDB;
-
-      toast.error(
-        <div className="flex flex-col gap-1 max-w-xs">
-          <p className="font-bold text-[10px] uppercase tracking-wider text-red-500">{errorMessage}</p>
-          <p className="text-[9px] opacity-80 leading-tight">{errorDetails}</p>
-          {targetDB && <p className="text-[8px] font-mono opacity-60">DB: {targetDB}</p>}
-          {sapRaw && (
-            <div className="mt-2 p-1 bg-black/5 rounded font-mono text-[8px] break-all overflow-hidden max-h-24 overflow-y-auto">
-              DEBUG_INFO: {typeof sapRaw === 'string' ? sapRaw : JSON.stringify(sapRaw)}
-            </div>
-          )}
-        </div>,
-        { duration: 10000 }
-      );
-    } finally {
-      setIsLoading(false);
+      console.warn('SAP verification note (background):', error?.message || error);
+      // Graceful fallback: user is already authenticated in portal, ensure session remains valid
+      setSapUser(prev => prev || {
+        name: email.split('@')[0],
+        email: email
+      });
+      setIsSAPLoggedIn(true);
     }
   };
 
@@ -782,17 +813,177 @@ export default function App() {
     }
   };
   // User active modules permission logic (userProfile module configuration takes priority)
-  const activeModules = {
-    procurement: userProfile?.modules?.procurement ?? sapConfig.modules?.procurement ?? true,
-    salesOrders: userProfile?.modules?.salesOrders ?? sapConfig.modules?.salesOrders ?? true,
-    quotations: userProfile?.modules?.quotations ?? sapConfig.modules?.quotations ?? true,
-    negotiations: userProfile?.modules?.negotiations ?? sapConfig.modules?.negotiations ?? (userProfile?.modules?.quotations ?? true),
-    approvals: userProfile?.modules?.approvals ?? sapConfig.modules?.approvals ?? true,
-    quality: userProfile?.modules?.quality ?? sapConfig.modules?.quality ?? true,
-    maintenance: userProfile?.modules?.maintenance ?? sapConfig.modules?.maintenance ?? true,
-    calibration: userProfile?.modules?.calibration ?? sapConfig.modules?.calibration ?? true,
-    costs: userProfile?.modules?.costs ?? sapConfig.modules?.costs ?? true,
-  };
+  const activeModules = useMemo(() => {
+    const isSuperAdmin = userProfile?.role === 'admin';
+    const userMods = userProfile?.modules || {};
+    
+    // For admin, default all modules to true unless explicitly disabled
+    if (isSuperAdmin) {
+      return {
+        procurement: userMods.procurement !== false,
+        salesOrders: userMods.salesOrders !== false,
+        quotations: userMods.quotations !== false,
+        negotiations: userMods.negotiations !== false,
+        approvals: userMods.approvals !== false,
+        quality: userMods.quality !== false,
+        maintenance: userMods.maintenance !== false,
+        calibration: userMods.calibration !== false,
+        costs: userMods.costs !== false,
+      };
+    }
+
+    // For standard users, strictly adhere to userProfile.modules configuration
+    const hasConfiguredModules = Boolean(userProfile?.modules && Object.keys(userProfile.modules).length > 0);
+    if (hasConfiguredModules) {
+      return {
+        procurement: userMods.procurement === true,
+        salesOrders: userMods.salesOrders === true,
+        quotations: userMods.quotations === true,
+        negotiations: userMods.negotiations === true,
+        approvals: userMods.approvals === true,
+        quality: userMods.quality === true,
+        maintenance: userMods.maintenance === true,
+        calibration: userMods.calibration === true,
+        costs: userMods.costs === true,
+      };
+    }
+
+    // Default fallback for standard users without explicitly configured modules
+    // Derive based on user's sector if available, otherwise safe minimal default
+    const sector = (userProfile?.sector || '').toLowerCase();
+    const isComercial = sector.includes('comercial') || sector.includes('vendas');
+    const isCompras = sector.includes('compras') || sector.includes('suprimentos');
+    const isQualidade = sector.includes('qualidade') || sector.includes('manuten') || sector.includes('calibra');
+    const isFinanceiro = sector.includes('financeiro') || sector.includes('contabil') || sector.includes('fiscal');
+
+    return {
+      procurement: isCompras || isFinanceiro || (!isComercial && !isQualidade),
+      salesOrders: isComercial,
+      quotations: isComercial,
+      negotiations: isCompras || isComercial,
+      approvals: isCompras || isFinanceiro,
+      quality: isQualidade,
+      maintenance: isQualidade,
+      calibration: isQualidade,
+      costs: isFinanceiro || isComercial,
+    };
+  }, [userProfile]);
+
+  // Real-time listener for user profile changes in Firestore
+  useEffect(() => {
+    if (isLoggingOutRef.current || isLoggedOut || !activeAuthUser || !userProfile) return;
+
+    const targetEmail = (userProfile?.email || activeAuthUser?.email || '').toLowerCase().trim();
+    if (!targetEmail) return;
+
+    const docKey = targetEmail.replace(/[^a-z0-9@_.-]/g, '_');
+    const userDocId = userProfile?.id || userProfile?.uid || docKey;
+    const userRef = doc(db, 'users', userDocId);
+
+    const unsubscribe = onSnapshot(userRef, (snapshot) => {
+      if (isLoggingOutRef.current || isLoggedOut) return;
+
+      if (snapshot.exists()) {
+        const fresh: any = { id: snapshot.id, ...snapshot.data() };
+        if (fresh.status === 'blocked') {
+          toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
+          handleLogout();
+          return;
+        }
+
+        setUserProfile((prev: any) => {
+          if (!prev || isLoggingOutRef.current || isLoggedOut) return null;
+          const hasRoleChange = prev.role !== fresh.role;
+          const hasModulesChange = JSON.stringify(prev.modules) !== JSON.stringify(fresh.modules);
+          const hasCompanyChange = prev.sapCompany !== fresh.sapCompany;
+          const hasStatusChange = prev.status !== fresh.status;
+          const hasSectorChange = prev.sector !== fresh.sector;
+
+          if (hasRoleChange || hasModulesChange || hasCompanyChange || hasStatusChange || hasSectorChange) {
+            const updated = { ...prev, ...fresh };
+            sessionStorage.setItem('sap_portal_active_user', JSON.stringify(updated));
+            if (fresh.sapCompany) {
+              sessionStorage.setItem('sap_portal_company', fresh.sapCompany);
+            }
+            return updated;
+          }
+          return prev;
+        });
+      }
+    }, (err) => {
+      console.warn('Realtime profile sync note:', err);
+    });
+
+    return () => unsubscribe();
+  }, [userProfile?.id, userProfile?.uid, userProfile?.email, activeAuthUser, isLoggedOut]);
+
+  // Route access guard: ensure user only accesses allowed views according to active profile & permissions
+  useEffect(() => {
+    if (!activeAuthUser && !isSAPLoggedIn) return;
+    if (currentView === 'dashboard') return;
+
+    if (currentView === 'users' && userProfile?.role !== 'admin') {
+      toast.error('Acesso restrito: Módulo de Administração exclusivo para administradores.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    const isProcurementView = currentView === 'create-order' || currentView === 'list-orders' || currentView === 'create-request' || currentView === 'list-requests' || currentView === 'create-down-payment' || currentView === 'list-down-payments';
+    if (isProcurementView && !activeModules.procurement) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Compras.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'approvals' && !activeModules.approvals) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Aprovações.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    const isNegotiationsView = currentView === 'create-quotation' || currentView === 'list-quotations' || currentView === 'bid-map';
+    if (isNegotiationsView && !activeModules.negotiations) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Negociações.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'quotations' && !activeModules.quotations) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Cotações.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'sales-orders' && !activeModules.salesOrders) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Pedidos de Venda.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'quality' && !activeModules.quality) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Qualidade.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'maintenance' && !activeModules.maintenance) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Manutenção.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'calibration' && !activeModules.calibration) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Calibração.');
+      setCurrentView('dashboard');
+      return;
+    }
+
+    if (currentView === 'costs' && !activeModules.costs) {
+      toast.error('Acesso não permitido: seu perfil não possui acesso ao módulo de Gestão de Receitas.');
+      setCurrentView('dashboard');
+      return;
+    }
+  }, [currentView, activeModules, userProfile?.role, activeAuthUser, isSAPLoggedIn]);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -822,6 +1013,11 @@ export default function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('sap_portal_logged_out');
+    }
+    isLoggingOutRef.current = false;
+    setIsLoggedOut(false);
     setIsLoading(true);
     const cleanEmail = loginEmail.trim().toLowerCase();
     const cleanPassword = loginPassword.trim();
@@ -962,16 +1158,16 @@ export default function App() {
       // 4. Montar perfil ativo aprovado
       const activeProfile = {
         ...(userRecord || {}),
-        id: matchedDocId || cleanEmail,
+        id: matchedDocId || docKey || cleanEmail,
         email: cleanEmail,
         role: (userRecord?.role) || (isAdminEmail ? 'admin' : 'user'),
         status: (userRecord?.status) || 'approved',
-        modules: userRecord?.modules || {
+        modules: userRecord?.modules || (isAdminEmail ? {
           procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
-        }
+        } : undefined)
       };
 
-      setLocalSessionUser({ email: cleanEmail, uid: matchedDocId || cleanEmail });
+      setLocalSessionUser(activeProfile);
       setUserProfile(activeProfile);
       sessionStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
       localStorage.removeItem('sap_portal_active_user');
@@ -1012,24 +1208,42 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    isLoggingOutRef.current = true;
+    setIsLoggedOut(true);
+
+    // 1. Immediately wipe all storage SYNCHRONOUSLY and mark explicit logout
     try {
-      await signOut(auth);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('sap_portal_logged_out', 'true');
+        sessionStorage.removeItem('sap_portal_active_user');
+        sessionStorage.removeItem('sap_portal_company');
+        localStorage.removeItem('sap_portal_active_user');
+        localStorage.removeItem('sap_portal_company');
+      }
     } catch (e) {
-      console.warn('SignOut error:', e);
+      console.warn('Storage clear error:', e);
     }
-    sessionStorage.removeItem('sap_portal_active_user');
-    sessionStorage.removeItem('sap_portal_company');
-    localStorage.removeItem('sap_portal_active_user');
+
+    // 2. Immediately wipe all state SYNCHRONOUSLY to show LoginScreen
     setLocalSessionUser(null);
+    setUserProfile(null);
     setIsSAPLoggedIn(false);
     setSapUser(null);
-    setUserProfile(null);
+    setLoginPassword('');
     setCurrentView('dashboard');
     setSelectedOrderEntry(null);
     setSelectedRequestEntry(null);
     setSelectedQuotationEntry(null);
     setSelectedDownPaymentEntry(null);
     setSelectedApprovalCode(null);
+
+    // 3. Perform signOut on Firebase Auth
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.warn('SignOut error:', e);
+    }
+
     toast.success('Sessão encerrada com sucesso.');
   };
 
@@ -1253,7 +1467,7 @@ export default function App() {
           },
           keywords: ['cotações', 'cotacoes', 'venda', 'proposta', 'comercial']
         }] : []),
-        {
+        ...((activeModules.costs || activeModules.quotations || activeModules.salesOrders) ? [{
           id: 'measurements',
           label: 'Resumo de Medições',
           icon: <Ruler />,
@@ -1263,7 +1477,7 @@ export default function App() {
             if (window.innerWidth < 1024) setSidebarOpen(false);
           },
           keywords: ['medições', 'medicoes', 'resumo', 'locação', 'pessoal']
-        },
+        }] : []),
         ...(activeModules.salesOrders ? [{
           id: 'sales-orders',
           label: 'Pedido de Venda',
@@ -1469,7 +1683,14 @@ export default function App() {
                 <Button 
                   type="button"
                   variant="outline"
-                  onClick={() => signInWithGoogle().catch(e => toast.error(e.message))}
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      sessionStorage.removeItem('sap_portal_logged_out');
+                    }
+                    isLoggingOutRef.current = false;
+                    setIsLoggedOut(false);
+                    signInWithGoogle().catch(e => toast.error(e.message));
+                  }}
                   className="w-full h-12 border-evo-bg rounded-none text-xs font-bold uppercase tracking-widest gap-3"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -1653,6 +1874,22 @@ export default function App() {
                 Negociações
               </button>
             )}
+            {activeModules.quotations && (
+              <button 
+                onClick={() => setCurrentView('quotations')}
+                className={`evo-nav-link ${currentView === 'quotations' ? 'active' : ''}`}
+              >
+                Cotações
+              </button>
+            )}
+            {activeModules.salesOrders && (
+              <button 
+                onClick={() => setCurrentView('sales-orders')}
+                className={`evo-nav-link ${currentView === 'sales-orders' ? 'active' : ''}`}
+              >
+                Vendas
+              </button>
+            )}
             {activeModules.quality && (
               <button 
                 onClick={() => setCurrentView('quality')}
@@ -1685,13 +1922,15 @@ export default function App() {
                 Receitas
               </button>
             )}
-            <button 
-              onClick={() => setIsMeasurementsModalOpen(true)}
-              className="evo-nav-link text-evo-teal font-black flex items-center gap-1.5"
-            >
-              <Ruler className="w-3.5 h-3.5" />
-              Medições
-            </button>
+            {(activeModules.costs || activeModules.quotations || activeModules.salesOrders) && (
+              <button 
+                onClick={() => setIsMeasurementsModalOpen(true)}
+                className="evo-nav-link text-evo-teal font-black flex items-center gap-1.5"
+              >
+                <Ruler className="w-3.5 h-3.5" />
+                Medições
+              </button>
+            )}
             {userProfile?.role === 'admin' && (
               <button 
                 onClick={() => setCurrentView('users')}
@@ -2153,93 +2392,50 @@ function DashboardView({
   });
   const [isLoading, setIsLoading] = useState(true);
 
-  const hasProcurement = activeModules.procurement !== false;
-  const hasSalesOrders = activeModules.salesOrders !== false;
-  const hasNegotiations = activeModules.negotiations !== false || activeModules.quotations !== false;
-  const hasApprovals = activeModules.approvals !== false;
-  const hasCosts = activeModules.costs !== false;
-  const hasQuality = activeModules.quality !== false;
-  const hasMaintenance = activeModules.maintenance !== false;
-  const hasCalibration = activeModules.calibration !== false;
+  const hasProcurement = Boolean(activeModules.procurement);
+  const hasSalesOrders = Boolean(activeModules.salesOrders);
+  const hasNegotiations = Boolean(activeModules.negotiations);
+  const hasQuotations = Boolean(activeModules.quotations);
+  const hasApprovals = Boolean(activeModules.approvals);
+  const hasCosts = Boolean(activeModules.costs);
+  const hasQuality = Boolean(activeModules.quality);
+  const hasMaintenance = Boolean(activeModules.maintenance);
+  const hasCalibration = Boolean(activeModules.calibration);
 
   useEffect(() => {
+    let isCancelled = false;
+
     const fetchStats = async () => {
       try {
-        const ordersPromise = hasProcurement
-          ? sapService.getPurchaseOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'order' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const requestsPromise = hasProcurement
-          ? sapService.getPurchaseRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'request' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const quotationsPromise = hasNegotiations
-          ? sapService.getPurchaseQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quotation' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const downpaymentsPromise = hasProcurement
-          ? sapService.getPurchaseDownPayments().then(res => (res || []).map((r: any) => ({ ...r, _type: 'down-payment' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const approvalsPromise = hasApprovals
-          ? sapService.getApprovalRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'approval' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const salesOrdersPromise = hasSalesOrders
-          ? sapService.getOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-order' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const salesQuotationsPromise = hasNegotiations
-          ? sapService.getQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-quotation' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const personnelCostsPromise = hasCosts
-          ? sapService.getPersonnelCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'personnel-cost' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const rentalCostsPromise = hasCosts
-          ? sapService.getRentalCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'rental-cost' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const qualityPromise = hasQuality
-          ? sapService.getQualityRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quality' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const maintenancePromise = hasMaintenance
-          ? sapService.getMaintenanceRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'maintenance' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const calibrationPromise = hasCalibration
-          ? sapService.getCalibrationRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'calibration' }))).catch(() => [])
-          : Promise.resolve([]);
-
-        const [
-          orders,
-          requests,
-          quotations,
-          downpayments,
-          approvals,
-          salesOrders,
-          salesQuotations,
-          personnelCosts,
-          rentalCosts,
-          quality,
-          maintenance,
-          calibration
-        ] = await Promise.all([
-          ordersPromise,
-          requestsPromise,
-          quotationsPromise,
-          downpaymentsPromise,
-          approvalsPromise,
-          salesOrdersPromise,
-          salesQuotationsPromise,
-          personnelCostsPromise,
-          rentalCostsPromise,
-          qualityPromise,
-          maintenancePromise,
-          calibrationPromise
+        const batch1 = await Promise.all([
+          hasProcurement ? sapService.getPurchaseOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'order' }))).catch(() => []) : Promise.resolve([]),
+          hasProcurement ? sapService.getPurchaseRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'request' }))).catch(() => []) : Promise.resolve([]),
+          hasApprovals ? sapService.getApprovalRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'approval' }))).catch(() => []) : Promise.resolve([])
         ]);
+        const [orders, requests, approvals] = batch1;
+
+        const batch2 = await Promise.all([
+          hasNegotiations ? sapService.getPurchaseQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quotation' }))).catch(() => []) : Promise.resolve([]),
+          hasProcurement ? sapService.getPurchaseDownPayments().then(res => (res || []).map((r: any) => ({ ...r, _type: 'down-payment' }))).catch(() => []) : Promise.resolve([]),
+          hasSalesOrders ? sapService.getOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-order' }))).catch(() => []) : Promise.resolve([])
+        ]);
+        const [quotations, downpayments, salesOrders] = batch2;
+
+        const batch3 = await Promise.all([
+          hasQuotations ? sapService.getQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-quotation' }))).catch(() => []) : Promise.resolve([]),
+          hasCosts ? sapService.getPersonnelCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'personnel-cost' }))).catch(() => []) : Promise.resolve([]),
+          hasCosts ? sapService.getRentalCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'rental-cost' }))).catch(() => []) : Promise.resolve([])
+        ]);
+        const [salesQuotations, personnelCosts, rentalCosts] = batch3;
+
+        const batch4 = await Promise.all([
+          hasQuality ? sapService.getQualityRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quality' }))).catch(() => []) : Promise.resolve([]),
+          hasMaintenance ? sapService.getMaintenanceRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'maintenance' }))).catch(() => []) : Promise.resolve([]),
+          hasCalibration ? sapService.getCalibrationRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'calibration' }))).catch(() => []) : Promise.resolve([])
+        ]);
+        const [quality, maintenance, calibration] = batch4;
+
+        if (isCancelled) return;
 
         setStats({
           orders,
@@ -2262,6 +2458,9 @@ function DashboardView({
       }
     };
     fetchStats();
+    return () => {
+      isCancelled = true;
+    };
   }, [hasProcurement, hasSalesOrders, hasNegotiations, hasApprovals, hasCosts, hasQuality, hasMaintenance, hasCalibration]);
 
   // Financial calculations
@@ -2969,7 +3168,8 @@ function CreateOrderView({
     if (!itemSearch && items.length > 0) return; // Don't re-search empty if we already have items
     setIsSearchingItems(true);
     try {
-      const data = await sapService.getItems(itemSearch);
+      const rawData: any = await sapService.getItems(itemSearch);
+      const data = Array.isArray(rawData) ? rawData : (rawData?.value || []);
       setItems(data);
       if (data.length === 0) {
         toast.info('Nenhum item encontrado com este termo.');

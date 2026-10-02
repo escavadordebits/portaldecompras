@@ -1088,7 +1088,13 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                 <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Nível de Permissão</Label>
                 <Select 
                   value={newUser.role} 
-                  onValueChange={(val) => setNewUser({ ...newUser, role: val })}
+                  onValueChange={(val) => {
+                    if (val === 'admin') {
+                      setNewUser({ ...newUser, role: val, modules: { ...DEFAULT_MODULES } });
+                    } else {
+                      setNewUser({ ...newUser, role: val });
+                    }
+                  }}
                 >
                   <SelectTrigger className="rounded-none border-evo-bg bg-evo-bg/20 text-xs font-bold h-10">
                     <SelectValue />
@@ -1287,7 +1293,13 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                 <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Nível de Permissão</Label>
                 <Select 
                   value={selectedUser?.role} 
-                  onValueChange={(val) => setSelectedUser({ ...selectedUser, role: val })}
+                  onValueChange={(val) => {
+                    if (val === 'admin') {
+                      setSelectedUser({ ...selectedUser, role: val, modules: { ...DEFAULT_MODULES } });
+                    } else {
+                      setSelectedUser({ ...selectedUser, role: val });
+                    }
+                  }}
                 >
                   <SelectTrigger className="rounded-none border-evo-bg bg-evo-bg/20 text-xs font-bold h-10">
                     <SelectValue />
