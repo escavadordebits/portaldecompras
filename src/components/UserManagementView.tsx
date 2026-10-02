@@ -99,7 +99,12 @@ const MODULE_DEFINITIONS = [
   { id: 'costs', label: 'Gestão de Receitas' }
 ];
 
-export default function UserManagementView() {
+export interface UserManagementViewProps {
+  currentUserEmail?: string;
+  key?: React.Key;
+}
+
+export default function UserManagementView({ currentUserEmail }: UserManagementViewProps = {}) {
   const [users, setUsers] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -135,6 +140,11 @@ export default function UserManagementView() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visiblePasswords, setVisiblePasswords] = useState<{ [id: string]: boolean }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete User Confirmation Modal States
+  const [userToDelete, setUserToDelete] = useState<any | null>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetchUsers();
@@ -271,6 +281,12 @@ export default function UserManagementView() {
       };
 
       await setDoc(userRef, payload, { merge: true });
+
+      // If user was previously in excluded_users, unblock them as they are explicitly re-created
+      try {
+        await deleteDoc(doc(db, 'excluded_users', docId));
+      } catch {}
+
       toast.success(existingUser ? 'Usuário existente atualizado com sucesso!' : 'Novo usuário cadastrado com sucesso!');
       setIsCreateDialogOpen(false);
       setNewUser({
@@ -292,15 +308,64 @@ export default function UserManagementView() {
     }
   };
 
-  // Delete user from Firestore
-  const handleDeleteUser = async (userId: string) => {
-    if (!confirm('Tem certeza que deseja excluir este acesso permanentemente?')) return;
+  // Open delete confirmation modal (safe for sandboxed iframes)
+  const confirmDeleteUser = (user: any) => {
+    setUserToDelete(user);
+    setIsDeleteDialogOpen(true);
+  };
+
+  // Execute delete user from Firestore and add to excluded_users to prevent SAP/Firebase login bypass
+  const executeDeleteUser = async () => {
+    if (!userToDelete) return;
+    setIsDeleting(true);
     try {
+      const userId = userToDelete.id;
+      const emailToDelete = (userToDelete?.email || '').toLowerCase().trim();
+
+      // 1. Delete user document from users collection
       await deleteDoc(doc(db, 'users', userId));
-      toast.success('Acesso removido com sucesso.');
-      fetchUsers();
+
+      // 2. Also check if there's a document keyed by email slug and delete it
+      if (emailToDelete) {
+        const slugId = emailToDelete.replace(/[^a-z0-9@_.-]/g, '_');
+        if (slugId !== userId) {
+          try { await deleteDoc(doc(db, 'users', slugId)); } catch {}
+        }
+
+        // 3. Record in excluded_users to permanently prevent login via SAP or Firebase Auth
+        const excludedRef = doc(db, 'excluded_users', slugId);
+        await setDoc(excludedRef, {
+          email: emailToDelete,
+          name: userToDelete?.name || '',
+          sapEmail: userToDelete?.sapEmail || '',
+          excludedAt: serverTimestamp(),
+          excludedBy: currentUserEmail || 'admin'
+        });
+
+        // 4. Also blacklist alternate sapEmail if provided
+        if (userToDelete?.sapEmail) {
+          const sapEmailClean = userToDelete.sapEmail.toLowerCase().trim();
+          const sapEmailSlug = sapEmailClean.replace(/[^a-z0-9@_.-]/g, '_');
+          if (sapEmailSlug && sapEmailSlug !== slugId) {
+            await setDoc(doc(db, 'excluded_users', sapEmailSlug), {
+              email: sapEmailClean,
+              originalEmail: emailToDelete,
+              excludedAt: serverTimestamp(),
+              excludedBy: currentUserEmail || 'admin'
+            });
+          }
+        }
+      }
+
+      toast.success(`Acesso de ${emailToDelete || 'usuário'} excluído e revogado na plataforma com sucesso.`);
+      setIsDeleteDialogOpen(false);
+      setUserToDelete(null);
+      await fetchUsers();
     } catch (error) {
+      console.error('Erro ao excluir usuário:', error);
       toast.error('Erro ao excluir usuário.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -632,6 +697,11 @@ export default function UserManagementView() {
             await setDoc(userRef, payload, { merge: true });
             createdCount++;
           }
+
+          // Unblock from excluded_users if was previously removed
+          try {
+            await deleteDoc(doc(db, 'excluded_users', normalizedEmail.replace(/[^a-z0-9@_.-]/g, '_')));
+          } catch {}
         } catch (err) {
           console.error(`Erro ao salvar usuário ${item.email}:`, err);
           failCount++;
@@ -926,8 +996,8 @@ export default function UserManagementView() {
                               variant="ghost" 
                               size="icon" 
                               className="h-8 w-8 text-evo-dark/40 hover:text-red-600 hover:bg-red-50 rounded-none transition-all"
-                              title="Excluir usuário"
-                              onClick={() => handleDeleteUser(user.id)}
+                              title="Excluir usuário da plataforma"
+                              onClick={() => confirmDeleteUser(user)}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </Button>
@@ -1496,6 +1566,63 @@ export default function UserManagementView() {
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4" /> Executar Carga ({importedUsersPreview.length} Usuários)
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL 4: CONFIRM DELETE USER */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="rounded-none border-none shadow-2xl p-0 overflow-hidden sm:max-w-md">
+          <div className="bg-red-700 px-6 py-4 flex items-center gap-3 text-white">
+            <AlertCircle className="w-5 h-5 text-white shrink-0" />
+            <div>
+              <DialogTitle className="text-white uppercase font-black tracking-tight text-sm">
+                Excluir Usuário da Plataforma
+              </DialogTitle>
+              <p className="text-white/70 uppercase text-[9px] font-bold tracking-widest mt-0.5">
+                Revogação permanente de acesso
+              </p>
+            </div>
+          </div>
+          <div className="p-6 space-y-4">
+            <p className="text-xs text-slate-700 font-medium leading-relaxed">
+              Tem certeza que deseja excluir o acesso de <span className="font-bold text-evo-dark">{userToDelete?.email}</span>?
+            </p>
+            <div className="bg-amber-50 border-l-4 border-amber-500 p-3 text-[11px] text-amber-900 leading-normal">
+              <span className="font-bold">Atenção:</span> O usuário será removido da base da plataforma e adicionado à lista de exclusões. Ele não conseguirá mais efetuar login, mesmo que ainda esteja cadastrado dentro do SAP Business One.
+            </div>
+          </div>
+          <DialogFooter className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2">
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={() => {
+                setIsDeleteDialogOpen(false);
+                setUserToDelete(null);
+              }}
+              disabled={isDeleting}
+              className="rounded-none text-xs font-bold uppercase tracking-wider"
+            >
+              Cancelar
+            </Button>
+            <Button 
+              type="button" 
+              onClick={executeDeleteUser}
+              disabled={isDeleting}
+              className="rounded-none bg-red-600 hover:bg-red-700 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Excluindo...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Excluir Acesso
                 </>
               )}
             </Button>

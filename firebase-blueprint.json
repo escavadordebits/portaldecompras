@@ -18,12 +18,29 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role"]
+    },
+    "ExcludedUser": {
+      "title": "ExcludedUser",
+      "description": "Blacklist of users deleted or excluded from the platform",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "sapEmail": { "type": "string" },
+        "excludedAt": { "type": "string", "format": "date-time" },
+        "excludedBy": { "type": "string" }
+      },
+      "required": ["email"]
     }
   },
   "firestore": {
     "users": {
       "schema": "User",
       "description": "Collection of platform users"
+    },
+    "excluded_users": {
+      "schema": "ExcludedUser",
+      "description": "Collection of excluded/revoked user emails"
     }
   }
 }

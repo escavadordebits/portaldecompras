@@ -406,11 +406,58 @@ export default function App() {
     };
   }, [activeAuthUser, isSAPLoggedIn]);
 
+  const validateLocalSession = async (sessionUser: any) => {
+    try {
+      const email = (sessionUser.email || '').toLowerCase().trim();
+      const isAdminEmail = email === 'sap.qualitech@qualitechirm.com' || email === 'sapemailb1@gmail.com';
+      if (isAdminEmail) return;
+
+      const docKey = email.replace(/[^a-z0-9@_.-]/g, '_');
+      // 1. Check excluded_users
+      const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
+      if (excludedSnap.exists()) {
+        toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
+        handleLogout();
+        return;
+      }
+
+      // 2. Check if user still exists in users collection
+      const userRef = doc(db, 'users', sessionUser.id || docKey);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        const qEmail = query(collection(db, 'users'), where('email', '==', email));
+        const emailSnap = await getDocs(qEmail);
+        if (emailSnap.empty) {
+          toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado.');
+          handleLogout();
+          return;
+        } else {
+          const freshData = emailSnap.docs[0].data();
+          if (freshData.status === 'blocked') {
+            toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
+            handleLogout();
+            return;
+          }
+        }
+      } else {
+        const freshData = userSnap.data();
+        if (freshData.status === 'blocked') {
+          toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
+          handleLogout();
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Erro ao validar sessão local:', e);
+    }
+  };
+
   // Auth & Sync Logic
   useEffect(() => {
     if (fbUser) {
       syncUserProfile(fbUser);
     } else if (localSessionUser) {
+      validateLocalSession(localSessionUser);
       setUserProfile(localSessionUser);
       if (localSessionUser.sapEmail || localSessionUser.email) {
         setSapUser({
@@ -428,12 +475,33 @@ export default function App() {
 
   const syncUserProfile = async (user: any) => {
     try {
+      const normalizedEmail = (user.email || '').toLowerCase().trim();
+      const isAdminEmail = normalizedEmail === 'sap.qualitech@qualitechirm.com' || normalizedEmail === 'sapemailb1@gmail.com';
+      const docKey = normalizedEmail.replace(/[^a-z0-9@_.-]/g, '_');
+
+      // 0. Bloqueia imediatamente se estiver na lista de usuários excluídos
+      if (!isAdminEmail) {
+        try {
+          const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
+          if (excludedSnap.exists()) {
+            toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
+            await signOut(auth);
+            setUserProfile(null);
+            setSapUser(null);
+            setIsSAPLoggedIn(false);
+            sessionStorage.removeItem('sap_portal_active_user');
+            localStorage.removeItem('sap_portal_active_user');
+            return;
+          }
+        } catch (e) {
+          console.warn('Erro ao verificar lista de excluídos:', e);
+        }
+      }
+
       const userRef = doc(db, 'users', user.uid);
       const userSnap = await getDoc(userRef);
       
       let profileData: any;
-      const normalizedEmail = (user.email || '').toLowerCase().trim();
-      const isAdminEmail = normalizedEmail === 'sap.qualitech@qualitechirm.com' || normalizedEmail === 'sapemailb1@gmail.com';
 
       if (!userSnap.exists()) {
         // Look for existing user profile registered by email (e.g. from Excel load or admin setup)
@@ -464,14 +532,15 @@ export default function App() {
               console.warn('Old placeholder cleanup skipped:', err);
             }
           }
-        } else {
+        } else if (isAdminEmail) {
+          // Apenas admin do sistema pode ser auto-criado como bootstrap
           profileData = {
             uid: user.uid,
             email: user.email,
-            role: isAdminEmail ? 'admin' : 'user',
-            status: isAdminEmail ? 'approved' : 'pending',
+            role: 'admin',
+            status: 'approved',
             createdAt: serverTimestamp(),
-            sapEmail: isAdminEmail ? 'manager' : '',
+            sapEmail: 'manager',
             sapCompany: 'SBO_QUALITECH',
             modules: {
               procurement: true,
@@ -486,6 +555,16 @@ export default function App() {
             }
           };
           await setDoc(userRef, profileData);
+        } else {
+          // Usuário NÃO cadastrado no Firestore: foi excluído ou nunca aprovado
+          toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado.');
+          await signOut(auth);
+          setUserProfile(null);
+          setSapUser(null);
+          setIsSAPLoggedIn(false);
+          sessionStorage.removeItem('sap_portal_active_user');
+          localStorage.removeItem('sap_portal_active_user');
+          return;
         }
       } else {
         profileData = userSnap.data();
@@ -494,6 +573,18 @@ export default function App() {
           profileData.status = 'approved';
           await updateDoc(userRef, { role: 'admin', status: 'approved' });
         }
+      }
+
+      // Bloqueia usuários com status 'blocked'
+      if (profileData.status === 'blocked' && !isAdminEmail) {
+        toast.error('Acesso bloqueado: Seu usuário foi desativado pelo administrador.');
+        await signOut(auth);
+        setUserProfile(null);
+        setSapUser(null);
+        setIsSAPLoggedIn(false);
+        sessionStorage.removeItem('sap_portal_active_user');
+        localStorage.removeItem('sap_portal_active_user');
+        return;
       }
       
       // Auto-heal legacy database name in profile if stored as SBO_QUALITECH or empty
@@ -735,6 +826,8 @@ export default function App() {
     const cleanEmail = loginEmail.trim().toLowerCase();
     const cleanPassword = loginPassword.trim();
     const targetCompany = loginCompany || sapConfig.company || 'SBO_QUALITECH';
+    const docKey = cleanEmail.replace(/[^a-z0-9@_.-]/g, '_');
+    const isAdminEmail = cleanEmail === 'sap.qualitech@qualitechirm.com' || cleanEmail === 'sapemailb1@gmail.com';
 
     if (!cleanEmail || !cleanPassword) {
       toast.error('Informe o e-mail e a senha.');
@@ -774,26 +867,38 @@ export default function App() {
         }
       }
 
-      // 1. Tentar login direto no Firebase Auth
-      try {
-        await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
-        toast.success('Login efetuado na plataforma.');
-        return;
-      } catch (authError: any) {
-        console.log('Firebase Auth direto falhou, verificando base de dados Firestore e SAP Service Layer...', authError.code);
-        
-        // 2. Verificar se o usuário existe na coleção 'users' do Firestore (ex: carga Excel ou pré-cadastro)
-        const usersCol = collection(db, 'users');
-        const qEmail = query(usersCol, where('email', '==', cleanEmail));
-        const emailSnap = await getDocs(qEmail);
+      // 0. Bloqueia imediatamente se o usuário estiver na lista de excluídos da plataforma
+      if (!isAdminEmail) {
+        try {
+          const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
+          if (excludedSnap.exists()) {
+            toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
+            try { await signOut(auth); } catch {}
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.warn('Erro ao verificar lista de excluídos:', e);
+        }
+      }
 
-        let userRecord: any = null;
-        let matchedDocId = '';
-        if (!emailSnap.empty) {
-          matchedDocId = emailSnap.docs[0].id;
-          userRecord = emailSnap.docs[0].data();
+      // 1. OBRIGATÓRIO: Verificar se o usuário existe e está ativo na coleção 'users' da plataforma
+      const usersCol = collection(db, 'users');
+      const qEmail = query(usersCol, where('email', '==', cleanEmail));
+      const emailSnap = await getDocs(qEmail);
+
+      let userRecord: any = null;
+      let matchedDocId = '';
+      if (!emailSnap.empty) {
+        matchedDocId = emailSnap.docs[0].id;
+        userRecord = emailSnap.docs[0].data();
+      } else {
+        const directDoc = await getDoc(doc(db, 'users', docKey));
+        if (directDoc.exists()) {
+          matchedDocId = directDoc.id;
+          userRecord = directDoc.data();
         } else {
-          // Busca secundária case-insensitive em todos os usuários
+          // Busca case-insensitive
           const allUsersSnap = await getDocs(usersCol);
           const matched = allUsersSnap.docs.find(d => {
             const data = d.data();
@@ -804,123 +909,95 @@ export default function App() {
             userRecord = matched.data();
           }
         }
+      }
 
-        if (userRecord) {
-          const expectedPassword = (userRecord.password || '').trim();
+      // Se o usuário NÃO existe na base da plataforma e NÃO for bootstrap admin: ACESSO TOTALMENTE NEGADO!
+      // Mesmo que o usuário esteja cadastrado no SAP, ele não pode acessar a plataforma se foi excluído ou não está registrado
+      if (!userRecord && !isAdminEmail) {
+        try { await signOut(auth); } catch {}
+        toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado pelo administrador.');
+        setIsLoading(false);
+        return;
+      }
 
-          // Se há senha cadastrada no banco, valida com a digitada
-          if (expectedPassword && expectedPassword !== cleanPassword) {
-            toast.error('Senha incorreta para este usuário.');
-            return;
-          }
+      // 2. Verificar status do usuário na plataforma
+      if (userRecord && userRecord.status === 'blocked' && !isAdminEmail) {
+        try { await signOut(auth); } catch {}
+        toast.error('Acesso bloqueado: Seu usuário está desativado pelo administrador.');
+        setIsLoading(false);
+        return;
+      }
 
-          // Senha válida! Sincroniza conta no Firebase Auth em background (se possível)
-          try {
-            await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
-          } catch (createErr: any) {
-            if (createErr.code === 'auth/email-already-in-use') {
-              try {
-                await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
-              } catch {}
-            }
-          }
+      if (userRecord && userRecord.status === 'pending' && !isAdminEmail) {
+        try { await signOut(auth); } catch {}
+        toast.error('Acesso pendente: Seu cadastro ainda aguarda aprovação do administrador.');
+        setIsLoading(false);
+        return;
+      }
 
-          const activeProfile = {
-            ...userRecord,
-            id: matchedDocId || cleanEmail,
-            email: cleanEmail,
-            role: userRecord.role || ((cleanEmail.includes('admin') || cleanEmail.includes('sapemailb1')) ? 'admin' : 'user'),
-            status: userRecord.status || 'approved',
-            modules: userRecord.modules || {
-              procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
-            }
-          };
+      // 3. Validação de senha
+      const expectedPassword = (userRecord?.password || '').trim();
+      if (expectedPassword && expectedPassword !== cleanPassword) {
+        toast.error('Senha incorreta para este usuário.');
+        setIsLoading(false);
+        return;
+      }
 
-          setLocalSessionUser({ email: cleanEmail, uid: matchedDocId || cleanEmail });
-          setUserProfile(activeProfile);
-          sessionStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
-          localStorage.removeItem('sap_portal_active_user');
-          if (activeProfile.sapCompany) {
-            sessionStorage.setItem('sap_portal_company', activeProfile.sapCompany);
-          }
-
-          // Executa verificação do usuário na base SAP usando o usuário de serviço B1i
-          const sapTargetUser = userRecord.sapEmail || cleanEmail;
-          const sapTargetCompany = userRecord.sapCompany || targetCompany;
-
-          try {
-            const sapResult = await sapService.login(sapTargetUser, sapTargetCompany);
-            if (sapResult.success) {
-              setSapUser(sapResult.user);
-              setIsSAPLoggedIn(true);
-              toast.success(`Usuário validado no SAP (${sapResult.user.name || sapTargetUser})!`);
-            } else {
-              setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
-              setIsSAPLoggedIn(true);
-              toast.success('Acesso ao portal liberado com sucesso!');
-            }
-          } catch (sapErr) {
-            console.warn('Verificação SAP automática falhou, liberando acesso:', sapErr);
-            setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
-            setIsSAPLoggedIn(true);
-            toast.success('Acesso ao portal liberado com sucesso!');
-          }
+      // Sincronizar com Firebase Auth se aplicável
+      try {
+        await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+      } catch (authErr: any) {
+        if (!expectedPassword) {
+          toast.error('Senha incorreta ou erro de autenticação.');
+          setIsLoading(false);
           return;
         }
-
-        // 3. Se NÃO foi encontrado no Firestore: consulta diretamente no SAP Service Layer via usuário de serviço B1i
-        try {
-          toast.loading('Consultando usuário na base do SAP Service Layer (B1i)...', { id: 'sap-direct-search' });
-          const directSapRes = await sapService.login(cleanEmail, targetCompany);
-          toast.dismiss('sap-direct-search');
-
-          if (directSapRes.success) {
-            const sapUserFound = directSapRes.user;
-            const newUserData = {
-              email: cleanEmail,
-              password: cleanPassword,
-              name: sapUserFound.name,
-              sapEmail: cleanEmail,
-              sapCompany: targetCompany,
-              role: (cleanEmail.includes('admin') || cleanEmail.includes('sapemailb1')) ? 'admin' : 'user',
-              status: 'approved',
-              modules: {
-                procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
-              },
-              createdAt: serverTimestamp()
-            };
-
-            const targetDocRef = doc(db, 'users', cleanEmail.replace(/[^a-z0-9@_.-]/g, '_'));
-            await setDoc(targetDocRef, newUserData, { merge: true });
-
-            // Tenta criar/sincronizar no Firebase Auth
-            try {
-              await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
-            } catch (err: any) {
-              if (err.code === 'auth/email-already-in-use') {
-                try { await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword); } catch {}
-              }
-            }
-
-            setLocalSessionUser({ email: cleanEmail, uid: cleanEmail });
-            setUserProfile(newUserData);
-            sessionStorage.setItem('sap_portal_active_user', JSON.stringify(newUserData));
-            localStorage.removeItem('sap_portal_active_user');
-            setSapUser(sapUserFound);
-            setIsSAPLoggedIn(true);
-            toast.success(`Usuário ${sapUserFound.name} localizado no SAP B1 e acesso liberado!`);
-            return;
-          }
-        } catch (sapDirectErr: any) {
-          toast.dismiss('sap-direct-search');
-          console.warn('Consulta direta ao SAP não localizou o usuário:', sapDirectErr);
+        if (authErr.code === 'auth/user-not-found') {
+          try {
+            await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+          } catch {}
         }
+      }
 
-        if (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential' || authError.code === 'auth/invalid-login-credentials' || authError.code === 'auth/wrong-password') {
-          toast.error('Usuário não encontrado na base de usuários ou no SAP B1. Verifique o e-mail e senha digitados.');
+      // 4. Montar perfil ativo aprovado
+      const activeProfile = {
+        ...(userRecord || {}),
+        id: matchedDocId || cleanEmail,
+        email: cleanEmail,
+        role: (userRecord?.role) || (isAdminEmail ? 'admin' : 'user'),
+        status: (userRecord?.status) || 'approved',
+        modules: userRecord?.modules || {
+          procurement: true, salesOrders: true, quotations: true, negotiations: true, approvals: true, quality: true, maintenance: true, calibration: true, costs: true
+        }
+      };
+
+      setLocalSessionUser({ email: cleanEmail, uid: matchedDocId || cleanEmail });
+      setUserProfile(activeProfile);
+      sessionStorage.setItem('sap_portal_active_user', JSON.stringify(activeProfile));
+      localStorage.removeItem('sap_portal_active_user');
+      if (activeProfile.sapCompany) {
+        sessionStorage.setItem('sap_portal_company', activeProfile.sapCompany);
+      }
+
+      // 5. Validar conexão de sessão do SAP
+      const sapTargetUser = activeProfile.sapEmail || cleanEmail;
+      const sapTargetCompany = activeProfile.sapCompany || targetCompany;
+
+      try {
+        const sapResult = await sapService.login(sapTargetUser, sapTargetCompany);
+        if (sapResult.success) {
+          setSapUser(sapResult.user);
+          setIsSAPLoggedIn(true);
+          toast.success(`Usuário validado (${sapResult.user.name || sapTargetUser})!`);
         } else {
-          toast.error(authError.message || 'Erro de autenticação.');
+          setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
+          setIsSAPLoggedIn(true);
+          toast.success('Acesso ao portal liberado com sucesso!');
         }
+      } catch (sapErr) {
+        setSapUser({ name: cleanEmail.split('@')[0], email: sapTargetUser });
+        setIsSAPLoggedIn(true);
+        toast.success('Acesso ao portal liberado com sucesso!');
       }
     } catch (error: any) {
       console.error('Erro de login:', error);
@@ -1947,7 +2024,7 @@ export default function App() {
               <CalibrationView key="calibration" />
             )}
             {currentView === 'users' && userProfile?.role === 'admin' && (
-              <UserManagementView key="users" />
+              <UserManagementView key="users" currentUserEmail={userProfile?.email || activeAuthUser?.email || ''} />
             )}
           </AnimatePresence>
         </main>
@@ -5016,7 +5093,6 @@ function CostsView() {
   };
 
   const handleDeletePers = async (id: any) => {
-    if (!window.confirm('Tem certeza que deseja excluir este registro de pessoal?')) return;
     try {
       await sapService.deletePersonnelCost(id);
       toast.success('Registro excluído com sucesso');
@@ -5027,7 +5103,6 @@ function CostsView() {
   };
 
   const handleDeleteRental = async (id: any) => {
-    if (!window.confirm('Tem certeza que deseja excluir este registro de locação?')) return;
     try {
       await sapService.deleteRentalCost(id);
       toast.success('Registro excluído com sucesso');
@@ -7062,7 +7137,6 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
 
   const handleDeleteOrder = async () => {
     if (!selectedOrder?.DocEntry) return;
-    if (!confirm('Deseja realmente cancelar este Pedido de Venda?')) return;
     setIsSaving(true);
     try {
       await sapService.deleteOrder(selectedOrder.DocEntry);
@@ -9334,7 +9408,7 @@ function CalibrationView() {
   };
 
   const handleDelete = async () => {
-    if (!selectedCalibration || !window.confirm('Deseja realmente excluir este registro?')) return;
+    if (!selectedCalibration) return;
     try {
       await sapService.deleteCalibrationRecord(selectedCalibration.DocEntry);
       toast.success('Registro excluído com sucesso!');
