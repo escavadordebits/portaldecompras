@@ -517,9 +517,9 @@ apiRouter.post('/login', async (req, res) => {
       });
     }
 
-    if (status === 502 || status === 504) {
+    if (status === 502 || status === 503 || status === 504) {
       return res.status(status).json({ 
-        error: 'O servidor SAP (Service Layer) está temporariamente indisponível (Erro 502/504).',
+        error: `O servidor SAP (Service Layer) está temporariamente indisponível (Erro ${status}).`,
         details: 'Isso geralmente indica que o serviço está instável ou em manutenção. Tente novamente em alguns instantes.'
       });
     }

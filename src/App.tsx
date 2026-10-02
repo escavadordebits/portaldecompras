@@ -378,6 +378,10 @@ export default function App() {
   });
 
   const isLoggingOutRef = useRef(false);
+  const validatingSessionEmailRef = useRef<string | null>(null);
+  const syncingUserUidRef = useRef<string | null>(null);
+  const lastVerifiedSapUserRef = useRef<string | null>(null);
+  const verifyingSapRef = useRef(false);
   const [isLoggedOut, setIsLoggedOut] = useState(() => {
     try {
       if (typeof window === 'undefined') return false;
@@ -426,6 +430,9 @@ export default function App() {
     if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
     try {
       const email = (sessionUser.email || '').toLowerCase().trim();
+      if (!email) return;
+      if (validatingSessionEmailRef.current === email) return;
+      validatingSessionEmailRef.current = email;
       const isAdminEmail = email === 'sap.qualitech@qualitechirm.com' || email === 'sapemailb1@gmail.com';
 
       const docKey = email.replace(/[^a-z0-9@_.-]/g, '_');
@@ -513,7 +520,7 @@ export default function App() {
         return localSessionUser;
       });
       if (localSessionUser.sapEmail || localSessionUser.email) {
-        setSapUser({
+        setSapUser(prev => prev || {
           name: localSessionUser.name || localSessionUser.sapEmail || (localSessionUser.email || '').split('@')[0],
           email: localSessionUser.sapEmail || localSessionUser.email
         });
@@ -524,10 +531,12 @@ export default function App() {
       setUserProfile(null);
       setSapUser(null);
     }
-  }, [fbUser, fbLoading, localSessionUser, isLoggedOut]);
+  }, [fbUser, fbLoading, isLoggedOut, localSessionUser?.email]);
 
   const syncUserProfile = async (user: any) => {
     if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
+    if (syncingUserUidRef.current === user.uid) return;
+    syncingUserUidRef.current = user.uid;
     try {
       const normalizedEmail = (user.email || '').toLowerCase().trim();
       const isAdminEmail = normalizedEmail === 'sap.qualitech@qualitechirm.com' || normalizedEmail === 'sapemailb1@gmail.com';
@@ -680,6 +689,9 @@ export default function App() {
   };
 
   const handleSAPVerification = async (email: string, company: string) => {
+    const verificationKey = `${(email || '').trim().toLowerCase()}_${company}`;
+    if (verifyingSapRef.current || lastVerifiedSapUserRef.current === verificationKey) return;
+    verifyingSapRef.current = true;
     try {
       const normalizedCompany = normalizeSapCompany(company);
       const result = await sapService.login(email.trim(), normalizedCompany);
@@ -687,6 +699,7 @@ export default function App() {
         setSapUser(result.user);
         setIsSAPLoggedIn(true);
       }
+      lastVerifiedSapUserRef.current = verificationKey;
     } catch (error: any) {
       console.warn('SAP verification note (background):', error?.message || error);
       // Graceful fallback: user is already authenticated in portal, ensure session remains valid
@@ -695,6 +708,9 @@ export default function App() {
         email: email
       });
       setIsSAPLoggedIn(true);
+      lastVerifiedSapUserRef.current = verificationKey;
+    } finally {
+      verifyingSapRef.current = false;
     }
   };
 
@@ -1225,6 +1241,10 @@ export default function App() {
     }
 
     // 2. Immediately wipe all state SYNCHRONOUSLY to show LoginScreen
+    validatingSessionEmailRef.current = null;
+    syncingUserUidRef.current = null;
+    lastVerifiedSapUserRef.current = null;
+    verifyingSapRef.current = false;
     setLocalSessionUser(null);
     setUserProfile(null);
     setIsSAPLoggedIn(false);
@@ -8524,11 +8544,12 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
   // Real-time in-memory filter of loaded list with accent-insensitive matching
   const filteredResults = useMemo(() => {
     if (!searchTerm.trim()) return rawResults;
-    const term = normalizeSearchText(searchTerm);
+    const tokens = searchTerm.trim().split(/\s+/).map(t => normalizeSearchText(t)).filter(Boolean);
+    if (tokens.length === 0) return rawResults;
     return rawResults.filter((item: any) => {
       const code = normalizeSearchText(item.CardCode || item.ItemCode || item.Code || item.FactorCode || item.CenterCode || '');
       const name = normalizeSearchText(item.CardName || item.ItemName || item.Name || item.Description || item.ItemDescription || item.FactorDescription || item.CenterName || '');
-      return code.includes(term) || name.includes(term);
+      return tokens.every(token => code.includes(token) || name.includes(token));
     });
   }, [rawResults, searchTerm]);
 

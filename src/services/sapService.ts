@@ -623,59 +623,102 @@ export const sapService = {
       const baseSelect = "ItemCode,ItemName,Frozen,ItemPrices";
 
       if (sanitizedName) {
-        // Build rich search variants to match case-sensitive & accent-sensitive SAP DB:
+        // Build rich search variants to match case-sensitive & accent-sensitive SAP DB
+        const rawTokens = sanitizedName.split(/\s+/).filter(Boolean);
+        const searchTargets = Array.from(new Set([sanitizedName, ...rawTokens]));
+        
         const variants = new Set<string>();
-        const upper = sanitizedName.toUpperCase();
-        variants.add(upper);
 
-        // Normalized unaccented uppercase (e.g. MOSQUETAO, LOCACAO)
-        const unaccented = upper.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        variants.add(unaccented);
+        for (const target of searchTargets) {
+          if (!target || target.length < 2) continue;
+          
+          // 1. Original
+          variants.add(target);
 
-        // Portuguese specific rules
-        if (unaccented.includes("CAO")) {
-          variants.add(unaccented.replace(/CAO/g, "ÇÃO"));
-        }
-        if (unaccented.includes("COES")) {
-          variants.add(unaccented.replace(/COES/g, "ÇÕES"));
-        }
-        if (unaccented.endsWith("AO")) {
-          variants.add(unaccented.replace(/AO$/, "ÃO"));
-          if (unaccented.length > 4) {
-            variants.add(unaccented.slice(0, -2)); // e.g. MOSQUET
+          // 2. Uppercase
+          const upper = target.toUpperCase();
+          variants.add(upper);
+
+          // 3. Lowercase
+          const lower = target.toLowerCase();
+          variants.add(lower);
+
+          // 4. Capitalized / TitleCase
+          const capitalized = target.charAt(0).toUpperCase() + target.slice(1).toLowerCase();
+          variants.add(capitalized);
+
+          // 5. Unaccented versions
+          const unaccentedOrig = target.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          variants.add(unaccentedOrig);
+          variants.add(unaccentedOrig.toUpperCase());
+          variants.add(unaccentedOrig.toLowerCase());
+          const unaccCap = unaccentedOrig.charAt(0).toUpperCase() + unaccentedOrig.slice(1).toLowerCase();
+          variants.add(unaccCap);
+
+          // 6. Portuguese-specific suffix/replacement rules
+          const uUpper = unaccentedOrig.toUpperCase();
+          if (uUpper.includes("CAO")) {
+            variants.add(uUpper.replace(/CAO/g, "ÇÃO"));
+            variants.add(uUpper.replace(/CAO/g, "ção"));
+            variants.add(uUpper.replace(/CAO/g, "ÇAO"));
+          }
+          if (uUpper.includes("COES")) {
+            variants.add(uUpper.replace(/COES/g, "ÇÕES"));
+            variants.add(uUpper.replace(/COES/g, "ções"));
+          }
+          if (uUpper.endsWith("AO")) {
+            variants.add(uUpper.replace(/AO$/, "ÃO"));
+            variants.add(uUpper.replace(/AO$/, "ão"));
+          }
+          if (uUpper.includes("SERVIC")) {
+            variants.add("SERVIÇO");
+            variants.add("Serviço");
+            variants.add("serviço");
+            variants.add("SERVICO");
+            variants.add("Servico");
+            variants.add("servico");
+          }
+          if (uUpper.includes("LOCAC")) {
+            variants.add("LOCAÇÃO");
+            variants.add("Locação");
+            variants.add("locação");
+            variants.add("LOCACAO");
+            variants.add("Locacao");
+          }
+          if (uUpper.includes("DIARI")) {
+            variants.add("DIÁRIA");
+            variants.add("Diária");
+            variants.add("diária");
+            variants.add("DIARIA");
+            variants.add("Diaria");
           }
         }
-        if (unaccented.includes("LOCAC")) {
-          variants.add("LOCAÇÃO");
-          variants.add("LOCACAO");
-          variants.add("LOCAC");
-        }
-        if (unaccented.includes("MOSQUET")) {
-          variants.add("MOSQUETÃO");
-          variants.add("MOSQUETAO");
-          variants.add("MOSQUET");
-        }
-        if (unaccented.includes("SERVIC")) {
-          variants.add("SERVIÇO");
-          variants.add("SERVICO");
-          variants.add("SERVIÇ");
-        }
-        if (unaccented.includes("DIARI")) {
-          variants.add("DIÁRIA");
-          variants.add("DIARIA");
-        }
 
-        const variantList = Array.from(variants).filter(Boolean);
+        const variantList = Array.from(variants).filter(v => Boolean(v && v.trim()));
         const allItems: any[] = [];
         const seenCodes = new Set<string>();
 
-        // Query each variant in parallel with multi-page support (SAP Service Layer page limit is 20)
+        // Build combined filter clauses in batches of 4 variants to ensure fast parallel requests
+        const batchSize = 4;
+        const batches: string[][] = [];
+        for (let i = 0; i < variantList.length; i += batchSize) {
+          batches.push(variantList.slice(i, i + batchSize));
+        }
+
         await Promise.all(
-          variantList.slice(0, 5).map(async (v) => {
-            for (let page = 0; page < 5; page++) {
-              const skip = page * 20;
+          batches.slice(0, 4).map(async (batch) => {
+            const orConditions: string[] = [];
+            for (const v of batch) {
+              const safeV = v.replace(/'/g, "''");
+              orConditions.push(`contains(ItemName, '${safeV}')`);
+              orConditions.push(`contains(ItemCode, '${safeV}')`);
+            }
+            const filterStr = `(${orConditions.join(' or ')}) and Frozen ne 'tYES'`;
+
+            for (let page = 0; page < 3; page++) {
+              const skip = page * 40;
               try {
-                const url = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${v}') or contains(ItemCode, '${v}')`)}&$skip=${skip}&$top=20`;
+                const url = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(filterStr)}&$skip=${skip}&$top=40`;
                 const response = await api.get(url);
                 const items = response.data?.value || [];
                 for (const it of items) {
@@ -686,61 +729,92 @@ export const sapService = {
                     }
                   }
                 }
-                if (items.length < 20) break; // End of pages for this variant
+                if (items.length < 40) break;
               } catch (err) {
-                // If combined filter fails, try simpler single contains
+                // Fallback for single variant if combined OData fails
                 try {
-                  const fallbackUrl = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${v}')`)}&$skip=${skip}&$top=20`;
-                  const respFallback = await api.get(fallbackUrl);
-                  const fItems = respFallback.data?.value || [];
-                  for (const it of fItems) {
-                    if (it.ItemCode && !seenCodes.has(it.ItemCode)) {
-                      seenCodes.add(it.ItemCode);
-                      if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
-                        allItems.push(it);
+                  for (const singleV of batch) {
+                    const fallbackUrl = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${singleV}') and Frozen ne 'tYES'`)}&$skip=${skip}&$top=40`;
+                    const resp = await api.get(fallbackUrl);
+                    const fItems = resp.data?.value || [];
+                    for (const it of fItems) {
+                      if (it.ItemCode && !seenCodes.has(it.ItemCode)) {
+                        seenCodes.add(it.ItemCode);
+                        if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+                          allItems.push(it);
+                        }
                       }
                     }
                   }
-                  if (fItems.length < 20) break;
                 } catch {
                   break;
                 }
+                break;
               }
             }
           })
         );
 
         if (allItems.length > 0) {
-          // Sort items by relevance: exact match or startsWith first
+          // Sort items by relevance: exact match or startsWith first, then locale
           const term = sanitizedName.toUpperCase();
+          const cleanNormTerm = sanitizedName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+
           return allItems.sort((a, b) => {
+            const aCode = (a.ItemCode || '').toUpperCase();
+            const bCode = (b.ItemCode || '').toUpperCase();
             const aName = (a.ItemName || '').toUpperCase();
             const bName = (b.ItemName || '').toUpperCase();
-            const aStarts = aName.startsWith(term) || (a.ItemCode || '').startsWith(term);
-            const bStarts = bName.startsWith(term) || (b.ItemCode || '').startsWith(term);
+            const aNorm = aName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            const bNorm = bName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+            // Exact match on Code or Name
+            if (aCode === term || aName === term) return -1;
+            if (bCode === term || bName === term) return 1;
+
+            // Starts with
+            const aStarts = aCode.startsWith(term) || aName.startsWith(term) || aNorm.startsWith(cleanNormTerm);
+            const bStarts = bCode.startsWith(term) || bName.startsWith(term) || bNorm.startsWith(cleanNormTerm);
             if (aStarts && !bStarts) return -1;
             if (!aStarts && bStarts) return 1;
+
             return aName.localeCompare(bName);
           });
         }
       }
 
-      // Initial list when no search term is entered - fetch up to 100 items (5 pages)
+      // Initial list when no search term is entered - fetch up to 100 active items directly
       const initialItems: any[] = [];
       const seenInit = new Set<string>();
-      for (let p = 0; p < 5; p++) {
-        const url = `/sap/Items?$select=${baseSelect}&$skip=${p * 20}&$top=20`;
-        const response = await api.get(url);
-        const items = response.data.value || [];
-        for (const it of items) {
-          if (it.ItemCode && !seenInit.has(it.ItemCode)) {
-            seenInit.add(it.ItemCode);
-            if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
-              initialItems.push(it);
+      for (let p = 0; p < 3; p++) {
+        const url = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent("Frozen ne 'tYES'")}&$skip=${p * 40}&$top=40`;
+        try {
+          const response = await api.get(url);
+          const items = response.data.value || [];
+          for (const it of items) {
+            if (it.ItemCode && !seenInit.has(it.ItemCode)) {
+              seenInit.add(it.ItemCode);
+              if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+                initialItems.push(it);
+              }
             }
           }
+          if (items.length < 40) break;
+        } catch {
+          // If Frozen filter fails on root list, fallback without filter
+          const fallbackUrl = `/sap/Items?$select=${baseSelect}&$skip=${p * 40}&$top=40`;
+          const response = await api.get(fallbackUrl);
+          const items = response.data.value || [];
+          for (const it of items) {
+            if (it.ItemCode && !seenInit.has(it.ItemCode)) {
+              seenInit.add(it.ItemCode);
+              if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+                initialItems.push(it);
+              }
+            }
+          }
+          if (items.length < 40) break;
         }
-        if (items.length < 20) break;
       }
       return initialItems;
     } catch (error) {
