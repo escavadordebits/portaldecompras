@@ -53,6 +53,7 @@ import { BidComparativeView } from './components/BidComparativeView';
 import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal';
 import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSection';
 import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
+import { DocumentListFilterBar, DocumentFilters } from './components/DocumentListFilterBar';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
@@ -76,6 +77,7 @@ import {
   signOut 
 } from 'firebase/auth';
 import { sapService, normalizeSapCompany, resolveSapFinancialProject, getDocumentWO } from './services/sapService';
+import { matchPartnerQuery } from './utils/taxUtils';
 import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost } from './utils/costCalculations';
 import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
@@ -3893,8 +3895,23 @@ function ListOrdersView({
 }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [filters, setFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [appliedFilters, setAppliedFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [hasMore, setHasMore] = useState(true);
@@ -3941,9 +3958,16 @@ function ListOrdersView({
     }
   };
 
-  const handleFetchOrders = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
+  const handleFetchOrders = async (targetPage = page, targetFilters = appliedFilters, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
+      // Determine query search string for SAP Service Layer with customer auto-resolution
+      let clientTarget = targetFilters.clientCode;
+      if (!clientTarget && targetFilters.clientName) {
+        const match = sapService.findCustomerMatch(targetFilters.clientName);
+        clientTarget = match ? match.CardCode : targetFilters.clientName;
+      }
+      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
       const data = await fetchOrders({
         skip: targetPage * targetPageSize,
         top: targetPageSize,
@@ -3961,51 +3985,98 @@ function ListOrdersView({
 
   useEffect(() => {
     setPage(0);
-    handleFetchOrders(0, appliedSearch, pageSize);
+    handleFetchOrders(0, appliedFilters, pageSize);
   }, [fetchOrders]);
 
-  // Debounced auto-search across all pages in the SAP database
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = searchTerm.trim();
-      if (trimmed !== appliedSearch) {
-        setPage(0);
-        setAppliedSearch(trimmed);
-        handleFetchOrders(0, trimmed, pageSize);
-      }
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [searchTerm, appliedSearch, pageSize]);
-
-  const handleSearchSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const trimmed = searchTerm.trim();
+  const handleApplySearch = (targetFilters = filters) => {
     setPage(0);
-    setAppliedSearch(trimmed);
-    handleFetchOrders(0, trimmed, pageSize);
+    setAppliedFilters(targetFilters);
+    handleFetchOrders(0, targetFilters, pageSize);
   };
 
   const handleClearSearch = () => {
-    setSearchTerm('');
-    setAppliedSearch('');
+    const emptyFilters: DocumentFilters = {
+      docNum: '',
+      wo: '',
+      po: '',
+      clientCode: '',
+      clientName: '',
+      clientCnpj: ''
+    };
+    setFilters(emptyFilters);
+    setAppliedFilters(emptyFilters);
     setPage(0);
-    handleFetchOrders(0, '', pageSize);
+    handleFetchOrders(0, emptyFilters, pageSize);
   };
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 0) return;
     setPage(newPage);
-    handleFetchOrders(newPage, appliedSearch, pageSize);
+    handleFetchOrders(newPage, appliedFilters, pageSize);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setPage(0);
-    handleFetchOrders(0, appliedSearch, newSize);
+    handleFetchOrders(0, appliedFilters, newSize);
   };
 
-  const filteredOrders = orders;
+  const filteredOrders = orders.filter((order) => {
+    // 1. Status Filter
+    const isOpen = order.DocumentStatus === 'bost_Open' || order.DocumentStatus === 'O';
+    const matchesStatus = statusFilter === 'all' || 
+                         (statusFilter === 'open' && isOpen) || 
+                         (statusFilter === 'closed' && !isOpen);
+    if (!matchesStatus) return false;
+
+    // 2. DocNum
+    if (appliedFilters.docNum.trim()) {
+      const term = appliedFilters.docNum.trim().toLowerCase();
+      const docNumStr = String(order.DocNum || '').toLowerCase();
+      const docEntryStr = String(order.DocEntry || '').toLowerCase();
+      if (!docNumStr.includes(term) && !docEntryStr.includes(term)) return false;
+    }
+
+    // 3. WO
+    if (appliedFilters.wo.trim()) {
+      const term = appliedFilters.wo.trim().toLowerCase();
+      const docWo = getDocumentWO(order).toLowerCase();
+      if (!docWo.includes(term)) return false;
+    }
+
+    // 4. PO
+    if (appliedFilters.po.trim()) {
+      const term = appliedFilters.po.trim().toLowerCase();
+      const docPo = String(order.NumAtCard || order.U_POCliente || order.U_NumAtCard || '').toLowerCase();
+      if (!docPo.includes(term)) return false;
+    }
+
+    // 5. Cliente / Entidade
+    if (appliedFilters.clientCode.trim() || appliedFilters.clientName.trim()) {
+      const codeTerm = appliedFilters.clientCode.trim().toLowerCase();
+      const nameTerm = appliedFilters.clientName.trim();
+      const docCode = String(order.CardCode || '').toLowerCase();
+      const docName = String(order.CardName || order.RequesterName || '').toLowerCase();
+
+      const matchesCode = codeTerm ? docCode.includes(codeTerm) : false;
+      const matchesName = nameTerm ? (docName.includes(nameTerm.toLowerCase()) || matchPartnerQuery(order, nameTerm)) : false;
+
+      if (!matchesCode && !matchesName) return false;
+    }
+
+    return true;
+  });
+
+  const appliedFiltersSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (appliedFilters.docNum) parts.push(`Nº: ${appliedFilters.docNum}`);
+    if (appliedFilters.wo) parts.push(`WO: ${appliedFilters.wo}`);
+    if (appliedFilters.po) parts.push(`PO: ${appliedFilters.po}`);
+    if (appliedFilters.clientCode || appliedFilters.clientName) {
+      parts.push(`Entidade: ${appliedFilters.clientCode ? `[${appliedFilters.clientCode}] ` : ''}${appliedFilters.clientName || ''}`);
+    }
+    return parts.length > 0 ? parts.join(' | ') : null;
+  }, [appliedFilters]);
 
   if (selectedOrder || isDetailLoading) {
     return (
@@ -4157,35 +4228,32 @@ function ListOrdersView({
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Visão analítica dos registros integrados</p>
         </div>
-        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3">
-          <div className="relative w-full md:w-80">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-evo-dark/30 w-4 h-4" />
-            <Input 
-              className="pl-12 h-11 rounded-none border-none bg-white shadow-sm text-xs font-bold uppercase tracking-widest placeholder:text-evo-dark/20" 
-              placeholder="PESQUISAR Nº OU FORNECEDOR..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
-            Buscar
-          </Button>
-          {appliedSearch && (
-            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-none bg-white shadow-sm font-bold uppercase text-[10px] tracking-widest px-4">
-              Limpar
-            </Button>
-          )}
-          <Button type="button" onClick={() => handleFetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-none bg-white shadow-sm font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
-            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
-        </form>
       </div>
+
+      <DocumentListFilterBar
+        docNumberLabel={title.includes('Pedido') ? 'Nº Pedido Compra' : 'Nº Documento'}
+        docNumberPlaceholder="Ex: 1029..."
+        clientLabel="Fornecedor / Cliente"
+        partnerType="all"
+        filters={filters}
+        onChangeFilters={setFilters}
+        onSearch={handleApplySearch}
+        onClear={handleClearSearch}
+        onRefresh={() => handleFetchOrders(page, appliedFilters, pageSize)}
+        isLoading={isLoading}
+        statusFilter={statusFilter}
+        onChangeStatusFilter={setStatusFilter}
+        appliedFiltersSummary={appliedFiltersSummary}
+        totalResults={filteredOrders.length}
+      />
 
       <Card className="evo-card border-none overflow-hidden">
         <Table>
           <TableHeader className="bg-evo-dark">
             <TableRow className="border-none hover:bg-transparent">
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Nº Documento</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">WO (Projeto)</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">PO / Ref</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Data Emissão</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Entidade SAP</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Valor Consolidado</TableHead>
@@ -4196,7 +4264,7 @@ function ListOrdersView({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-20">
+                <TableCell colSpan={8} className="text-center py-20">
                   <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-dark/20 animate-pulse">Estabelecendo conexão com Service Layer...</p>
                 </TableCell>
               </TableRow>
@@ -4207,6 +4275,14 @@ function ListOrdersView({
                 onClick={() => onViewDetails(order.DocEntry)}
               >
                 <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{order.DocNum || order.DocEntry}</TableCell>
+                <TableCell className="px-6 py-5">
+                  <span className="inline-flex items-center gap-1 font-black text-[10px] text-evo-teal bg-evo-teal/10 px-2 py-0.5 border border-evo-teal/20 uppercase tracking-tight">
+                    {getDocumentWO(order)}
+                  </span>
+                </TableCell>
+                <TableCell className="px-6 py-5 font-black text-[10px] text-evo-dark uppercase">
+                  {order.NumAtCard || order.U_POCliente || order.U_NumAtCard || '-'}
+                </TableCell>
                 <TableCell className="px-6 py-5 text-[10px] font-bold uppercase text-evo-dark/60 tracking-wider">
                   {order.DocDate ? new Date(order.DocDate).toLocaleDateString('pt-BR') : '-'}
                 </TableCell>
@@ -4239,7 +4315,7 @@ function ListOrdersView({
             ))}
             {!isLoading && filteredOrders.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
+                <TableCell colSpan={8} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
                   Nenhum registro localizado sob os critérios informados.
                 </TableCell>
               </TableRow>
@@ -5211,19 +5287,18 @@ function CostsView() {
     setIsSubmitLoading(true);
     try {
       const payload = {
-        ...formData,
+        U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
+        U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
+        U_Colaborador: formData.U_Colaborador,
         U_VlNormal: Number(formData.U_VlNormal) || 0,
-        U_StandByRate: Number(formData.U_StandByRate) || 0,
-        U_QtdDiariasNormal: Number(formData.U_QtdDiariasNormal) || 0,
-        U_QtdDiariasStandBy: Number(formData.U_QtdDiariasStandBy) || 0,
-        U_NoturnoNor: Number(formData.U_NoturnoNor) || 0,
-        U_NoturnoNob: Number(formData.U_NoturnoNob) || 0,
+        U_StandBy: Number(formData.U_StandByRate || formData.U_StandBy) || 0,
+        U_QtdDiarias: Number(formData.U_QtdDiariasNormal || formData.U_QtdDiarias) || 0,
+        U_QtdDiariasSt: Number(formData.U_QtdDiariasStandBy || formData.U_QtdDiariasSt) || 0,
+        U_NotNor: Number(formData.U_NoturnoNor || formData.U_NotNor) || 0,
+        U_NotNob: Number(formData.U_NoturnoNob || formData.U_NotNob) || 0,
         U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
         U_HExtraNot: Number(formData.U_HExtraNot) || 0,
-        U_QtdDobra: Number(formData.U_QtdDobra) || 0,
-        U_PercDobra: Number(formData.U_PercDobra) || 50,
-        U_VlDobra: currentPersBreakdown.totalDobraColaborador,
-        U_Total: Number(formData.U_Total) || 0
+        U_Total: currentPersBreakdown.totalGeral || Number(formData.U_Total) || 0
       };
       if (editingId) {
         await sapService.updatePersonnelCost(editingId, payload);
@@ -5804,9 +5879,23 @@ function QuotationsView({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<any>(null);
   const [isOrderLoading, setIsOrderLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [filters, setFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [appliedFilters, setAppliedFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [hasMore, setHasMore] = useState(true);
@@ -5843,9 +5932,15 @@ function QuotationsView({
     }
   }, [initialDocEntry]);
 
-  const fetchQuotations = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
+  const fetchQuotations = async (targetPage = page, targetFilters = appliedFilters, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
+      let clientTarget = targetFilters.clientCode;
+      if (!clientTarget && targetFilters.clientName) {
+        const match = sapService.findCustomerMatch(targetFilters.clientName);
+        clientTarget = match ? match.CardCode : targetFilters.clientName;
+      }
+      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
       const data = await sapService.getQuotations({
         skip: targetPage * targetPageSize,
         top: targetPageSize,
@@ -5876,49 +5971,41 @@ function QuotationsView({
 
   useEffect(() => {
     setPage(0);
-    fetchQuotations(0, appliedSearch, pageSize);
+    fetchQuotations(0, appliedFilters, pageSize);
     loadAuxData();
   }, []);
 
-  // Debounced auto-search across all pages in the SAP database
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = searchTerm.trim();
-      if (trimmed !== appliedSearch) {
-        setPage(0);
-        setAppliedSearch(trimmed);
-        fetchQuotations(0, trimmed, pageSize);
-      }
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [searchTerm, appliedSearch, pageSize]);
-
-  const handleSearchSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const trimmed = searchTerm.trim();
+  const handleApplySearch = (targetFilters = filters) => {
     setPage(0);
-    setAppliedSearch(trimmed);
-    fetchQuotations(0, trimmed, pageSize);
+    setAppliedFilters(targetFilters);
+    fetchQuotations(0, targetFilters, pageSize);
   };
 
   const handleClearSearch = () => {
-    setSearchTerm('');
-    setAppliedSearch('');
+    const emptyFilters: DocumentFilters = {
+      docNum: '',
+      wo: '',
+      po: '',
+      clientCode: '',
+      clientName: '',
+      clientCnpj: ''
+    };
+    setFilters(emptyFilters);
+    setAppliedFilters(emptyFilters);
     setPage(0);
-    fetchQuotations(0, '', pageSize);
+    fetchQuotations(0, emptyFilters, pageSize);
   };
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 0) return;
     setPage(newPage);
-    fetchQuotations(newPage, appliedSearch, pageSize);
+    fetchQuotations(newPage, appliedFilters, pageSize);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setPage(0);
-    fetchQuotations(0, appliedSearch, newSize);
+    fetchQuotations(0, appliedFilters, newSize);
   };
 
   const filteredQuotations = quotations.filter(q => {
@@ -5927,15 +6014,49 @@ function QuotationsView({
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.trim().toLowerCase();
-    const wo = getDocumentWO(q).toLowerCase();
-    const docNum = String(q.DocNum || q.DocEntry || '').toLowerCase();
-    const cardCode = String(q.CardCode || '').toLowerCase();
-    const cardName = String(q.CardName || '').toLowerCase();
-    const poCliente = String(q.NumAtCard || q.U_POCliente || '').toLowerCase();
-    return wo.includes(term) || docNum.includes(term) || cardCode.includes(term) || cardName.includes(term) || poCliente.includes(term);
+
+    if (appliedFilters.docNum.trim()) {
+      const term = appliedFilters.docNum.trim().toLowerCase();
+      const docNum = String(q.DocNum || '').toLowerCase();
+      const docEntry = String(q.DocEntry || '').toLowerCase();
+      if (!docNum.includes(term) && !docEntry.includes(term)) return false;
+    }
+
+    if (appliedFilters.wo.trim()) {
+      const term = appliedFilters.wo.trim().toLowerCase();
+      const wo = getDocumentWO(q).toLowerCase();
+      if (!wo.includes(term)) return false;
+    }
+
+    if (appliedFilters.po.trim()) {
+      const term = appliedFilters.po.trim().toLowerCase();
+      const poCliente = String(q.NumAtCard || q.U_POCliente || '').toLowerCase();
+      if (!poCliente.includes(term)) return false;
+    }
+
+    if (appliedFilters.clientCode.trim() || appliedFilters.clientName.trim()) {
+      const codeTerm = appliedFilters.clientCode.trim().toLowerCase();
+      const nameTerm = appliedFilters.clientName.trim();
+      const cardCode = String(q.CardCode || '').toLowerCase();
+      const cardName = String(q.CardName || '').toLowerCase();
+      const matchesCode = codeTerm ? cardCode.includes(codeTerm) : false;
+      const matchesName = nameTerm ? (cardName.includes(nameTerm.toLowerCase()) || matchPartnerQuery(q, nameTerm)) : false;
+      if (!matchesCode && !matchesName) return false;
+    }
+
+    return true;
   });
+
+  const appliedFiltersSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (appliedFilters.docNum) parts.push(`Nº: ${appliedFilters.docNum}`);
+    if (appliedFilters.wo) parts.push(`WO: ${appliedFilters.wo}`);
+    if (appliedFilters.po) parts.push(`PO: ${appliedFilters.po}`);
+    if (appliedFilters.clientCode || appliedFilters.clientName) {
+      parts.push(`Cliente: ${appliedFilters.clientCode ? `[${appliedFilters.clientCode}] ` : ''}${appliedFilters.clientName || ''}`);
+    }
+    return parts.length > 0 ? parts.join(' | ') : null;
+  }, [appliedFilters]);
 
   const handleCreateNew = () => {
     setSelectedQuote({
@@ -6184,37 +6305,7 @@ function QuotationsView({
           <h2 className="text-3xl font-black tracking-tighter text-evo-dark uppercase">Cotações de Venda</h2>
           <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de ofertas, WO, PO cliente e anexos de comprovação</p>
         </div>
-        <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-          <div className="relative flex-1 md:w-80">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/20" />
-            <Input 
-              placeholder="BUSCAR CLIENTE, WO, PO OU Nº..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 rounded-none border-evo-bg focus:border-evo-teal uppercase text-[10px] font-bold tracking-widest h-12"
-            />
-          </div>
-          <Button type="submit" className="h-12 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
-            Buscar
-          </Button>
-          {appliedSearch && (
-            <Button type="button" onClick={handleClearSearch} variant="outline" className="h-12 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
-              Limpar
-            </Button>
-          )}
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-40 rounded-none border-evo-bg h-12 uppercase text-[10px] font-bold tracking-widest">
-              {statusFilter === 'all' ? 'TODOS STATUS' : statusFilter === 'open' ? 'ABERTAS' : 'FECHADAS'}
-            </SelectTrigger>
-            <SelectContent className="rounded-none">
-              <SelectItem value="all" className="uppercase text-[10px] font-bold">TODOS STATUS</SelectItem>
-              <SelectItem value="open" className="uppercase text-[10px] font-bold">ABERTAS</SelectItem>
-              <SelectItem value="closed" className="uppercase text-[10px] font-bold">FECHADAS</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button type="button" onClick={() => fetchQuotations(page, appliedSearch, pageSize)} variant="outline" className="h-12 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
-            <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           {onOpenMeasurements && (
             <Button 
               type="button" 
@@ -6226,9 +6317,28 @@ function QuotationsView({
               Resumo Medições
             </Button>
           )}
-          <Button type="button" onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">Nova Cotação</Button>
-        </form>
+          <Button type="button" onClick={handleCreateNew} className="evo-button-primary shadow-xl h-12 px-8">
+            Nova Cotação
+          </Button>
+        </div>
       </div>
+
+      <DocumentListFilterBar
+        docNumberLabel="Nº Cotação"
+        docNumberPlaceholder="Ex: 1029..."
+        clientLabel="Cliente"
+        partnerType="customer"
+        filters={filters}
+        onChangeFilters={setFilters}
+        onSearch={handleApplySearch}
+        onClear={handleClearSearch}
+        onRefresh={() => fetchQuotations(page, appliedFilters, pageSize)}
+        isLoading={isLoading}
+        statusFilter={statusFilter}
+        onChangeStatusFilter={setStatusFilter}
+        appliedFiltersSummary={appliedFiltersSummary}
+        totalResults={filteredQuotations.length}
+      />
 
       <div className="grid grid-cols-1 gap-6">
         <Card className="evo-card border-none overflow-hidden">
@@ -7132,9 +7242,23 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [filters, setFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [appliedFilters, setAppliedFilters] = useState<DocumentFilters>({
+    docNum: '',
+    wo: '',
+    po: '',
+    clientCode: '',
+    clientName: '',
+    clientCnpj: ''
+  });
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [hasMore, setHasMore] = useState(true);
@@ -7160,9 +7284,15 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     setIsPrintModalOpen(true);
   };
 
-  const fetchOrders = async (targetPage = page, searchTarget = appliedSearch, targetPageSize = pageSize) => {
+  const fetchOrders = async (targetPage = page, targetFilters = appliedFilters, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
+      let clientTarget = targetFilters.clientCode;
+      if (!clientTarget && targetFilters.clientName) {
+        const match = sapService.findCustomerMatch(targetFilters.clientName);
+        clientTarget = match ? match.CardCode : targetFilters.clientName;
+      }
+      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
       const data = await sapService.getOrders({
         skip: targetPage * targetPageSize,
         top: targetPageSize,
@@ -7193,49 +7323,41 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
 
   useEffect(() => {
     setPage(0);
-    fetchOrders(0, appliedSearch, pageSize);
+    fetchOrders(0, appliedFilters, pageSize);
     loadAuxData();
   }, []);
 
-  // Debounced auto-search across all pages in the SAP database
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = searchTerm.trim();
-      if (trimmed !== appliedSearch) {
-        setPage(0);
-        setAppliedSearch(trimmed);
-        fetchOrders(0, trimmed, pageSize);
-      }
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [searchTerm, appliedSearch, pageSize]);
-
-  const handleSearchSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const trimmed = searchTerm.trim();
+  const handleApplySearch = (targetFilters = filters) => {
     setPage(0);
-    setAppliedSearch(trimmed);
-    fetchOrders(0, trimmed, pageSize);
+    setAppliedFilters(targetFilters);
+    fetchOrders(0, targetFilters, pageSize);
   };
 
   const handleClearSearch = () => {
-    setSearchTerm('');
-    setAppliedSearch('');
+    const emptyFilters: DocumentFilters = {
+      docNum: '',
+      wo: '',
+      po: '',
+      clientCode: '',
+      clientName: '',
+      clientCnpj: ''
+    };
+    setFilters(emptyFilters);
+    setAppliedFilters(emptyFilters);
     setPage(0);
-    fetchOrders(0, '', pageSize);
+    fetchOrders(0, emptyFilters, pageSize);
   };
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 0) return;
     setPage(newPage);
-    fetchOrders(newPage, appliedSearch, pageSize);
+    fetchOrders(newPage, appliedFilters, pageSize);
   };
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
     setPage(0);
-    fetchOrders(0, appliedSearch, newSize);
+    fetchOrders(0, appliedFilters, newSize);
   };
 
   const filteredOrders = orders.filter(o => {
@@ -7244,15 +7366,49 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                          (statusFilter === 'open' && isOpen) || 
                          (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.trim().toLowerCase();
-    const wo = getDocumentWO(o).toLowerCase();
-    const docNum = String(o.DocNum || o.DocEntry || '').toLowerCase();
-    const cardCode = String(o.CardCode || '').toLowerCase();
-    const cardName = String(o.CardName || '').toLowerCase();
-    const poCliente = String(o.NumAtCard || o.U_POCliente || '').toLowerCase();
-    return wo.includes(term) || docNum.includes(term) || cardCode.includes(term) || cardName.includes(term) || poCliente.includes(term);
+
+    if (appliedFilters.docNum.trim()) {
+      const term = appliedFilters.docNum.trim().toLowerCase();
+      const docNum = String(o.DocNum || '').toLowerCase();
+      const docEntry = String(o.DocEntry || '').toLowerCase();
+      if (!docNum.includes(term) && !docEntry.includes(term)) return false;
+    }
+
+    if (appliedFilters.wo.trim()) {
+      const term = appliedFilters.wo.trim().toLowerCase();
+      const wo = getDocumentWO(o).toLowerCase();
+      if (!wo.includes(term)) return false;
+    }
+
+    if (appliedFilters.po.trim()) {
+      const term = appliedFilters.po.trim().toLowerCase();
+      const poCliente = String(o.NumAtCard || o.U_POCliente || '').toLowerCase();
+      if (!poCliente.includes(term)) return false;
+    }
+
+    if (appliedFilters.clientCode.trim() || appliedFilters.clientName.trim()) {
+      const codeTerm = appliedFilters.clientCode.trim().toLowerCase();
+      const nameTerm = appliedFilters.clientName.trim();
+      const cardCode = String(o.CardCode || '').toLowerCase();
+      const cardName = String(o.CardName || '').toLowerCase();
+      const matchesCode = codeTerm ? cardCode.includes(codeTerm) : false;
+      const matchesName = nameTerm ? (cardName.includes(nameTerm.toLowerCase()) || matchPartnerQuery(o, nameTerm)) : false;
+      if (!matchesCode && !matchesName) return false;
+    }
+
+    return true;
   });
+
+  const appliedFiltersSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (appliedFilters.docNum) parts.push(`Nº: ${appliedFilters.docNum}`);
+    if (appliedFilters.wo) parts.push(`WO: ${appliedFilters.wo}`);
+    if (appliedFilters.po) parts.push(`PO: ${appliedFilters.po}`);
+    if (appliedFilters.clientCode || appliedFilters.clientName) {
+      parts.push(`Cliente: ${appliedFilters.clientCode ? `[${appliedFilters.clientCode}] ` : ''}${appliedFilters.clientName || ''}`);
+    }
+    return parts.length > 0 ? parts.join(' | ') : null;
+  }, [appliedFilters]);
 
   const handleCreateNew = () => {
     setSelectedOrder({
@@ -7486,67 +7642,22 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         </Button>
       </div>
 
-      <div className="flex flex-col gap-3 bg-white p-6 border border-evo-bg shadow-sm">
-        <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
-          <form onSubmit={handleSearchSubmit} className="flex flex-wrap items-center gap-3 flex-1 w-full">
-            <div className="relative flex-1 min-w-[220px]">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-evo-dark/30" />
-              <Input 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Buscar por Nº do Pedido (ex: 1029), Cliente, PO ou WO em toda a base..."
-                className="pl-12 rounded-none border-evo-bg h-11 text-xs font-bold"
-              />
-            </div>
-            <Button type="submit" className="h-11 rounded-none bg-evo-dark hover:bg-evo-dark/90 text-white font-bold uppercase text-[10px] tracking-widest px-6 shadow-sm">
-              Buscar
-            </Button>
-            {appliedSearch && (
-              <Button type="button" onClick={handleClearSearch} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4">
-                Limpar
-              </Button>
-            )}
-            <Button type="button" onClick={() => fetchOrders(page, appliedSearch, pageSize)} variant="outline" className="h-11 rounded-none border-evo-bg font-bold uppercase text-[10px] tracking-widest px-4 flex items-center gap-1.5" title="Recarregar">
-              <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          </form>
-          <div className="flex gap-2 w-full md:w-auto">
-            <Button 
-              variant={statusFilter === 'all' ? 'default' : 'outline'}
-              onClick={() => setStatusFilter('all')}
-              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'all' ? 'bg-evo-dark text-white' : ''}`}
-            >
-              Todos
-            </Button>
-            <Button 
-              variant={statusFilter === 'open' ? 'default' : 'outline'}
-              onClick={() => setStatusFilter('open')}
-              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'open' ? 'bg-evo-teal text-evo-dark' : ''}`}
-            >
-              Abertos
-            </Button>
-            <Button 
-              variant={statusFilter === 'closed' ? 'default' : 'outline'}
-              onClick={() => setStatusFilter('closed')}
-              className={`rounded-none uppercase text-[9px] font-black tracking-widest h-11 px-6 ${statusFilter === 'closed' ? 'bg-gray-200 text-gray-700' : ''}`}
-            >
-              Fechados
-            </Button>
-          </div>
-        </div>
-
-        {appliedSearch && (
-          <div className="bg-evo-teal/10 border border-evo-teal/30 px-4 py-2 flex items-center justify-between text-xs font-bold text-evo-dark">
-            <div className="flex items-center gap-2">
-              <Search className="w-3.5 h-3.5 text-evo-teal" />
-              <span>Busca global no SAP por: <span className="text-evo-teal font-black">"{appliedSearch}"</span> ({orders.length} resultado(s) retornado(s))</span>
-            </div>
-            <button type="button" onClick={handleClearSearch} className="text-[10px] uppercase font-black text-evo-teal hover:underline cursor-pointer">
-              Limpar Filtro
-            </button>
-          </div>
-        )}
-      </div>
+      <DocumentListFilterBar
+        docNumberLabel="Nº Pedido"
+        docNumberPlaceholder="Ex: 1029..."
+        clientLabel="Cliente"
+        partnerType="customer"
+        filters={filters}
+        onChangeFilters={setFilters}
+        onSearch={handleApplySearch}
+        onClear={handleClearSearch}
+        onRefresh={() => fetchOrders(page, appliedFilters, pageSize)}
+        isLoading={isLoading}
+        statusFilter={statusFilter}
+        onChangeStatusFilter={setStatusFilter}
+        appliedFiltersSummary={appliedFiltersSummary}
+        totalResults={filteredOrders.length}
+      />
 
       <div className="grid grid-cols-1 gap-6">
         <Card className="evo-card border-none overflow-hidden shadow-lg">
@@ -8807,10 +8918,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
-          U_QtdDobra: Number(formData.U_QtdDobra) || 0,
-          U_PercDobra: Number(formData.U_PercDobra) || 50,
-          U_VlDobra: currentBreakdown.totalDobraColaborador,
-          U_Total: Number(formData.U_Total) || 0
+          U_Total: currentBreakdown.totalGeral || Number(formData.U_Total) || 0
         };
 
         console.log(`Atualizando registro de custo pessoal #${cleanCode} em @CUSTOSPESSOAL:`, payload);
@@ -8834,10 +8942,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
-          U_QtdDobra: Number(formData.U_QtdDobra) || 0,
-          U_PercDobra: Number(formData.U_PercDobra) || 50,
-          U_VlDobra: currentBreakdown.totalDobraColaborador,
-          U_Total: Number(formData.U_Total) || 0
+          U_Total: currentBreakdown.totalGeral || Number(formData.U_Total) || 0
         };
         
         console.log(`Criando novo registro em @CUSTOSPESSOAL #${newCode}:`, payload);

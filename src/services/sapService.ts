@@ -1,10 +1,15 @@
 import axios from 'axios';
 import { SAP_CONFIG } from '../config/sapConfig';
+import { matchPartnerQuery } from '../utils/taxUtils';
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 65000 // Slightly longer than server timeout
 });
+
+// In-memory cache for customers
+let _cachedCustomers: any[] | null = null;
+let _cachedCustomersPromise: Promise<any[]> | null = null;
 
 // Helper to normalize SAP Company database name
 export const normalizeSapCompany = (comp?: string): string => {
@@ -165,6 +170,37 @@ export function buildODataQuery(
         if (!addedClauses.has(safeClause)) {
           clauses.push(safeClause);
           addedClauses.add(safeClause);
+        }
+      }
+    }
+
+    // Special handling for ForSea / ForeSea
+    if (upper.includes('FORSEA') || upper.includes('FORESEA')) {
+      const foreseaClause = `contains(CardName, 'FORESEA')`;
+      if (!addedClauses.has(foreseaClause)) {
+        clauses.push(foreseaClause);
+        addedClauses.add(foreseaClause);
+      }
+      clauses.push(`CardCode eq 'C000016'`);
+    }
+
+    // Dynamic resolution from cached customer base (matches CNPJ, fuzzy names, etc.)
+    if (_cachedCustomers && _cachedCustomers.length > 0) {
+      const matches = _cachedCustomers.filter(c => matchPartnerQuery(c, raw));
+      for (const m of matches.slice(0, 5)) {
+        if (m.CardCode) {
+          const codeEq = `CardCode eq '${m.CardCode}'`;
+          if (!addedClauses.has(codeEq)) {
+            clauses.push(codeEq);
+            addedClauses.add(codeEq);
+          }
+        }
+        if (m.CardName) {
+          const nameClause = `contains(CardName, '${m.CardName.replace(/'/g, "''")}')`;
+          if (!addedClauses.has(nameClause)) {
+            clauses.push(nameClause);
+            addedClauses.add(nameClause);
+          }
         }
       }
     }
@@ -564,24 +600,228 @@ export const sapService = {
 
   getCustomers: async (name?: string) => {
     try {
-      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType&$top=100";
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$top=100";
       let filter = "(CardType eq 'cCustomer' or CardType eq 'C')";
       if (name && name.trim()) {
         const safe = name.trim().replace(/'/g, "''");
-        filter += ` and (contains(CardName, '${safe}') or contains(CardCode, '${safe}'))`;
+        const digits = safe.replace(/\D/g, '');
+        let qClause = `contains(CardName, '${safe}') or contains(CardCode, '${safe}') or contains(FederalTaxID, '${safe}')`;
+        if (digits && digits.length >= 3) {
+          qClause += ` or contains(FederalTaxID, '${digits}')`;
+        }
+        filter += ` and (${qClause})`;
       }
       try {
         const response = await api.get(`${url}&$filter=${filter}`);
-        return (response.data.value || []).filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+        const list = (response.data.value || []).map((bp: any) => {
+          let taxId = bp.FederalTaxID;
+          if (!taxId && bp.BPFiscalTaxIDCollection && bp.BPFiscalTaxIDCollection.length > 0) {
+            const fiscalEntry = bp.BPFiscalTaxIDCollection.find((f: any) => f.TaxId0 || f.TaxId4);
+            if (fiscalEntry) {
+              taxId = fiscalEntry.TaxId0 || fiscalEntry.TaxId4;
+            }
+          }
+          return { ...bp, FederalTaxID: taxId };
+        });
+        return list.filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
       } catch (err) {
-        const fallbackRes = await api.get("/sap/BusinessPartners?$select=CardCode,CardName,Frozen&$top=100");
-        const list = fallbackRes.data.value || [];
+        const fallbackRes = await api.get("/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$top=100");
+        const list = (fallbackRes.data.value || []).map((bp: any) => {
+          let taxId = bp.FederalTaxID;
+          if (!taxId && bp.BPFiscalTaxIDCollection && bp.BPFiscalTaxIDCollection.length > 0) {
+            const fiscalEntry = bp.BPFiscalTaxIDCollection.find((f: any) => f.TaxId0 || f.TaxId4);
+            if (fiscalEntry) {
+              taxId = fiscalEntry.TaxId0 || fiscalEntry.TaxId4;
+            }
+          }
+          return { ...bp, FederalTaxID: taxId };
+        });
         return list.filter((bp: any) => {
-          const matchesName = !name || (bp.CardName || '').toLowerCase().includes(name.toLowerCase()) || (bp.CardCode || '').toLowerCase().includes(name.toLowerCase());
+          const matchesName = !name || 
+            (bp.CardName || '').toLowerCase().includes(name.toLowerCase()) || 
+            (bp.CardCode || '').toLowerCase().includes(name.toLowerCase()) ||
+            (bp.FederalTaxID || '').replace(/\D/g, '').includes(name.replace(/\D/g, ''));
           return (bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen) && matchesName;
         });
       }
     } catch (error) {
+      return [];
+    }
+  },
+
+  getAllCustomers: async (forceRefresh = false): Promise<any[]> => {
+    // 1. Memory cache check
+    if (!forceRefresh && _cachedCustomers && _cachedCustomers.length > 0) {
+      return _cachedCustomers;
+    }
+
+    // 2. In-flight promise reuse
+    if (!forceRefresh && _cachedCustomersPromise) {
+      return _cachedCustomersPromise;
+    }
+
+    // 3. SessionStorage check
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('sap_cached_customers_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedCustomers = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+
+    _cachedCustomersPromise = (async () => {
+      try {
+        let all: any[] = [];
+        // First page to inspect count and nextLink
+        const firstRes = await api.get('/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$filter=(CardType eq \'cCustomer\' or CardType eq \'C\')&$skip=0');
+        const firstVal = firstRes.data?.value || [];
+        all.push(...firstVal);
+
+        if (firstRes.data?.['odata.nextLink']) {
+          // Parallel fetch remaining pages for instant loading
+          const skips = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220];
+          const results = await Promise.all(
+            skips.map(s => 
+              api.get(`/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$filter=(CardType eq 'cCustomer' or CardType eq 'C')&$skip=${s}`)
+                .then(r => r.data?.value || [])
+                .catch(() => [])
+            )
+          );
+          for (const list of results) {
+            all.push(...list);
+          }
+        }
+
+        // Deduplicate by CardCode
+        const seen = new Set<string>();
+        const unique: any[] = [];
+        for (const bp of all) {
+          if (bp.CardCode && !seen.has(bp.CardCode)) {
+            seen.add(bp.CardCode);
+            unique.push(bp);
+          }
+        }
+
+        const mapped = unique.map((bp: any) => {
+          let taxId = bp.FederalTaxID;
+          if (!taxId && bp.BPFiscalTaxIDCollection && bp.BPFiscalTaxIDCollection.length > 0) {
+            const fiscalEntry = bp.BPFiscalTaxIDCollection.find((f: any) => f.TaxId0 || f.TaxId4);
+            if (fiscalEntry) {
+              taxId = fiscalEntry.TaxId0 || fiscalEntry.TaxId4;
+            }
+          }
+          return { ...bp, FederalTaxID: taxId };
+        }).filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+
+        _cachedCustomers = mapped;
+        if (typeof window !== 'undefined' && mapped.length > 0) {
+          try {
+            sessionStorage.setItem('sap_cached_customers_v1', JSON.stringify(mapped));
+          } catch {}
+        }
+        return mapped;
+      } catch (err) {
+        console.warn('Erro ao carregar lista de clientes:', err);
+        return _cachedCustomers || [];
+      } finally {
+        _cachedCustomersPromise = null;
+      }
+    })();
+
+    return _cachedCustomersPromise;
+  },
+
+  findCustomerMatch: (query?: string | null): any | null => {
+    if (!query || !query.trim() || !_cachedCustomers) return null;
+    const q = query.trim();
+    const exactCode = _cachedCustomers.find((c: any) => c.CardCode?.toLowerCase() === q.toLowerCase());
+    if (exactCode) return exactCode;
+    const exactName = _cachedCustomers.find((c: any) => c.CardName?.toLowerCase() === q.toLowerCase());
+    if (exactName) return exactName;
+    return _cachedCustomers.find((c: any) => matchPartnerQuery(c, q)) || null;
+  },
+
+  searchBusinessPartnersWithTaxId: async (query?: string, partnerType: 'customer' | 'supplier' | 'all' = 'all') => {
+    try {
+      // 1. If searching customers, load full customer base and apply smart/fuzzy/CNPJ matching
+      if (partnerType === 'customer') {
+        const allCust = await sapService.getAllCustomers();
+        if (!query || !query.trim()) {
+          return allCust;
+        }
+        return allCust.filter((c: any) => matchPartnerQuery(c, query));
+      }
+
+      // 2. For suppliers or all partners, query SAP Service Layer with multi-case search
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$top=100";
+      let filter = "";
+      if (partnerType === 'supplier') {
+        filter = "(CardType eq 'cSupplier' or CardType eq 'S')";
+      }
+
+      if (query && query.trim()) {
+        const safe = query.trim().replace(/'/g, "''");
+        const upper = safe.toUpperCase();
+        const lower = safe.toLowerCase();
+        const digits = safe.replace(/\D/g, '');
+
+        const clauses: string[] = [
+          `contains(CardName, '${upper}')`,
+          `contains(CardCode, '${upper}')`
+        ];
+        if (safe !== upper) {
+          clauses.push(`contains(CardName, '${safe}')`);
+          clauses.push(`contains(CardCode, '${safe}')`);
+        }
+        if (lower !== upper && lower !== safe) {
+          clauses.push(`contains(CardName, '${lower}')`);
+        }
+        if (upper === 'FORSEA') {
+          clauses.push(`contains(CardName, 'FORESEA')`);
+        }
+        if (digits && digits.length >= 3) {
+          clauses.push(`contains(FederalTaxID, '${digits}')`);
+          clauses.push(`contains(FederalTaxID, '${safe}')`);
+        }
+
+        const qFilter = clauses.join(' or ');
+        filter = filter ? `${filter} and (${qFilter})` : qFilter;
+      }
+
+      const fullUrl = filter ? `${url}&$filter=${filter}` : url;
+      try {
+        const response = await api.get(fullUrl);
+        const list = (response.data?.value || []).map((bp: any) => {
+          let taxId = bp.FederalTaxID;
+          if (!taxId && bp.BPFiscalTaxIDCollection && bp.BPFiscalTaxIDCollection.length > 0) {
+            const fiscalEntry = bp.BPFiscalTaxIDCollection.find((f: any) => f.TaxId0 || f.TaxId4);
+            if (fiscalEntry) {
+              taxId = fiscalEntry.TaxId0 || fiscalEntry.TaxId4;
+            }
+          }
+          return { ...bp, FederalTaxID: taxId };
+        });
+        const activeList = list.filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+        if (query && query.trim()) {
+          return activeList.filter((bp: any) => matchPartnerQuery(bp, query));
+        }
+        return activeList;
+      } catch (err) {
+        const fallbackRes = await api.get("/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType&$top=150");
+        const list = fallbackRes.data?.value || [];
+        return list.filter((bp: any) => {
+          if (bp.Frozen === 'tYES' || bp.Frozen === 'Y') return false;
+          if (partnerType === 'supplier' && bp.CardType !== 'cSupplier' && bp.CardType !== 'S') return false;
+          return matchPartnerQuery(bp, query);
+        });
+      }
+    } catch (e) {
+      console.warn('Erro ao pesquisar parceiros com CNPJ:', e);
       return [];
     }
   },
@@ -1344,13 +1584,70 @@ export const sapService = {
     }
   },
 
+  // Helper to sanitize payload for @CUSTOSPESSOAL table in SAP
+  sanitizePersonnelCostPayload: (data: any) => {
+    if (!data || typeof data !== 'object') return {};
+
+    const allowedFields = new Set([
+      'Code',
+      'Name',
+      'DocEntry',
+      'U_DataInicial',
+      'U_DataFinal',
+      'U_Colaborador',
+      'U_VlNormal',
+      'U_StandBy',
+      'U_QtdDiarias',
+      'U_QtdDiariasSt',
+      'U_NotNor',
+      'U_NotNob',
+      'U_HExtraDiu',
+      'U_HExtraNot',
+      'U_Total',
+      'U_TxExtraDiurna',
+      'U_HrExtraDiurna',
+      'U_TxExtraNot',
+      'U_TotalGeral',
+      'U_HrExtraNot'
+    ]);
+
+    const raw = { ...data };
+
+    // Map frontend field aliases to actual SAP @CUSTOSPESSOAL column names
+    if (raw.U_StandBy === undefined && raw.U_StandByRate !== undefined) {
+      raw.U_StandBy = Number(raw.U_StandByRate) || 0;
+    }
+    if (raw.U_QtdDiarias === undefined && raw.U_QtdDiariasNormal !== undefined) {
+      raw.U_QtdDiarias = Number(raw.U_QtdDiariasNormal) || 0;
+    }
+    if (raw.U_QtdDiariasSt === undefined && raw.U_QtdDiariasStandBy !== undefined) {
+      raw.U_QtdDiariasSt = Number(raw.U_QtdDiariasStandBy) || 0;
+    }
+    if (raw.U_NotNor === undefined && raw.U_NoturnoNor !== undefined) {
+      raw.U_NotNor = Number(raw.U_NoturnoNor) || 0;
+    }
+    if (raw.U_NotNob === undefined && raw.U_NoturnoNob !== undefined) {
+      raw.U_NotNob = Number(raw.U_NoturnoNob) || 0;
+    }
+
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(raw)) {
+      if (allowedFields.has(key)) {
+        cleaned[key] = val;
+      }
+    }
+
+    return cleaned;
+  },
+
   createPersonnelCost: async (data: any) => {
+    const cleaned = sapService.sanitizePersonnelCostPayload(data);
     try {
-      const response = await api.post('/sap/CustosPessoal', data);
+      const response = await api.post('/sap/CustosPessoal', cleaned);
       return response.data;
     } catch (error) {
       try {
-        const response2 = await api.post('/sap/U_CustosPessoal', data);
+        const response2 = await api.post('/sap/U_CustosPessoal', cleaned);
         return response2.data;
       } catch (err2) {
         return handleApiError(error, 'createPersonnelCost');
@@ -1360,8 +1657,9 @@ export const sapService = {
 
   updatePersonnelCost: async (code: string | number, data: any) => {
     const cleanCode = String(code).trim().replace(/['"]/g, '');
+    const cleaned = sapService.sanitizePersonnelCostPayload(data);
     try {
-      const response = await api.patch(`/sap/CustosPessoal('${cleanCode}')`, data);
+      const response = await api.patch(`/sap/CustosPessoal('${cleanCode}')`, cleaned);
       return response.data;
     } catch (error) {
       return handleApiError(error, 'updatePersonnelCost');
