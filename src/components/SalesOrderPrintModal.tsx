@@ -111,6 +111,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
   const [pdfFileForEmail, setPdfFileForEmail] = useState<File | null>(null);
   const [extraAttachmentsForEmail, setExtraAttachmentsForEmail] = useState<StoredAttachment[]>([]);
   const [selectedExtraAttachmentIds, setSelectedExtraAttachmentIds] = useState<string[]>([]);
+  const [personalCosts, setPersonalCosts] = useState<Record<string, any>>({});
+  const [rentalCosts, setRentalCosts] = useState<Record<string, any>>({});
 
   // Load detailed order & BP data when modal opens
   useEffect(() => {
@@ -132,6 +134,37 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           }
         }
         if (isMounted) setFullOrder(currentOrderData);
+
+        // Fetch real measurements from SAP for all lines (@CUSTOSPESSOAL and @CUSTOSLOC)
+        const rawLines = Array.isArray(currentOrderData?.DocumentLines) ? currentOrderData.DocumentLines : [];
+        const pCostMap: Record<string, any> = {};
+        const rCostMap: Record<string, any> = {};
+
+        await Promise.all(rawLines.map(async (line: any) => {
+          const nItem = line.U_nItem ?? line.U_nITEM;
+          const itemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
+          if (nItem !== null && nItem !== undefined && String(nItem).trim() !== '') {
+            try {
+              const pc = await sapService.getPersonnelCost(String(nItem));
+              if (pc) pCostMap[String(nItem)] = pc;
+            } catch (e) {
+              console.warn(`Erro ao carregar custo pessoal #${nItem}:`, e);
+            }
+          }
+          if (itemLoc !== null && itemLoc !== undefined && String(itemLoc).trim() !== '') {
+            try {
+              const rc = await sapService.getRentalCost(String(itemLoc));
+              if (rc) rCostMap[String(itemLoc)] = rc;
+            } catch (e) {
+              console.warn(`Erro ao carregar custo locação #${itemLoc}:`, e);
+            }
+          }
+        }));
+
+        if (isMounted) {
+          setPersonalCosts(pCostMap);
+          setRentalCosts(rCostMap);
+        }
 
         const cardCode = currentOrderData.CardCode || order.CardCode;
         if (cardCode) {
@@ -195,6 +228,32 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
   const proposta = currentDoc.U_Proposta || currentDoc.Project || currentDoc.U_Projeto || 'teste de escopo';
   const escopo = currentDoc.Comments || currentDoc.U_Escopo || 'proppsta';
 
+  // Helper to format numeric values safely
+  const formatNum = (val: any) => {
+    if (val === undefined || val === null || val === '') return '0';
+    const n = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
+    if (isNaN(n)) return String(val);
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  };
+
+  const formatDateDisplay = (dateVal: any, fallback: string) => {
+    if (!dateVal) return fallback;
+    try {
+      const dStr = String(dateVal).split('T')[0];
+      if (dStr.includes('-')) {
+        const parts = dStr.split('-');
+        if (parts.length === 3) {
+          return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        }
+      }
+      const d = new Date(dateVal);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('pt-BR');
+      }
+    } catch {}
+    return fallback;
+  };
+
   // Extract lines and categorize into Services and Equipment
   const { serviceLines, rentalLines, servPrestado, equipLocados, descontos, totalGeral } = useMemo(() => {
     const rawLines = Array.isArray(currentDoc.DocumentLines) && currentDoc.DocumentLines.length > 0 
@@ -212,7 +271,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const qty = Number(line.Quantity || 1);
       const unitPrice = Number(line.Price || line.UnitPrice || 0);
 
-      // Parse taxa flexibly (supports "10", "10,5", 10, etc.)
+      // Parse taxa flexibly (supports "10", "10,5", 10, CommissionPercent, Commission, etc.)
       const parseTaxaVal = (val: any) => {
         if (val === undefined || val === null || val === '') return 0;
         if (typeof val === 'number') return isNaN(val) ? 0 : val;
@@ -221,59 +280,108 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         return isNaN(num) ? 0 : num;
       };
 
-      const taxaVal = parseTaxaVal(line.Taxa);
+      const rawTaxa = line.Taxa !== undefined && line.Taxa !== null && line.Taxa !== ''
+        ? line.Taxa
+        : (line.CommissionPercent ?? line.Commission);
+      const taxaVal = parseTaxaVal(rawTaxa);
       const hasTaxa = taxaVal > 0;
       const baseCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
       const lineDiscPct = Number(line.DiscountPercent) || 0;
       const lineTotal = Number(line.LineTotal) || (baseCalc * (1 - lineDiscPct / 100));
 
       if (isRental) {
+        const custoLoc = rentalCosts[String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '')] || (line as any)._rentCost;
+        const vlrOnSiteNum = custoLoc?.U_VlOnSite !== undefined && Number(custoLoc.U_VlOnSite) > 0
+          ? Number(custoLoc.U_VlOnSite)
+          : Number(line.Price || 60);
+
+        const vlrInTransitNum = custoLoc?.U_VlInTransit !== undefined && Number(custoLoc.U_VlInTransit) > 0
+          ? Number(custoLoc.U_VlInTransit)
+          : (vlrOnSiteNum * ((Number(custoLoc?.U_PercInTransit) || 50) / 100));
+
+        const rentTotalFinal = (custoLoc?.U_Total !== undefined && Number(custoLoc.U_Total) > 0)
+          ? Number(custoLoc.U_Total)
+          : lineTotal;
+
         rentals.push({
-          inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : '03/04/2025',
-          final: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : '20/04/2025',
-          qtde: Number(line.Quantity || 13).toFixed(2).replace('.', ','),
-          descricao: line.ItemDescription || line.ItemName || line.Dscription || 'Rope Access Kits - Each',
-          qtdeDias: 13,
-          vlrOnSite: Number(line.Price || 60).toFixed(2).replace('.', ','),
-          vlrInTransit: (Number(line.Price || 60) * 0.5).toFixed(2).replace('.', ','),
-          qtdeDiariasABordo: 18,
-          qtdeDiariasOnSite: 16,
-          qtdeDiariasInTransit: 2,
+          inicio: formatDateDisplay(custoLoc?.U_DataInicial || line.U_DataInicial, '03/04/2025'),
+          final: formatDateDisplay(custoLoc?.U_DataFinal || line.U_DataFinal, '20/04/2025'),
+          qtde: Number(custoLoc?.U_Quantidade || line.Quantity || 13).toFixed(2).replace('.', ','),
+          descricao: custoLoc?.U_Recurso || line.ItemDescription || line.ItemName || line.Dscription || 'Rope Access Kits - Each',
+          qtdeDias: custoLoc?.U_QtdDias ? Number(custoLoc.U_QtdDias) : 13,
+          vlrOnSite: vlrOnSiteNum.toFixed(2).replace('.', ','),
+          vlrInTransit: vlrInTransitNum.toFixed(2).replace('.', ','),
+          qtdeDiariasABordo: custoLoc?.U_QtdDiariasABordo ? Number(custoLoc.U_QtdDiariasABordo) : 18,
+          qtdeDiariasOnSite: custoLoc?.U_QtdDiariasOnSite ? Number(custoLoc.U_QtdDiariasOnSite) : 16,
+          qtdeDiariasInTransit: custoLoc?.U_QtdDiariasInTransit ? Number(custoLoc.U_QtdDiariasInTransit) : 2,
           taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
-          total: lineTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          total: rentTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       } else {
-        const vlrNormal = Number(line.Price || line.UnitPrice || 500);
-        const standByRate = vlrNormal * 0.5;
-        const qtdDobra = Number(line.U_QtdDobra || 0);
-        const percDobra = Number(line.U_PercDobra || 50);
-        const valDobra = qtdDobra * (vlrNormal * (percDobra / 100));
+        const custoPessoal = personalCosts[String(line.U_nItem ?? line.U_nITEM ?? '')] || (line as any)._persCost;
+
+        const vlrNormalNum = (custoPessoal?.U_VlNormal !== undefined && Number(custoPessoal.U_VlNormal) > 0)
+          ? Number(custoPessoal.U_VlNormal)
+          : Number(line.Price || line.UnitPrice || 500);
+
+        const standByRateNum = (custoPessoal?.U_StandBy !== undefined && Number(custoPessoal.U_StandBy) > 0)
+          ? Number(custoPessoal.U_StandBy)
+          : (vlrNormalNum * 0.5);
+
+        const qtdDobra = Number(custoPessoal?.U_QtdDobra ?? line.U_QtdDobra ?? 0);
+        const percDobra = Number(custoPessoal?.U_PercDobra ?? line.U_PercDobra ?? 50);
+        const valDobra = qtdDobra * (vlrNormalNum * (percDobra / 100));
 
         // When line has Taxa or Dobra, reflect clearly in print draft
         const valTaxaItem = hasTaxa ? (unitPrice * (taxaVal / 100) * qty) : 0;
         const totalTaxasLinha = valDobra > 0 ? valDobra : valTaxaItem;
 
-        const taxaDobText = qtdDobra > 0 
-          ? `${valDobra.toFixed(2).replace('.', ',')} (${percDobra}%)`
-          : (hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '0,00  0,00');
+        // Dobra / Taxas Extras column:
+        const hrExtraDiurna = Number(custoPessoal?.U_HrExtraDiurna || 0);
+        const hrExtraNot = Number(custoPessoal?.U_HrExtraNot || 0);
 
-        const totalTaxasStr = totalTaxasLinha > 0 
-          ? totalTaxasLinha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        let taxaDobText = '0,00  0,00';
+        if (hrExtraDiurna > 0 || hrExtraNot > 0) {
+          taxaDobText = `${formatNum(hrExtraDiurna)}  ${formatNum(hrExtraNot)}`;
+        } else if (qtdDobra > 0) {
+          taxaDobText = `${valDobra.toFixed(2).replace('.', ',')} (${percDobra}%)`;
+        } else if (hasTaxa) {
+          taxaDobText = `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
+        }
+
+        const totalTaxasVal = (custoPessoal?.U_TotalGeral !== undefined && Number(custoPessoal.U_TotalGeral) >= 0)
+          ? Number(custoPessoal.U_TotalGeral)
+          : totalTaxasLinha;
+
+        const totalTaxasStr = totalTaxasVal > 0 
+          ? totalTaxasVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : '0,00';
 
+        const lineTotalFinal = (custoPessoal?.U_Total !== undefined && Number(custoPessoal.U_Total) > 0)
+          ? Number(custoPessoal.U_Total)
+          : lineTotal;
+
+        const qtdDiariasNormal = custoPessoal?.U_QtdDiarias !== undefined ? Number(custoPessoal.U_QtdDiarias) : qty;
+        const qtdDiariasStandBy = custoPessoal?.U_QtdDiariasSt !== undefined ? Number(custoPessoal.U_QtdDiariasSt) : 0;
+        const noturnoNormal = custoPessoal?.U_NotNor !== undefined ? Number(custoPessoal.U_NotNor) : 0;
+        const noturnoDob = custoPessoal?.U_NotNob !== undefined ? Number(custoPessoal.U_NotNob) : 0;
+        const hExtraDiu = custoPessoal?.U_HExtraDiu !== undefined ? Number(custoPessoal.U_HExtraDiu) : 0;
+        const hExtraNot = custoPessoal?.U_HExtraNot !== undefined ? Number(custoPessoal.U_HExtraNot) : 0;
+
         services.push({
-          inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : (idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
-          fim: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : (idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
-          cargo: line.ItemDescription || line.ItemName || line.Dscription || 'SERVICO - LOGISTICA',
-          colaborador: line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
-          vlrNormal: vlrNormal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          standByRate: standByRate.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          diariasNormalMob: `${qty}  0`,
-          noturnoNorDob: '0  0',
-          hrExtrasDiurNot: '0  0',
+          inicio: formatDateDisplay(custoPessoal?.U_DataInicial || line.U_DataInicial, idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
+          fim: formatDateDisplay(custoPessoal?.U_DataFinal || line.U_DataFinal, idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
+          cargo: line.ItemDescription || line.ItemName || line.Dscription || custoPessoal?.Name || 'SERVICO - LOGISTICA',
+          colaborador: custoPessoal?.U_Colaborador || line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
+          vlrNormal: vlrNormalNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
+          standByRate: standByRateNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          diariasNormalMob: `${formatNum(qtdDiariasNormal)}  ${formatNum(qtdDiariasStandBy)}`,
+          noturnoNorDob: `${formatNum(noturnoNormal)}  ${formatNum(noturnoDob)}`,
+          hrExtrasDiurNot: `${formatNum(hExtraDiu)}  ${formatNum(hExtraNot)}`,
           taxaDobDiurNot: taxaDobText,
           totalTaxas: totalTaxasStr,
-          totalGeral: lineTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       }
     });
@@ -287,6 +395,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           cargo: 'Project Supervisor (NDT Specialist)/IRATA Level I or II',
           colaborador: 'Julio Scofano',
           vlrNormal: '500,00',
+          taxaPct: '-',
           standByRate: '250,00',
           diariasNormalMob: '1  1',
           noturnoNorDob: '1  1',
@@ -301,6 +410,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           cargo: 'SERVICO - LOGISTICA',
           colaborador: 'Julio Scofano',
           vlrNormal: '2.540,75',
+          taxaPct: '-',
           standByRate: '1.270,38',
           diariasNormalMob: '1  1',
           noturnoNorDob: '1  1',
@@ -315,6 +425,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           cargo: 'SERVICO - LOGISTICA',
           colaborador: 'Cleiton Ramos dos Santos',
           vlrNormal: '5,00',
+          taxaPct: '-',
           standByRate: '2,50',
           diariasNormalMob: '2  2',
           noturnoNorDob: '3  3',
@@ -336,6 +447,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         qtdeDiariasABordo: 18,
         qtdeDiariasOnSite: 16,
         qtdeDiariasInTransit: 2,
+        taxaPct: '-',
         total: '13.260,00'
       });
     }
@@ -369,7 +481,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       descontos: disc,
       totalGeral: total > 0 ? total : Math.max(0, calcServ + calcRent - disc)
     };
-  }, [currentDoc]);
+  }, [currentDoc, personalCosts, rentalCosts]);
 
   // Unified page distribution:
   // If items fit on Page 1 (<= 5 items), it remains a single-page document with services and rentals together.
@@ -632,13 +744,13 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       doc.text(isEn ? 'Breakdown of Services Rendered:' : 'Detalhamento do Serviço Prestado:', 14, currentY);
 
       const serviceHeaders = isEn ? [
-        'Start', 'End', 'Position / Role', 'Personnel', 'Standard Rate', 
+        'Start', 'End', 'Position / Role', 'Personnel', 'Standard Rate', 'Taxa %',
         'Standby Rate\nor mob x demob', 'Daily Rate\nNormal x mob', 'Night Shift\nNorm x Dbl', 
-        'Overtime\nDay - Night', 'Double / Rate\nDay-Night / %', 'Total\nFees', 'Grand\nTotal'
+        'Overtime\nDay - Night', 'Double / Fees\nDay-Night / %', 'Total\nFees', 'Grand\nTotal'
       ] : [
-        'Início', 'Fim', 'Cargo', 'Colaborador', 'Vlr. Normal', 
+        'Início', 'Fim', 'Cargo', 'Colaborador', 'Vlr. Normal', 'Taxa %',
         'Stand By Rate\nor mob x demob', 'Diarias\nNormal x mob', 'Noturno\nNor x Dob', 
-        'Hr. Extras\nDiur. - Not.', 'Taxa Dob\n/ Taxa %', 'Total\nTaxas', 'Total\nGeral'
+        'Hr. Extras\nDiur. - Not.', 'Taxa Dob\n/ Taxas', 'Total\nTaxas', 'Total\nGeral'
       ];
 
       const serviceRows = serviceLines.map(s => [
@@ -647,6 +759,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         s.cargo,
         s.colaborador,
         s.vlrNormal,
+        s.taxaPct || '-',
         s.standByRate,
         s.diariasNormalMob,
         s.noturnoNorDob,
@@ -683,16 +796,17 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         columnStyles: {
           0: { cellWidth: 15 },
           1: { cellWidth: 15 },
-          2: { cellWidth: 48 },
-          3: { cellWidth: 32 },
-          4: { cellWidth: 18, halign: 'right' },
-          5: { cellWidth: 20, halign: 'right' },
-          6: { cellWidth: 17, halign: 'center' },
-          7: { cellWidth: 17, halign: 'center' },
-          8: { cellWidth: 17, halign: 'center' },
-          9: { cellWidth: 22, halign: 'center' },
-          10: { cellWidth: 22, halign: 'right' },
-          11: { cellWidth: 26, halign: 'right', fontStyle: 'bold' }
+          2: { cellWidth: 42 },
+          3: { cellWidth: 28 },
+          4: { cellWidth: 17, halign: 'right' },
+          5: { cellWidth: 13, halign: 'center' },
+          6: { cellWidth: 17, halign: 'right' },
+          7: { cellWidth: 16, halign: 'center' },
+          8: { cellWidth: 16, halign: 'center' },
+          9: { cellWidth: 16, halign: 'center' },
+          10: { cellWidth: 24, halign: 'center' },
+          11: { cellWidth: 22, halign: 'right' },
+          12: { cellWidth: 28, halign: 'right', fontStyle: 'bold' }
         }
       });
 
@@ -1652,9 +1766,10 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                 <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-200">
                                   <th className="p-2 py-2.5">{layoutLang === 'en' ? 'Start' : 'Início'}</th>
                                   <th className="p-2 py-2.5">{layoutLang === 'en' ? 'End' : 'Fim'}</th>
-                                  <th className="p-2 py-2.5 min-w-[200px]">{layoutLang === 'en' ? 'Position / Role' : 'Cargo'}</th>
+                                  <th className="p-2 py-2.5 min-w-[180px]">{layoutLang === 'en' ? 'Position / Role' : 'Cargo'}</th>
                                   <th className="p-2 py-2.5">{layoutLang === 'en' ? 'Personnel' : 'Colaborador'}</th>
                                   <th className="p-2 py-2.5 text-right">{layoutLang === 'en' ? 'Standard Rate' : 'Vlr. Normal'}</th>
+                                  <th className="p-2 py-2.5 text-center text-evo-teal font-black">{layoutLang === 'en' ? 'Taxa %' : 'Taxa %'}</th>
                                   <th className="p-2 py-2.5 text-right leading-tight">
                                     {layoutLang === 'en' ? 'Standby Rate' : 'Stand By Rate'}
                                     <br/><span className="text-[8px] font-normal text-slate-500">or mob x demob</span>
@@ -1672,7 +1787,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     <br/><span className="text-[8px] font-normal text-slate-500">Diur. - Not.</span>
                                   </th>
                                   <th className="p-2 py-2.5 text-center leading-tight">
-                                    {layoutLang === 'en' ? 'Double / Rate' : 'Taxa Dob / Taxa %'}
+                                    {layoutLang === 'en' ? 'Double / Rate' : 'Taxa Dob / Taxas'}
                                     <br/><span className="text-[8px] font-normal text-slate-500">{layoutLang === 'en' ? 'Day - Night / %' : 'Diur. - Not. / %'}</span>
                                   </th>
                                   <th className="p-2 py-2.5 text-right leading-tight">
@@ -1693,6 +1808,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     <td className="p-2 font-bold text-slate-900">{line.cargo}</td>
                                     <td className="p-2 whitespace-nowrap">{line.colaborador}</td>
                                     <td className="p-2 text-right font-mono">{line.vlrNormal}</td>
+                                    <td className="p-2 text-center font-mono font-bold text-evo-teal">{line.taxaPct}</td>
                                     <td className="p-2 text-right font-mono">{line.standByRate}</td>
                                     <td className="p-2 text-center font-mono">{line.diariasNormalMob}</td>
                                     <td className="p-2 text-center font-mono">{line.noturnoNorDob}</td>

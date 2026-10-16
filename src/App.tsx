@@ -6238,8 +6238,16 @@ function QuotationsView({
         fullQuote.DocumentLines = fullQuote.DocumentLines.map((l: any) => {
           const nItem = l.U_nItem ?? l.U_nITEM ?? '';
           const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
+          const commVal = l.CommissionPercent ?? l.Commission;
+          const taxaVal = (commVal !== undefined && commVal !== null && Number(commVal) > 0)
+            ? String(commVal).replace('.', ',')
+            : (l.Taxa ? String(l.Taxa).replace('.', ',') : '');
+
           return {
             ...l,
+            Taxa: taxaVal,
+            CommissionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
+            Commission: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
             DiscountPercent: Number(l.DiscountPercent) || 0,
             CostingCode: l.CostingCode || 'BR',
@@ -6272,15 +6280,24 @@ function QuotationsView({
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
-      const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => ({
-        ...line,
-        DiscountPercent: Number(line.DiscountPercent) || 0,
-        CostingCode: line.CostingCode || 'BR',
-        CostingCode2: line.CostingCode2 || 'MATRIZ',
-        CostingCode3: line.CostingCode3 || 'OPER_OFF',
-        CostingCode4: line.CostingCode4 || proj,
-        ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
-      }));
+      const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => {
+        const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+          ? parseDecimalInput(line.Taxa)
+          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+
+        return {
+          ...line,
+          Taxa: line.Taxa,
+          CommissionPercent: taxaNum > 0 ? taxaNum : 0,
+          Commission: taxaNum > 0 ? taxaNum : 0,
+          DiscountPercent: Number(line.DiscountPercent) || 0,
+          CostingCode: line.CostingCode || 'BR',
+          CostingCode2: line.CostingCode2 || 'MATRIZ',
+          CostingCode3: line.CostingCode3 || 'OPER_OFF',
+          CostingCode4: line.CostingCode4 || proj,
+          ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
+        };
+      });
 
       const quoteToSave = {
         ...selectedQuote,
@@ -7676,8 +7693,16 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         fullOrder.DocumentLines = fullOrder.DocumentLines.map((l: any) => {
           const nItem = l.U_nItem ?? l.U_nITEM ?? '';
           const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
+          const commVal = l.CommissionPercent ?? l.Commission;
+          const taxaVal = (commVal !== undefined && commVal !== null && Number(commVal) > 0)
+            ? String(commVal).replace('.', ',')
+            : (l.Taxa ? String(l.Taxa).replace('.', ',') : '');
+
           return {
             ...l,
+            Taxa: taxaVal,
+            CommissionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
+            Commission: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
             DiscountPercent: Number(l.DiscountPercent) || 0,
             CostingCode: l.CostingCode || 'BR',
@@ -7714,15 +7739,24 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     try {
       const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
-      const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => ({
-        ...line,
-        DiscountPercent: Number(line.DiscountPercent) || 0,
-        CostingCode: line.CostingCode || 'BR',
-        CostingCode2: line.CostingCode2 || 'MATRIZ',
-        CostingCode3: line.CostingCode3 || 'OPER_OFF',
-        CostingCode4: line.CostingCode4 || proj,
-        ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
-      }));
+      const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => {
+        const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+          ? parseDecimalInput(line.Taxa)
+          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+
+        return {
+          ...line,
+          Taxa: line.Taxa,
+          CommissionPercent: taxaNum > 0 ? taxaNum : 0,
+          Commission: taxaNum > 0 ? taxaNum : 0,
+          DiscountPercent: Number(line.DiscountPercent) || 0,
+          CostingCode: line.CostingCode || 'BR',
+          CostingCode2: line.CostingCode2 || 'MATRIZ',
+          CostingCode3: line.CostingCode3 || 'OPER_OFF',
+          CostingCode4: line.CostingCode4 || proj,
+          ProjectCode: resolveSapFinancialProject(line.ProjectCode) || undefined
+        };
+      });
 
       const orderToSave = {
         ...selectedOrder,
