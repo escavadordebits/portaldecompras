@@ -62,6 +62,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { normalizeSapCompany } from '../services/sapService';
+import { ConfirmCloseModal } from './ConfirmCloseModal';
 
 interface ModulePermissions {
   procurement: boolean;
@@ -116,10 +117,14 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showConfirmCloseEdit, setShowConfirmCloseEdit] = useState(false);
+  const isSavingEditRef = useRef(false);
 
   // Create User Dialog (Manual Single User)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [showConfirmCloseCreate, setShowConfirmCloseCreate] = useState(false);
+  const isSavingCreateRef = useRef(false);
   const [newUser, setNewUser] = useState<any>({
     email: '',
     password: '',
@@ -195,6 +200,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
   const handleUpdateUser = async () => {
     if (!selectedUser) return;
     setIsSubmitting(true);
+    isSavingEditRef.current = true;
     try {
       const userRef = doc(db, 'users', selectedUser.id);
       const companyVal = selectedUser.sapCompany?.trim() 
@@ -243,6 +249,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
       toast.error('Erro ao atualizar usuário.');
     } finally {
       setIsSubmitting(false);
+      isSavingEditRef.current = false;
     }
   };
 
@@ -254,6 +261,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
     }
 
     setIsSubmitting(true);
+    isSavingCreateRef.current = true;
     try {
       const normalizedEmail = newUser.email.trim().toLowerCase();
       
@@ -305,6 +313,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
       toast.error('Erro ao criar novo usuário.');
     } finally {
       setIsSubmitting(false);
+      isSavingCreateRef.current = false;
     }
   };
 
@@ -1022,7 +1031,20 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
       </Card>
 
       {/* MODAL 1: CREATE NEW USER MANUALLY */}
-      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+      <Dialog 
+        open={isCreateDialogOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavingCreateRef.current) {
+              setIsCreateDialogOpen(false);
+            } else {
+              setShowConfirmCloseCreate(true);
+            }
+          } else {
+            setIsCreateDialogOpen(true);
+          }
+        }}
+      >
         <DialogContent className="rounded-none border-none shadow-2xl p-0 overflow-hidden sm:max-w-2xl max-h-[85vh] flex flex-col">
           <div className="bg-evo-dark px-8 py-5 flex-shrink-0">
             <DialogHeader>
@@ -1214,7 +1236,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
           </div>
 
           <DialogFooter className="bg-evo-bg/50 p-4 sm:p-6 border-t border-evo-bg flex-shrink-0">
-            <Button variant="ghost" onClick={() => setIsCreateDialogOpen(false)} className="rounded-none uppercase text-[10px] font-bold tracking-widest h-10">
+            <Button variant="ghost" onClick={() => setShowConfirmCloseCreate(true)} className="rounded-none uppercase text-[10px] font-bold tracking-widest h-10">
               Cancelar
             </Button>
             <Button 
@@ -1228,8 +1250,30 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
         </DialogContent>
       </Dialog>
 
+      <ConfirmCloseModal
+        isOpen={showConfirmCloseCreate}
+        onConfirm={() => {
+          setShowConfirmCloseCreate(false);
+          setIsCreateDialogOpen(false);
+        }}
+        onCancel={() => setShowConfirmCloseCreate(false)}
+      />
+
       {/* MODAL 2: EDIT USER & MAINTENANCE */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+      <Dialog 
+        open={isEditDialogOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavingEditRef.current) {
+              setIsEditDialogOpen(false);
+            } else {
+              setShowConfirmCloseEdit(true);
+            }
+          } else {
+            setIsEditDialogOpen(true);
+          }
+        }}
+      >
         <DialogContent className="rounded-none border-none shadow-2xl p-0 overflow-hidden sm:max-w-2xl max-h-[85vh] flex flex-col">
           <div className="bg-evo-dark px-8 py-5 flex-shrink-0">
             <DialogHeader>
@@ -1416,7 +1460,7 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
           </div>
 
           <DialogFooter className="bg-evo-bg/50 p-4 sm:p-6 border-t border-evo-bg flex-shrink-0">
-            <Button variant="ghost" onClick={() => setIsEditDialogOpen(false)} className="rounded-none uppercase text-[10px] font-bold tracking-widest h-10">
+            <Button variant="ghost" onClick={() => setShowConfirmCloseEdit(true)} className="rounded-none uppercase text-[10px] font-bold tracking-widest h-10">
               Cancelar
             </Button>
             <Button 
@@ -1429,6 +1473,15 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmCloseEdit}
+        onConfirm={() => {
+          setShowConfirmCloseEdit(false);
+          setIsEditDialogOpen(false);
+        }}
+        onCancel={() => setShowConfirmCloseEdit(false)}
+      />
 
       {/* MODAL 3: BATCH IMPORT EXCEL (CARGA DE USUÁRIOS) */}
       <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>

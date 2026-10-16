@@ -209,7 +209,23 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const code = (line.ItemCode || '').toLowerCase();
       const isRental = line.U_ItemLoc || desc.includes('equipamento') || desc.includes('loca') || desc.includes('kit') || desc.includes('rope') || code.includes('eq') || code.includes('loc');
 
-      const lineTotal = Number(line.LineTotal) || (Number(line.Quantity || 1) * Number(line.Price || line.UnitPrice || 0));
+      const qty = Number(line.Quantity || 1);
+      const unitPrice = Number(line.Price || line.UnitPrice || 0);
+
+      // Parse taxa flexibly (supports "10", "10,5", 10, etc.)
+      const parseTaxaVal = (val: any) => {
+        if (val === undefined || val === null || val === '') return 0;
+        if (typeof val === 'number') return isNaN(val) ? 0 : val;
+        const cleaned = String(val).replace(/\s/g, '').replace(',', '.');
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? 0 : num;
+      };
+
+      const taxaVal = parseTaxaVal(line.Taxa);
+      const hasTaxa = taxaVal > 0;
+      const baseCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+      const lineDiscPct = Number(line.DiscountPercent) || 0;
+      const lineTotal = Number(line.LineTotal) || (baseCalc * (1 - lineDiscPct / 100));
 
       if (isRental) {
         rentals.push({
@@ -223,6 +239,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           qtdeDiariasABordo: 18,
           qtdeDiariasOnSite: 16,
           qtdeDiariasInTransit: 2,
+          taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
           total: lineTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       } else {
@@ -231,9 +248,19 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         const qtdDobra = Number(line.U_QtdDobra || 0);
         const percDobra = Number(line.U_PercDobra || 50);
         const valDobra = qtdDobra * (vlrNormal * (percDobra / 100));
+
+        // When line has Taxa or Dobra, reflect clearly in print draft
+        const valTaxaItem = hasTaxa ? (unitPrice * (taxaVal / 100) * qty) : 0;
+        const totalTaxasLinha = valDobra > 0 ? valDobra : valTaxaItem;
+
         const taxaDobText = qtdDobra > 0 
           ? `${valDobra.toFixed(2).replace('.', ',')} (${percDobra}%)`
-          : '0,00  0,00';
+          : (hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '0,00  0,00');
+
+        const totalTaxasStr = totalTaxasLinha > 0 
+          ? totalTaxasLinha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : '0,00';
+
         services.push({
           inicio: line.U_DataInicial ? new Date(line.U_DataInicial).toLocaleDateString('pt-BR') : (idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
           fim: line.U_DataFinal ? new Date(line.U_DataFinal).toLocaleDateString('pt-BR') : (idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
@@ -241,11 +268,11 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           colaborador: line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
           vlrNormal: vlrNormal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
           standByRate: standByRate.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          diariasNormalMob: '1  1',
-          noturnoNorDob: '1  1',
-          hrExtrasDiurNot: '1  1',
+          diariasNormalMob: `${qty}  0`,
+          noturnoNorDob: '0  0',
+          hrExtrasDiurNot: '0  0',
           taxaDobDiurNot: taxaDobText,
-          totalTaxas: valDobra > 0 ? valDobra.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00',
+          totalTaxas: totalTaxasStr,
           totalGeral: lineTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       }
@@ -607,11 +634,11 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const serviceHeaders = isEn ? [
         'Start', 'End', 'Position / Role', 'Personnel', 'Standard Rate', 
         'Standby Rate\nor mob x demob', 'Daily Rate\nNormal x mob', 'Night Shift\nNorm x Dbl', 
-        'Overtime\nDay - Night', 'Double Rate\nDay - Night', 'Total\nFees', 'Grand\nTotal'
+        'Overtime\nDay - Night', 'Double / Rate\nDay-Night / %', 'Total\nFees', 'Grand\nTotal'
       ] : [
         'Início', 'Fim', 'Cargo', 'Colaborador', 'Vlr. Normal', 
         'Stand By Rate\nor mob x demob', 'Diarias\nNormal x mob', 'Noturno\nNor x Dob', 
-        'Hr. Extras\nDiur. - Not.', 'Taxa Dob\nDiur. - Not.', 'Total\nTaxas', 'Total\nGeral'
+        'Hr. Extras\nDiur. - Not.', 'Taxa Dob\n/ Taxa %', 'Total\nTaxas', 'Total\nGeral'
       ];
 
       const serviceRows = serviceLines.map(s => [
@@ -656,16 +683,16 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         columnStyles: {
           0: { cellWidth: 15 },
           1: { cellWidth: 15 },
-          2: { cellWidth: 55 },
+          2: { cellWidth: 48 },
           3: { cellWidth: 32 },
           4: { cellWidth: 18, halign: 'right' },
-          5: { cellWidth: 22, halign: 'right' },
-          6: { cellWidth: 18, halign: 'center' },
-          7: { cellWidth: 18, halign: 'center' },
-          8: { cellWidth: 18, halign: 'center' },
-          9: { cellWidth: 18, halign: 'center' },
-          10: { cellWidth: 14, halign: 'right' },
-          11: { cellWidth: 24, halign: 'right', fontStyle: 'bold' }
+          5: { cellWidth: 20, halign: 'right' },
+          6: { cellWidth: 17, halign: 'center' },
+          7: { cellWidth: 17, halign: 'center' },
+          8: { cellWidth: 17, halign: 'center' },
+          9: { cellWidth: 22, halign: 'center' },
+          10: { cellWidth: 22, halign: 'right' },
+          11: { cellWidth: 26, halign: 'right', fontStyle: 'bold' }
         }
       });
 
@@ -1217,7 +1244,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       <Dialog open={isOpen} onOpenChange={onClose}>
         <DialogContent 
           showCloseButton={false}
-          className="w-[96vw] max-w-[96vw] sm:max-w-[96vw] xl:max-w-[1440px] h-[94vh] max-h-[96vh] flex flex-col p-0 rounded-none border border-white/10 shadow-2xl bg-neutral-900 text-white overflow-hidden"
+          className="w-[98vw] max-w-[98vw] sm:max-w-[98vw] 2xl:max-w-[1700px] h-[95vh] max-h-[96vh] flex flex-col p-0 rounded-none border border-white/10 shadow-2xl bg-neutral-900 text-white overflow-hidden"
         >
           {/* Modal Header Bar */}
           <DialogHeader className="bg-evo-dark p-3 sm:p-4 px-4 sm:px-6 text-white border-b border-white/10 flex flex-row items-center justify-between shrink-0 gap-3">
@@ -1645,8 +1672,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     <br/><span className="text-[8px] font-normal text-slate-500">Diur. - Not.</span>
                                   </th>
                                   <th className="p-2 py-2.5 text-center leading-tight">
-                                    {layoutLang === 'en' ? 'Double Rate' : 'Taxa Dob'}
-                                    <br/><span className="text-[8px] font-normal text-slate-500">Diur. - Not.</span>
+                                    {layoutLang === 'en' ? 'Double / Rate' : 'Taxa Dob / Taxa %'}
+                                    <br/><span className="text-[8px] font-normal text-slate-500">{layoutLang === 'en' ? 'Day - Night / %' : 'Diur. - Not. / %'}</span>
                                   </th>
                                   <th className="p-2 py-2.5 text-right leading-tight">
                                     {layoutLang === 'en' ? 'Total' : 'Total'}
@@ -1670,8 +1697,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                                     <td className="p-2 text-center font-mono">{line.diariasNormalMob}</td>
                                     <td className="p-2 text-center font-mono">{line.noturnoNorDob}</td>
                                     <td className="p-2 text-center font-mono">{line.hrExtrasDiurNot}</td>
-                                    <td className="p-2 text-center font-mono text-slate-400">{line.taxaDobDiurNot}</td>
-                                    <td className="p-2 text-right font-mono text-slate-400">{line.totalTaxas}</td>
+                                    <td className="p-2 text-center font-mono text-slate-700 font-semibold">{line.taxaDobDiurNot}</td>
+                                    <td className="p-2 text-right font-mono text-slate-700 font-semibold">{line.totalTaxas}</td>
                                     <td className="p-2 text-right font-mono font-bold text-slate-900">{line.totalGeral}</td>
                                   </tr>
                                 ))}

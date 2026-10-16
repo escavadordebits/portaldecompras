@@ -54,6 +54,7 @@ import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal'
 import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSection';
 import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
 import { DocumentListFilterBar, DocumentFilters } from './components/DocumentListFilterBar';
+import { ConfirmCloseModal } from './components/ConfirmCloseModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
@@ -78,7 +79,7 @@ import {
 } from 'firebase/auth';
 import { sapService, normalizeSapCompany, resolveSapFinancialProject, getDocumentWO } from './services/sapService';
 import { matchPartnerQuery } from './utils/taxUtils';
-import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost } from './utils/costCalculations';
+import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost, parseDecimalInput } from './utils/costCalculations';
 import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
@@ -2503,8 +2504,8 @@ function DashboardView({
   const pendingApprovals = stats.approvals.filter((a: any) => a.Status === 'W' || a.Status === 'ardPending').length;
 
   const chartData = [
-    hasCosts ? { name: 'Custos Pessoal', value: Math.round(totalPersonnelCosts), color: '#00D1FF' } : null,
-    hasCosts ? { name: 'Custos Locação', value: Math.round(totalRentalCosts), color: '#3b82f6' } : null,
+    hasCosts ? { name: 'Receita Pessoa', value: Math.round(totalPersonnelCosts), color: '#00D1FF' } : null,
+    hasCosts ? { name: 'Receita Locação', value: Math.round(totalRentalCosts), color: '#3b82f6' } : null,
     hasSalesOrders ? { name: 'Ped. Venda', value: Math.round(totalSalesOrdersValue), color: '#10b981' } : null,
     hasNegotiations ? { name: 'Cotações', value: Math.round(totalSalesQuotationsValue), color: '#f59e0b' } : null,
     hasProcurement ? { name: 'Ped. Compra', value: Math.round(totalPurchaseOrdersValue), color: '#8b5cf6' } : null,
@@ -2550,7 +2551,7 @@ function DashboardView({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
             {hasCosts && (
               <StatCard 
-                title="Custos de Pessoal" 
+                title="Receita Pessoa" 
                 value={`R$ ${(totalPersonnelCosts/1000).toFixed(1)}k`} 
                 icon={<Users />}
                 description={`${stats.personnelCosts.length} lançamentos de folha e encargos`}
@@ -2558,7 +2559,7 @@ function DashboardView({
             )}
             {hasCosts && (
               <StatCard 
-                title="Custos de Locação" 
+                title="Receita Locação" 
                 value={`R$ ${(totalRentalCosts/1000).toFixed(1)}k`} 
                 icon={<Building />}
                 description={`${stats.rentalCosts.length} imóveis e instalações`}
@@ -2606,54 +2607,54 @@ function DashboardView({
             )}
           </div>
 
-          {/* DETAILED DASHBOARD SECTION: CONTROLE DE CUSTOS */}
+          {/* DETAILED DASHBOARD SECTION: CONTROLE DE RECEITAS */}
           {hasCosts && (
             <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5">
               <CardHeader className="bg-evo-dark px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Controle de Custos Detalhado</CardTitle>
-                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Análise de Custos de Pessoal, Encargos e Locação de Imóveis</p>
+                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Controle de Receitas Detalhado</CardTitle>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Análise de Receita Pessoa, Encargos e Receita Locação de Imóveis</p>
                 </div>
-                <Badge className="bg-evo-teal text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo de Custos</Badge>
+                <Badge className="bg-evo-teal text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo de Receitas</Badge>
               </CardHeader>
               <CardContent className="p-8 space-y-8">
                 {/* Metrics Row */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <div className="bg-evo-bg/50 p-6 border-l-4 border-evo-teal">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Custos de Pessoal</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Receita Pessoa</p>
                     <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalPersonnelCosts.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                     <p className="text-[9px] font-bold text-evo-teal mt-1">{stats.personnelCosts.length} lançamentos registrados</p>
                   </div>
                   <div className="bg-evo-bg/50 p-6 border-l-4 border-blue-500">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Custos de Locação</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Receita Locação</p>
                     <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalRentalCosts.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                     <p className="text-[9px] font-bold text-blue-500 mt-1">{stats.rentalCosts.length} contratos / unidades</p>
                   </div>
                   <div className="bg-evo-bg/50 p-6 border-l-4 border-indigo-500">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Consolidado Geral de Custos</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Consolidado Geral de Receitas</p>
                     <p className="text-2xl font-black text-evo-dark mt-1">R$ {(totalPersonnelCosts + totalRentalCosts).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-                    <p className="text-[9px] font-bold text-indigo-500 mt-1">Soma de saídas de pessoal e locação</p>
+                    <p className="text-[9px] font-bold text-indigo-500 mt-1">Soma de pessoal e locação</p>
                   </div>
                   <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Distribuição Pessoal vs Locação</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Distribuição Pessoa vs Locação</p>
                     <p className="text-2xl font-black text-evo-dark mt-1">
                       {totalPersonnelCosts + totalRentalCosts > 0 
                         ? `${Math.round((totalPersonnelCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}% / ${Math.round((totalRentalCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}%`
                         : '0% / 0%'}
                     </p>
-                    <p className="text-[9px] font-bold text-amber-500 mt-1">Proporção no orçamento total</p>
+                    <p className="text-[9px] font-bold text-amber-500 mt-1">Proporção no total de receitas</p>
                   </div>
                 </div>
 
                 {/* Charts & Breakdown */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                   <div>
-                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Composição de Gastos (R$)</h4>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Composição de Receitas (R$)</h4>
                     <div className="h-[250px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={[
-                          { category: 'Custos de Pessoal', valor: totalPersonnelCosts },
-                          { category: 'Custos de Locação', valor: totalRentalCosts }
+                          { category: 'Receita Pessoa', valor: totalPersonnelCosts },
+                          { category: 'Receita Locação', valor: totalRentalCosts }
                         ]}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                           <XAxis dataKey="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800 }} />
@@ -2669,7 +2670,7 @@ function DashboardView({
                   </div>
 
                   <div>
-                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Últimos Lançamentos de Custos</h4>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Últimos Lançamentos de Receitas</h4>
                     <div className="divide-y divide-evo-bg max-h-[250px] overflow-y-auto border border-evo-bg">
                       {[...stats.personnelCosts, ...stats.rentalCosts]
                         .sort((a, b) => new Date(b.DocDate || b.CreationDate || 0).getTime() - new Date(a.DocDate || a.CreationDate || 0).getTime())
@@ -2686,7 +2687,7 @@ function DashboardView({
                                 </div>
                                 <div>
                                   <p className="text-xs font-black uppercase text-evo-dark">{name}</p>
-                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isPersonnel ? 'Custo de Pessoal' : 'Custo de Locação'}</p>
+                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isPersonnel ? 'Receita Pessoa' : 'Receita Locação'}</p>
                                 </div>
                               </div>
                               <div className="text-right">
@@ -2696,7 +2697,7 @@ function DashboardView({
                           );
                         })}
                       {[...stats.personnelCosts, ...stats.rentalCosts].length === 0 && (
-                        <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-evo-dark/30 italic">Nenhum lançamento de custo encontrado</p>
+                        <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-evo-dark/30 italic">Nenhum lançamento de receita encontrado</p>
                       )}
                     </div>
                   </div>
@@ -5166,19 +5167,34 @@ function CostsView() {
   const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
+  const [showPersConfirmClose, setShowPersConfirmClose] = useState(false);
+  const isPersSavingRef = useRef(false);
+  const [showRentalConfirmClose, setShowRentalConfirmClose] = useState(false);
+  const isRentalSavingRef = useRef(false);
+
   const todayStr = new Date().toISOString().split('T')[0];
   const initialPersForm = {
     U_DataInicial: todayStr,
     U_DataFinal: todayStr,
     U_Colaborador: '',
     U_VlNormal: 0,
+    U_StandBy: 0,
     U_StandByRate: 0,
+    U_QtdDiarias: calculateNormalDiarias(todayStr, todayStr, 0, 0),
     U_QtdDiariasNormal: calculateNormalDiarias(todayStr, todayStr, 0, 0),
+    U_QtdDiariasSt: 0,
     U_QtdDiariasStandBy: 0,
+    U_NotNor: 0,
     U_NoturnoNor: 0,
+    U_NotNob: 0,
     U_NoturnoNob: 0,
     U_HExtraDiu: 0,
     U_HExtraNot: 0,
+    U_HrExtraDiurna: 0,
+    U_TxExtraDiurna: 0,
+    U_HrExtraNot: 0,
+    U_TxExtraNot: 0,
+    U_TotalGeral: 0,
     U_QtdDobra: 0,
     U_PercDobra: 50,
     U_Total: 0
@@ -5206,11 +5222,12 @@ function CostsView() {
       const calculatedNormal = calculateNormalDiarias(
         next.U_DataInicial,
         next.U_DataFinal,
-        next.U_QtdDiariasStandBy,
-        next.U_NoturnoNor
+        next.U_QtdDiariasSt ?? next.U_QtdDiariasStandBy,
+        next.U_NotNor ?? next.U_NoturnoNor
       );
       return {
         ...next,
+        U_QtdDiarias: calculatedNormal,
         U_QtdDiariasNormal: calculatedNormal
       };
     });
@@ -5219,36 +5236,58 @@ function CostsView() {
   // Computa o breakdown de receitas/custos fiel à planilha Excel e ao SAP
   const currentPersBreakdown = calculatePersonnelCost({
     valorNormal: formData.U_VlNormal,
-    qtdDiariasNormal: formData.U_QtdDiariasNormal,
-    qtdDiariasStandBy: formData.U_QtdDiariasStandBy,
-    noturnoNormal: formData.U_NoturnoNor,
-    noturnoNob: formData.U_NoturnoNob,
+    qtdDiariasNormal: formData.U_QtdDiarias ?? formData.U_QtdDiariasNormal,
+    qtdDiariasStandBy: formData.U_QtdDiariasSt ?? formData.U_QtdDiariasStandBy,
+    noturnoNormal: formData.U_NotNor ?? formData.U_NoturnoNor,
+    noturnoNob: formData.U_NotNob ?? formData.U_NoturnoNob,
     hExtraDiurna: formData.U_HExtraDiu,
     hExtraNoturna: formData.U_HExtraNot,
+    hrExtraDiurna: formData.U_HrExtraDiurna,
+    hrExtraNot: formData.U_HrExtraNot,
     qtdDobraColaborador: formData.U_QtdDobra,
     percDobraColaborador: formData.U_PercDobra
   });
 
   useEffect(() => {
-    if (formData.U_StandByRate !== currentPersBreakdown.standByRate || formData.U_Total !== currentPersBreakdown.totalGeral) {
+    if (
+      formData.U_StandBy !== currentPersBreakdown.standByRate ||
+      formData.U_StandByRate !== currentPersBreakdown.standByRate ||
+      formData.U_Total !== currentPersBreakdown.totalGeral ||
+      formData.U_TxExtraDiurna !== currentPersBreakdown.totalTxExtraDiurna ||
+      formData.U_TxExtraNot !== currentPersBreakdown.totalTxExtraNoturna ||
+      formData.U_TotalGeral !== currentPersBreakdown.totalTaxas
+    ) {
       setFormData(prev => ({ 
         ...prev, 
+        U_StandBy: currentPersBreakdown.standByRate,
         U_StandByRate: currentPersBreakdown.standByRate, 
-        U_Total: currentPersBreakdown.totalGeral 
+        U_Total: currentPersBreakdown.totalGeral,
+        U_TxExtraDiurna: currentPersBreakdown.totalTxExtraDiurna,
+        U_TxExtraNot: currentPersBreakdown.totalTxExtraNoturna,
+        U_TotalGeral: currentPersBreakdown.totalTaxas
       }));
     }
   }, [
     formData.U_VlNormal, 
+    formData.U_QtdDiarias,
     formData.U_QtdDiariasNormal, 
+    formData.U_QtdDiariasSt,
     formData.U_QtdDiariasStandBy, 
+    formData.U_NotNor,
     formData.U_NoturnoNor, 
+    formData.U_NotNob,
     formData.U_NoturnoNob, 
     formData.U_HExtraDiu, 
     formData.U_HExtraNot,
+    formData.U_HrExtraDiurna,
+    formData.U_HrExtraNot,
     formData.U_QtdDobra,
     formData.U_PercDobra,
     currentPersBreakdown.standByRate,
-    currentPersBreakdown.totalGeral
+    currentPersBreakdown.totalGeral,
+    currentPersBreakdown.totalTxExtraDiurna,
+    currentPersBreakdown.totalTxExtraNoturna,
+    currentPersBreakdown.totalTaxas
   ]);
 
   const calculateRentalTotal = () => {
@@ -5285,19 +5324,25 @@ function CostsView() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitLoading(true);
+    isPersSavingRef.current = true;
     try {
       const payload = {
         U_DataInicial: formData.U_DataInicial ? `${formData.U_DataInicial}T00:00:00Z` : null,
         U_DataFinal: formData.U_DataFinal ? `${formData.U_DataFinal}T00:00:00Z` : null,
         U_Colaborador: formData.U_Colaborador,
         U_VlNormal: Number(formData.U_VlNormal) || 0,
-        U_StandBy: Number(formData.U_StandByRate || formData.U_StandBy) || 0,
-        U_QtdDiarias: Number(formData.U_QtdDiariasNormal || formData.U_QtdDiarias) || 0,
-        U_QtdDiariasSt: Number(formData.U_QtdDiariasStandBy || formData.U_QtdDiariasSt) || 0,
-        U_NotNor: Number(formData.U_NoturnoNor || formData.U_NotNor) || 0,
-        U_NotNob: Number(formData.U_NoturnoNob || formData.U_NotNob) || 0,
+        U_StandBy: Number(formData.U_StandBy ?? formData.U_StandByRate) || 0,
+        U_QtdDiarias: Number(formData.U_QtdDiarias ?? formData.U_QtdDiariasNormal) || 0,
+        U_QtdDiariasSt: Number(formData.U_QtdDiariasSt ?? formData.U_QtdDiariasStandBy) || 0,
+        U_NotNor: Number(formData.U_NotNor ?? formData.U_NoturnoNor) || 0,
+        U_NotNob: Number(formData.U_NotNob ?? formData.U_NoturnoNob) || 0,
         U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
         U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+        U_HrExtraDiurna: Number(formData.U_HrExtraDiurna) || 0,
+        U_TxExtraDiurna: currentPersBreakdown.totalTxExtraDiurna,
+        U_HrExtraNot: Number(formData.U_HrExtraNot) || 0,
+        U_TxExtraNot: currentPersBreakdown.totalTxExtraNoturna,
+        U_TotalGeral: currentPersBreakdown.totalTaxas,
         U_Total: currentPersBreakdown.totalGeral || Number(formData.U_Total) || 0
       };
       if (editingId) {
@@ -5315,12 +5360,14 @@ function CostsView() {
       toast.error('Erro ao salvar registro de receita.');
     } finally {
       setIsSubmitLoading(false);
+      isPersSavingRef.current = false;
     }
   };
 
   const handleRentalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitLoading(true);
+    isRentalSavingRef.current = true;
     try {
       const payload: any = {
         Name: rentalFormData.U_Recurso || 'LOCAÇÃO EQUIP.',
@@ -5347,25 +5394,53 @@ function CostsView() {
       toast.error('Erro ao salvar registro de locação.');
     } finally {
       setIsSubmitLoading(false);
+      isRentalSavingRef.current = false;
     }
   };
 
   const handleEditPers = (item: any) => {
+    const start = item.U_DataInicial?.split('T')[0] || '';
+    const end = item.U_DataFinal?.split('T')[0] || '';
+    const vlNormal = Number(item.U_VlNormal) || 0;
+    const standBy = Number(item.U_StandBy ?? item.U_StandByRate) || (vlNormal / 2);
+    const qtdDiarias = Number(item.U_QtdDiarias ?? item.U_QtdDiariasNormal) || 0;
+    const qtdDiariasSt = Number(item.U_QtdDiariasSt ?? item.U_QtdDiariasStandBy) || 0;
+    const notNor = Number(item.U_NotNor ?? item.U_NoturnoNor) || 0;
+    const notNob = Number(item.U_NotNob ?? item.U_NoturnoNob) || 0;
+    const hExtraDiu = Number(item.U_HExtraDiu) || 0;
+    const hExtraNot = Number(item.U_HExtraNot) || 0;
+    const hrExtraDiurna = Number(item.U_HrExtraDiurna) || 0;
+    const txExtraDiurna = Number(item.U_TxExtraDiurna) || 0;
+    const hrExtraNot = Number(item.U_HrExtraNot) || 0;
+    const txExtraNot = Number(item.U_TxExtraNot) || 0;
+    const totalGeral = Number(item.U_TotalGeral) || 0;
+    const total = Number(item.U_Total) || 0;
+
     setFormData({
-      U_DataInicial: item.U_DataInicial?.split('T')[0] || '',
-      U_DataFinal: item.U_DataFinal?.split('T')[0] || '',
+      U_DataInicial: start,
+      U_DataFinal: end,
       U_Colaborador: item.U_Colaborador || '',
-      U_VlNormal: item.U_VlNormal || 0,
-      U_StandByRate: item.U_StandByRate || 0,
-      U_QtdDiariasNormal: item.U_QtdDiariasNormal || 0,
-      U_QtdDiariasStandBy: item.U_QtdDiariasStandBy || 0,
-      U_NoturnoNor: item.U_NoturnoNor || 0,
-      U_NoturnoNob: item.U_NoturnoNob || 0,
-      U_HExtraDiu: item.U_HExtraDiu || 0,
-      U_HExtraNot: item.U_HExtraNot || 0,
-      U_QtdDobra: item.U_QtdDobra || 0,
-      U_PercDobra: item.U_PercDobra || 50,
-      U_Total: item.U_Total || 0
+      U_VlNormal: vlNormal,
+      U_StandBy: standBy,
+      U_StandByRate: standBy,
+      U_QtdDiarias: qtdDiarias,
+      U_QtdDiariasNormal: qtdDiarias,
+      U_QtdDiariasSt: qtdDiariasSt,
+      U_QtdDiariasStandBy: qtdDiariasSt,
+      U_NotNor: notNor,
+      U_NoturnoNor: notNor,
+      U_NotNob: notNob,
+      U_NoturnoNob: notNob,
+      U_HExtraDiu: hExtraDiu,
+      U_HExtraNot: hExtraNot,
+      U_HrExtraDiurna: hrExtraDiurna,
+      U_TxExtraDiurna: txExtraDiurna,
+      U_HrExtraNot: hrExtraNot,
+      U_TxExtraNot: txExtraNot,
+      U_TotalGeral: totalGeral,
+      U_QtdDobra: Number(item.U_QtdDobra) || 0,
+      U_PercDobra: Number(item.U_PercDobra) || 50,
+      U_Total: total
     });
     setEditingId(item.Code || item.DocEntry);
     setIsPersDialogOpen(true);
@@ -5422,10 +5497,16 @@ function CostsView() {
 
         <div className="flex gap-4">
           <Dialog open={isPersDialogOpen} onOpenChange={open => {
-            setIsPersDialogOpen(open);
             if (!open) {
-              setEditingId(null);
-              setFormData(initialPersForm);
+              if (isPersSavingRef.current) {
+                setIsPersDialogOpen(false);
+                setEditingId(null);
+                setFormData(initialPersForm);
+              } else {
+                setShowPersConfirmClose(true);
+              }
+            } else {
+              setIsPersDialogOpen(true);
             }
           }}>
             <DialogTrigger render={<Button className="evo-button-primary shadow-xl" onClick={() => {
@@ -5592,8 +5673,8 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <div className="flex justify-between items-center">
-                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
-                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraDiu (Total)</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                         </div>
                         <DecimalInput 
                           value={formData.U_HExtraDiu} 
@@ -5605,8 +5686,8 @@ function CostsView() {
                       </div>
                       <div className="space-y-1.5">
                         <div className="flex justify-between items-center">
-                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
-                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                          <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraNot (Total)</Label>
+                          <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                         </div>
                         <DecimalInput 
                           value={formData.U_HExtraNot} 
@@ -5615,6 +5696,42 @@ function CostsView() {
                           placeholder="0,0"
                           title="Ex: 2,5 ou 2.5 ou 2:30"
                         />
+                      </div>
+                    </div>
+
+                    {/* Seção Taxas Extras SAP (Hr Extra Diurna, TxExtraDiurna, Hr Extra Not, TxExtraNot, Total Taxas) */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-none space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">Taxas Extras SAP (Tabela @CUSTOSPESSOAL)</span>
+                        <span className="text-[9px] font-bold font-mono text-evo-teal">Total Taxas: R$ {currentPersBreakdown.totalTaxas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Diurna</Label>
+                            <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentPersBreakdown.totalTxExtraDiurna.toFixed(2)}</span>
+                          </div>
+                          <DecimalInput 
+                            value={formData.U_HrExtraDiurna} 
+                            onChange={val => setFormData({...formData, U_HrExtraDiurna: val})} 
+                            className="rounded-none h-9 border-slate-300 bg-white font-bold" 
+                            placeholder="0,0" 
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Not</Label>
+                            <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentPersBreakdown.totalTxExtraNoturna.toFixed(2)}</span>
+                          </div>
+                          <DecimalInput 
+                            value={formData.U_HrExtraNot} 
+                            onChange={val => setFormData({...formData, U_HrExtraNot: val})} 
+                            className="rounded-none h-9 border-slate-300 bg-white font-bold" 
+                            placeholder="0,0" 
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -5652,16 +5769,24 @@ function CostsView() {
                           <span>H.E. Noturna (1.5x + 8%):</span>
                           <span className="font-mono font-bold">R$ {currentPersBreakdown.totalHExtraNoturna.toFixed(2)}</span>
                         </div>
+                        <div className="flex justify-between text-teal-300">
+                          <span>TxExtraDiurna (SAP):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalTxExtraDiurna.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-teal-300">
+                          <span>TxExtraNot (SAP):</span>
+                          <span className="font-mono font-bold">R$ {currentPersBreakdown.totalTxExtraNoturna.toFixed(2)}</span>
+                        </div>
                       </div>
                       <div className="pt-2 border-t border-white/10 flex justify-between items-center">
                         <div>
-                          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
+                          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto (U_Total)</p>
                           <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
                             R$ {currentPersBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </h3>
                         </div>
                         <div className="text-right text-[9px] text-white/60">
-                          <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentPersBreakdown.taxasNoturnas.toFixed(2)}</span></div>
+                          <div>Total Taxas (SAP): <span className="font-mono text-teal-300 font-bold">R$ {currentPersBreakdown.totalTaxas.toFixed(2)}</span></div>
                           <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentPersBreakdown.valorHora.toFixed(2)}</span></div>
                         </div>
                       </div>
@@ -5670,7 +5795,7 @@ function CostsView() {
                 </div>
 
                 <DialogFooter>
-                  <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+                  <Button type="button" variant="outline" onClick={() => setShowPersConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
                   <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none px-10">
                     {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Receita' : 'Gravar Receita'}
                   </Button>
@@ -5679,11 +5804,28 @@ function CostsView() {
             </DialogContent>
           </Dialog>
 
-          <Dialog open={isRentalDialogOpen} onOpenChange={open => {
-            setIsRentalDialogOpen(open);
-            if (!open) {
+          <ConfirmCloseModal
+            isOpen={showPersConfirmClose}
+            onConfirm={() => {
+              setShowPersConfirmClose(false);
+              setIsPersDialogOpen(false);
               setEditingId(null);
-              setRentalFormData(initialRentalForm);
+              setFormData(initialPersForm);
+            }}
+            onCancel={() => setShowPersConfirmClose(false)}
+          />
+
+          <Dialog open={isRentalDialogOpen} onOpenChange={open => {
+            if (!open) {
+              if (isRentalSavingRef.current) {
+                setIsRentalDialogOpen(false);
+                setEditingId(null);
+                setRentalFormData(initialRentalForm);
+              } else {
+                setShowRentalConfirmClose(true);
+              }
+            } else {
+              setIsRentalDialogOpen(true);
             }
           }}>
             <DialogTrigger render={<Button variant="outline" className="rounded-none h-12 uppercase text-[10px] font-black tracking-widest border-evo-dark hover:bg-evo-dark hover:text-white transition-all px-8" onClick={() => {
@@ -5768,7 +5910,7 @@ function CostsView() {
                 </div>
 
                 <DialogFooter>
-                  <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+                  <Button type="button" variant="outline" onClick={() => setShowRentalConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
                   <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none px-10">
                     {isSubmitLoading ? 'Gravando...' : editingId ? 'Atualizar Locação' : 'Gravar Locação'}
                   </Button>
@@ -5776,6 +5918,17 @@ function CostsView() {
               </form>
             </DialogContent>
           </Dialog>
+
+          <ConfirmCloseModal
+            isOpen={showRentalConfirmClose}
+            onConfirm={() => {
+              setShowRentalConfirmClose(false);
+              setIsRentalDialogOpen(false);
+              setEditingId(null);
+              setRentalFormData(initialRentalForm);
+            }}
+            onCancel={() => setShowRentalConfirmClose(false)}
+          />
         </div>
       </div>
 
@@ -5879,6 +6032,8 @@ function QuotationsView({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<any>(null);
   const [isOrderLoading, setIsOrderLoading] = useState(false);
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const isSavingQuoteRef = useRef(false);
   const [filters, setFilters] = useState<DocumentFilters>({
     docNum: '',
     wo: '',
@@ -6113,6 +6268,7 @@ function QuotationsView({
   const handleSaveQuotation = async () => {
     if (!selectedQuote) return;
     setIsOrderLoading(true);
+    isSavingQuoteRef.current = true;
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
@@ -6174,12 +6330,14 @@ function QuotationsView({
       toast.error(`Erro ao salvar cotação: ${errDetail}`);
     } finally {
       setIsOrderLoading(false);
+      isSavingQuoteRef.current = false;
     }
   };
 
   const handleGenerateOrder = async () => {
     if (!selectedQuote?.DocEntry) return;
     setIsOrderLoading(true);
+    isSavingQuoteRef.current = true;
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
@@ -6198,6 +6356,7 @@ function QuotationsView({
       toast.error(`Erro ao gerar pedido: ${errDetail}`);
     } finally {
       setIsOrderLoading(false);
+      isSavingQuoteRef.current = false;
     }
   };
 
@@ -6223,7 +6382,7 @@ function QuotationsView({
       };
       return { ...prev, DocumentLines: lines };
     });
-    toast.success(`Custo de pessoal (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+    toast.success(`Receita Pessoa (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
   const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
@@ -6248,7 +6407,7 @@ function QuotationsView({
       };
       return { ...prev, DocumentLines: lines };
     });
-    toast.success(`Custo de locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+    toast.success(`Receita Locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
   const handleAddLine = () => {
@@ -6259,6 +6418,7 @@ function QuotationsView({
       ItemCode: '', 
       ItemDescription: '', 
       Quantity: 1, 
+      Taxa: '',
       Price: 0, 
       UnitPrice: 0,
       CostingCode: 'BR',
@@ -6457,9 +6617,22 @@ function QuotationsView({
       </div>
 
       {/* Main Quotation Modal */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="sm:max-w-6xl w-[95vw] h-[90vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
-          <DialogHeader className="bg-evo-dark p-8 text-white relative shrink-0">
+      <Dialog 
+        open={isModalOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavingQuoteRef.current) {
+              setIsModalOpen(false);
+            } else {
+              setShowConfirmClose(true);
+            }
+          } else {
+            setIsModalOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="w-[98vw] max-w-[98vw] sm:max-w-[98vw] 2xl:max-w-[98vw] h-[95vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
+          <DialogHeader className="bg-evo-dark p-6 sm:p-8 text-white relative shrink-0">
             <div className="absolute top-0 right-0 p-6 flex items-center gap-4 z-10">
               {selectedQuote?.DocEntry && (selectedQuote.DocumentStatus === 'bost_Open' || selectedQuote.DocumentStatus === 'O') && (
                 <Button 
@@ -6471,9 +6644,14 @@ function QuotationsView({
                   <Zap className="ml-2 w-3 h-3 text-evo-dark" />
                 </Button>
               )}
-              <DialogClose render={<Button variant="ghost" className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none" />}>
+              <Button 
+                type="button" 
+                variant="ghost" 
+                onClick={() => setShowConfirmClose(true)} 
+                className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none"
+              >
                 <X className="w-6 h-6" />
-              </DialogClose>
+              </Button>
             </div>
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
               {selectedQuote?.DocEntry ? `Cotação #${selectedQuote.DocNum || selectedQuote.DocEntry}` : 'Nova Cotação'}
@@ -6481,7 +6659,7 @@ function QuotationsView({
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Detalhamento, WO, PO do Cliente, Itens e Comprovações em Anexo</p>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-evo-bg/30">
             {selectedQuote && (
               <div className="space-y-8">
                 {/* Header Inputs */}
@@ -6599,31 +6777,37 @@ function QuotationsView({
                   </div>
                   
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
-                    <Table className="min-w-[1300px]">
+                    <Table className="min-w-[1380px] w-full">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 min-w-[260px]">Item / Descrição</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Quant.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-24 text-center">Preço Unit.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Desc. %</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px]">País (Dim 1)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px]">Empresa (Dim 2)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Unidade (Dim 3)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Projeto / WO (Dim 4)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-6 py-4 text-white/60 text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[220px]">Item / Descrição</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[70px] w-[70px] text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[95px] w-[95px] text-center">Taxa</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[135px] w-[135px] text-center">Valor Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[75px] w-[75px] text-center">Desc. %</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[125px] w-[125px]">País (Dim 1)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px] w-[130px]">Empresa (Dim 2)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px] w-[140px]">Unidade (Dim 3)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[150px] w-[150px]">Projeto / WO (Dim 4)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[170px]">Receitas (Pessoal / Locação)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[120px] text-right">Total Linha</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {selectedQuote.DocumentLines.map((line: any, idx: number) => {
+                          const qty = Number(line.Quantity) || 0;
+                          const unitPrice = Number(line.Price ?? line.UnitPrice ?? 0);
                           const lineDiscPct = Number(line.DiscountPercent) || 0;
-                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price || line.UnitPrice || 0)) * (1 - lineDiscPct / 100);
+                          const hasTaxa = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && parseDecimalInput(line.Taxa) > 0;
+                          const taxaVal = hasTaxa ? parseDecimalInput(line.Taxa) : 0;
+                          const baseLineCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+                          const lineTotalCalc = baseLineCalc * (1 - lineDiscPct / 100);
                           const hasPersMeasurement = Number(line.linePersonnelCost) > 0;
                           const hasRentalMeasurement = Number(line.lineRentalCost) > 0;
 
                           return (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-6 py-4 min-w-[280px]">
+                            <TableCell className="px-3 py-4 min-w-[220px]">
                               <div className="space-y-1.5">
                                 <div className="flex gap-1.5">
                                   <Input 
@@ -6633,7 +6817,7 @@ function QuotationsView({
                                       setLineIndexForLookup(idx);
                                       setIsItemLookupOpen(true);
                                     }}
-                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 cursor-pointer"
+                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 cursor-pointer min-w-[100px]"
                                     placeholder="CÓDIGO (EX: ITEM-001)"
                                     title="Clique para pesquisar itens no SAP"
                                   />
@@ -6677,28 +6861,65 @@ function QuotationsView({
                                 </div>
                               </div>
                             </TableCell>
-                            <TableCell className="px-4 py-4">
-                              <Input 
-                                type="number"
-                                min="1"
-                                value={line.Quantity}
-                                onChange={(e) => updateLine(idx, 'Quantity', Number(e.target.value))}
-                                className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+
+                            {/* Quantidade */}
+                            <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
+                              <DecimalInput 
+                                value={Number(line.Quantity) || 0}
+                                onChange={(val) => updateLine(idx, 'Quantity', val)}
+                                allowTimeFormat={false}
+                                placeholder="1"
+                                className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
                               />
                             </TableCell>
-                            <TableCell className="px-4 py-4">
-                              <div className="relative">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-evo-dark/30">R$</span>
+
+                            {/* Taxa */}
+                            <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
+                              <div className="relative w-full">
                                 <Input 
-                                  type="number" 
-                                  value={line.Price || line.UnitPrice || 0}
-                                  onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
-                                  className="h-10 rounded-none text-xs border-evo-bg pl-8 text-right font-bold"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') {
+                                      updateLine(idx, 'Taxa', '');
+                                      return;
+                                    }
+                                    if (/^[-0-9.,]*$/.test(raw)) {
+                                      updateLine(idx, 'Taxa', raw);
+                                    }
+                                  }}
+                                  placeholder="0%"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
+                                  title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
+                                />
+                                {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
+                                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
+                                )}
+                              </div>
+                            </TableCell>
+
+                            {/* Valor Unitário */}
+                            <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
+                              <div className="relative w-full">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
+                                <DecimalInput 
+                                  value={Number(line.Price ?? line.UnitPrice ?? 0)}
+                                  onChange={(val) => {
+                                    updateLine(idx, 'Price', val);
+                                    updateLine(idx, 'UnitPrice', val);
+                                  }}
+                                  allowTimeFormat={false}
+                                  placeholder="0,00"
+                                  className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
                                 />
                               </div>
                             </TableCell>
-                            <TableCell className="px-3 py-4">
-                              <div className="relative">
+
+                            {/* Desconto % */}
+                            <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
+                              <div className="relative w-full">
                                 <Input 
                                   type="number"
                                   min="0"
@@ -6706,13 +6927,13 @@ function QuotationsView({
                                   step="0.5"
                                   value={line.DiscountPercent ?? 0}
                                   onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
                                   placeholder="0%"
                                 />
                               </div>
                             </TableCell>
                             {/* Dim 1: País (CostingCode) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
                               <select 
                                 value={line.CostingCode || 'BR'}
                                 onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
@@ -6734,7 +6955,7 @@ function QuotationsView({
                             </TableCell>
 
                             {/* Dim 2: Empresa (CostingCode2) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
                               <select 
                                 value={line.CostingCode2 || 'MATRIZ'}
                                 onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
@@ -6756,7 +6977,7 @@ function QuotationsView({
                             </TableCell>
 
                             {/* Dim 3: Unidade / Operação (CostingCode3) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
                               <select 
                                 value={line.CostingCode3 || 'OPER_OFF'}
                                 onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
@@ -6778,7 +6999,7 @@ function QuotationsView({
                             </TableCell>
 
                             {/* Dim 4: Projeto / WO (CostingCode4) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
                               <select 
                                 value={line.CostingCode4 || line.ProjectCode || selectedQuote.CostingCode4 || selectedQuote.U_Projeto || 'BASE'}
                                 onChange={(e) => {
@@ -6810,7 +7031,7 @@ function QuotationsView({
                                 )}
                               </select>
                             </TableCell>
-                            <TableCell className="px-6 py-4">
+                            <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
                               {(() => {
                                 const nItemVal = line.U_nItem || line.U_nITEM;
                                 const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
@@ -6878,9 +7099,14 @@ function QuotationsView({
                                 );
                               })()}
                             </TableCell>
-                            <TableCell className="px-6 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10">
+                            <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
                               <div>
                                 R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                {hasTaxa && (
+                                  <span className="block text-[8px] font-bold text-evo-teal font-mono">
+                                    (Taxa {taxaVal}%)
+                                  </span>
+                                )}
                                 {lineDiscPct > 0 && (
                                   <span className="block text-[9px] font-bold text-rose-500 font-mono">
                                     (-{lineDiscPct}%)
@@ -6902,7 +7128,10 @@ function QuotationsView({
                     const qty = Number(l.Quantity) || 0;
                     const price = Number(l.Price ?? l.UnitPrice ?? 0);
                     const lineDisc = Number(l.DiscountPercent) || 0;
-                    return acc + (qty * price * (1 - lineDisc / 100));
+                    const hasTaxa = l.Taxa !== undefined && l.Taxa !== null && String(l.Taxa).trim() !== '' && parseDecimalInput(l.Taxa) > 0;
+                    const taxaVal = hasTaxa ? parseDecimalInput(l.Taxa) : 0;
+                    const baseCalc = hasTaxa ? (price * (taxaVal / 100)) * qty : (price * qty);
+                    return acc + (baseCalc * (1 - lineDisc / 100));
                   }, 0);
 
                   const quoteDiscPct = Number(selectedQuote.DiscountPercent) || 0;
@@ -7039,7 +7268,7 @@ function QuotationsView({
           </div>
 
           <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
-            <Button variant="outline" onClick={() => setIsModalOpen(false)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
+            <Button variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
             <Button 
               onClick={handleSaveQuotation}
               disabled={isOrderLoading}
@@ -7050,6 +7279,15 @@ function QuotationsView({
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmClose}
+        onConfirm={() => {
+          setShowConfirmClose(false);
+          setIsModalOpen(false);
+        }}
+        onCancel={() => setShowConfirmClose(false)}
+      />
 
       {/* Item Lookup Dialog */}
       <LookupDialog 
@@ -7242,6 +7480,8 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const isSavingOrderRef = useRef(false);
   const [filters, setFilters] = useState<DocumentFilters>({
     docNum: '',
     wo: '',
@@ -7470,6 +7710,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       return;
     }
     setIsSaving(true);
+    isSavingOrderRef.current = true;
     try {
       const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
@@ -7508,12 +7749,14 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       toast.error(`Erro ao salvar pedido de venda: ${errDetail}`);
     } finally {
       setIsSaving(false);
+      isSavingOrderRef.current = false;
     }
   };
 
   const handleDeleteOrder = async () => {
     if (!selectedOrder?.DocEntry) return;
     setIsSaving(true);
+    isSavingOrderRef.current = true;
     try {
       await sapService.deleteOrder(selectedOrder.DocEntry);
       toast.success('Pedido de Venda excluído/cancelado.');
@@ -7523,6 +7766,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       toast.error('Erro ao excluir pedido.');
     } finally {
       setIsSaving(false);
+      isSavingOrderRef.current = false;
     }
   };
 
@@ -7548,7 +7792,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       };
       return { ...prev, DocumentLines: lines };
     });
-    toast.success(`Custo de pessoal (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+    toast.success(`Receita Pessoa (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
   const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
@@ -7573,7 +7817,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       };
       return { ...prev, DocumentLines: lines };
     });
-    toast.success(`Custo de locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculado! Linha atualizada.`);
+    toast.success(`Receita Locação (R$ ${rentalTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
   const handleAddLine = () => {
@@ -7584,6 +7828,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       ItemCode: '', 
       ItemDescription: '', 
       Quantity: 1, 
+      Taxa: '',
       Price: 0, 
       UnitPrice: 0,
       CostingCode: 'BR', 
@@ -7804,9 +8049,22 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       </div>
 
       {/* Main Order Modal */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="sm:max-w-6xl w-[95vw] h-[90vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
-          <DialogHeader className="bg-evo-dark p-8 text-white relative shrink-0">
+      <Dialog 
+        open={isModalOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavingOrderRef.current) {
+              setIsModalOpen(false);
+            } else {
+              setShowConfirmClose(true);
+            }
+          } else {
+            setIsModalOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="w-[98vw] max-w-[98vw] sm:max-w-[98vw] 2xl:max-w-[98vw] h-[95vh] flex flex-col p-0 rounded-none overflow-hidden border-none shadow-2xl">
+          <DialogHeader className="bg-evo-dark p-6 sm:p-8 text-white relative shrink-0">
             <div className="absolute top-0 right-0 p-6 flex items-center gap-3 z-10">
               {selectedOrder?.DocEntry && (
                 <Button 
@@ -7829,9 +8087,14 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                   Excluir Pedido
                 </Button>
               )}
-              <DialogClose render={<Button variant="ghost" className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none" />}>
+              <Button 
+                type="button" 
+                variant="ghost" 
+                onClick={() => setShowConfirmClose(true)} 
+                className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none"
+              >
                 <X className="w-6 h-6" />
-              </DialogClose>
+              </Button>
             </div>
             <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
               {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocNum || selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
@@ -7839,7 +8102,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda, WO, PO Cliente, Centros de Custo e Anexos de Comprovação</p>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto p-10 bg-evo-bg/30">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-evo-bg/30">
             {selectedOrder && (
               <div className="space-y-8">
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-6 bg-white p-8 border border-evo-bg shadow-sm">
@@ -7957,35 +8220,41 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                   </div>
                   
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
-                    <Table className="min-w-[1300px]">
+                    <Table className="min-w-[1380px] w-full">
                       <TableHeader className="bg-evo-dark">
                         <TableRow className="border-none hover:bg-transparent">
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 min-w-[260px]">Item / Descrição</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Quant.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-24 text-center">Preço Unit.</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-16 text-center">Desc. %</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px]">País (Dim 1)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px]">Empresa (Dim 2)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Unidade (Dim 3)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[160px]">Projeto / WO (Dim 4)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60">Custos (Pessoal / Locação)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-4 py-4 text-white/60 text-right">Total Linha</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-12 text-center"></TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[220px]">Item / Descrição</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[70px] w-[70px] text-center">Quant.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[95px] w-[95px] text-center">Taxa</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[135px] w-[135px] text-center">Valor Unit.</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[75px] w-[75px] text-center">Desc. %</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[125px] w-[125px]">País (Dim 1)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[130px] w-[130px]">Empresa (Dim 2)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px] w-[140px]">Unidade (Dim 3)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[150px] w-[150px]">Projeto / WO (Dim 4)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[170px]">Receitas (Pessoal / Locação)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[120px] text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-10 min-w-[40px] text-center"></TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {selectedOrder.DocumentLines.map((line: any, idx: number) => {
+                          const qty = Number(line.Quantity) || 0;
+                          const unitPrice = Number(line.Price ?? line.UnitPrice ?? 0);
                           const lineDiscPct = Number(line.DiscountPercent) || 0;
-                          const lineTotalCalc = (Number(line.Quantity) * Number(line.Price || line.UnitPrice || 0)) * (1 - lineDiscPct / 100);
+                          const hasTaxa = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && parseDecimalInput(line.Taxa) > 0;
+                          const taxaVal = hasTaxa ? parseDecimalInput(line.Taxa) : 0;
+                          const baseLineCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+                          const lineTotalCalc = baseLineCalc * (1 - lineDiscPct / 100);
                           return (
                           <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-4 py-4 min-w-[280px]">
+                            <TableCell className="px-3 py-4 min-w-[220px]">
                               <div className="space-y-1.5">
                                 <div className="flex gap-1.5">
                                   <Input 
                                     value={line.ItemCode || ''}
                                     onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 min-w-[120px]"
+                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 min-w-[100px]"
                                     placeholder="CÓDIGO (EX: ITEM-001)"
                                   />
                                   <Button 
@@ -8022,27 +8291,65 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                 </div>
                               </div>
                             </TableCell>
-                            <TableCell className="px-2 py-4">
-                              <Input 
-                                type="number"
-                                value={line.Quantity}
-                                onChange={(e) => updateLine(idx, 'Quantity', Number(e.target.value))}
-                                className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+
+                            {/* Quantidade */}
+                            <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
+                              <DecimalInput 
+                                value={Number(line.Quantity) || 0}
+                                onChange={(val) => updateLine(idx, 'Quantity', val)}
+                                allowTimeFormat={false}
+                                placeholder="1"
+                                className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
                               />
                             </TableCell>
-                            <TableCell className="px-2 py-4">
-                              <div className="relative">
-                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[8px] font-black text-evo-dark/30">R$</span>
+
+                            {/* Taxa */}
+                            <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
+                              <div className="relative w-full">
                                 <Input 
-                                  type="number"
-                                  value={line.Price || line.UnitPrice || 0}
-                                  onChange={(e) => updateLine(idx, 'Price', Number(e.target.value))}
-                                  className="h-10 rounded-none text-xs border-evo-bg pl-6 text-right font-bold"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') {
+                                      updateLine(idx, 'Taxa', '');
+                                      return;
+                                    }
+                                    if (/^[-0-9.,]*$/.test(raw)) {
+                                      updateLine(idx, 'Taxa', raw);
+                                    }
+                                  }}
+                                  placeholder="0%"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
+                                  title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
+                                />
+                                {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
+                                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
+                                )}
+                              </div>
+                            </TableCell>
+
+                            {/* Valor Unitário */}
+                            <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
+                              <div className="relative w-full">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
+                                <DecimalInput 
+                                  value={Number(line.Price ?? line.UnitPrice ?? 0)}
+                                  onChange={(val) => {
+                                    updateLine(idx, 'Price', val);
+                                    updateLine(idx, 'UnitPrice', val);
+                                  }}
+                                  allowTimeFormat={false}
+                                  placeholder="0,00"
+                                  className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
                                 />
                               </div>
                             </TableCell>
-                            <TableCell className="px-2 py-4">
-                              <div className="relative">
+
+                            {/* Desconto % */}
+                            <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
+                              <div className="relative w-full">
                                 <Input 
                                   type="number"
                                   min="0"
@@ -8050,13 +8357,13 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                   step="0.5"
                                   value={line.DiscountPercent ?? 0}
                                   onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
                                   placeholder="0%"
                                 />
                               </div>
                             </TableCell>
                             {/* Dim 1: País (CostingCode) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
                               <select 
                                 value={line.CostingCode || 'BR'}
                                 onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
@@ -8078,7 +8385,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                             </TableCell>
 
                             {/* Dim 2: Empresa (CostingCode2) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
                               <select 
                                 value={line.CostingCode2 || 'MATRIZ'}
                                 onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
@@ -8100,7 +8407,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                             </TableCell>
 
                             {/* Dim 3: Unidade / Operação (CostingCode3) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
                               <select 
                                 value={line.CostingCode3 || 'OPER_OFF'}
                                 onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
@@ -8122,7 +8429,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                             </TableCell>
 
                             {/* Dim 4: Projeto / WO (CostingCode4) */}
-                            <TableCell className="px-2 py-4">
+                            <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
                               <select 
                                 value={line.CostingCode4 || line.ProjectCode || selectedOrder.CostingCode4 || selectedOrder.U_Projeto || 'BASE'}
                                 onChange={(e) => {
@@ -8154,7 +8461,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                 )}
                               </select>
                             </TableCell>
-                            <TableCell className="px-4 py-4">
+                            <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
                               {(() => {
                                 const nItemVal = line.U_nItem || line.U_nITEM;
                                 const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
@@ -8175,7 +8482,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                           <User className="w-3 h-3" />
                                         </Button>
                                         <span className={`text-[8px] font-black uppercase ${nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
-                                          {nItemVal ? `#${nItemVal}` : 'S/ CUSTO'}
+                                          {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
                                         </span>
                                       </div>
                                     </div>
@@ -8197,7 +8504,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                           <Truck className="w-3 h-3" />
                                         </Button>
                                         <span className={`text-[8px] font-black uppercase ${itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
-                                          {itemLocVal ? `#${itemLocVal}` : 'S/ CUSTO'}
+                                          {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
                                         </span>
                                       </div>
                                     </div>
@@ -8205,9 +8512,14 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                 );
                               })()}
                             </TableCell>
-                            <TableCell className="px-4 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10">
+                            <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
                               <div>
                                 R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                {hasTaxa && (
+                                  <span className="block text-[8px] font-bold text-evo-teal font-mono">
+                                    (Taxa {taxaVal}%)
+                                  </span>
+                                )}
                                 {lineDiscPct > 0 && (
                                   <span className="block text-[8px] font-bold text-rose-500 font-mono">
                                     (-{lineDiscPct}%)
@@ -8215,7 +8527,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="px-2 py-4 text-center">
+                            <TableCell className="px-2 py-4 text-center w-10 min-w-[40px]">
                               {selectedOrder.DocumentLines.length > 1 && (
                                 <button onClick={() => handleRemoveLine(idx)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-none transition-colors" title="Remover Linha">
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -8236,7 +8548,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                     const qty = Number(l.Quantity) || 0;
                     const price = Number(l.Price ?? l.UnitPrice ?? 0);
                     const lineDisc = Number(l.DiscountPercent) || 0;
-                    return acc + (qty * price * (1 - lineDisc / 100));
+                    const hasTaxa = l.Taxa !== undefined && l.Taxa !== null && String(l.Taxa).trim() !== '' && parseDecimalInput(l.Taxa) > 0;
+                    const taxaVal = hasTaxa ? parseDecimalInput(l.Taxa) : 0;
+                    const baseCalc = hasTaxa ? (price * (taxaVal / 100)) * qty : (price * qty);
+                    return acc + (baseCalc * (1 - lineDisc / 100));
                   }, 0);
 
                   const orderDiscPct = Number(selectedOrder.DiscountPercent) || 0;
@@ -8384,7 +8699,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                 Visualizar Impressão (PDF)
               </Button>
             )}
-            <Button variant="outline" onClick={() => setIsModalOpen(false)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
+            <Button variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
             <Button 
               onClick={handleSaveOrder}
               disabled={isSaving}
@@ -8395,6 +8710,15 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmClose}
+        onConfirm={() => {
+          setShowConfirmClose(false);
+          setIsModalOpen(false);
+        }}
+        onCancel={() => setShowConfirmClose(false)}
+      />
 
       {/* Customer Lookup Dialog */}
       <LookupDialog 
@@ -8756,6 +9080,9 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
   const initialStartDate = new Date().toISOString().split('T')[0];
   const initialFinalDate = new Date().toISOString().split('T')[0];
 
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const isSavedRef = useRef(false);
+
   const [formData, setFormData] = useState({
     U_DataInicial: initialStartDate,
     U_DataFinal: initialFinalDate,
@@ -8768,6 +9095,11 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     U_NotNob: 0,
     U_HExtraDiu: 0,
     U_HExtraNot: 0,
+    U_HrExtraDiurna: 0,
+    U_TxExtraDiurna: 0,
+    U_HrExtraNot: 0,
+    U_TxExtraNot: 0,
+    U_TotalGeral: 0,
     U_QtdDobra: 0,
     U_PercDobra: 50,
     U_Total: 0
@@ -8805,12 +9137,19 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
             const start = existing.U_DataInicial ? existing.U_DataInicial.split('T')[0] : initialStartDate;
             const end = existing.U_DataFinal ? existing.U_DataFinal.split('T')[0] : initialFinalDate;
             const vlNormal = Number(existing.U_VlNormal) || 0;
-            const diariasNormal = Number(existing.U_QtdDiarias) || calculateNormalDiarias(start, end, Number(existing.U_QtdDiariasSt) || 0, Number(existing.U_NotNor) || 0);
+            const diariasNormal = existing.U_QtdDiarias !== undefined && existing.U_QtdDiarias !== null
+              ? Number(existing.U_QtdDiarias)
+              : calculateNormalDiarias(start, end, Number(existing.U_QtdDiariasSt) || 0, Number(existing.U_NotNor) || 0);
             const diariasStandBy = Number(existing.U_QtdDiariasSt) || 0;
             const notNor = Number(existing.U_NotNor) || 0;
             const notNob = Number(existing.U_NotNob) || 0;
             const hExtraDiu = Number(existing.U_HExtraDiu) || 0;
             const hExtraNot = Number(existing.U_HExtraNot) || 0;
+            const hrExtraDiurna = Number(existing.U_HrExtraDiurna) || 0;
+            const txExtraDiurna = Number(existing.U_TxExtraDiurna) || 0;
+            const hrExtraNot = Number(existing.U_HrExtraNot) || 0;
+            const txExtraNot = Number(existing.U_TxExtraNot) || 0;
+            const totalGeral = Number(existing.U_TotalGeral) || 0;
             const qtdDobra = Number(existing.U_QtdDobra) || 0;
             const percDobra = Number(existing.U_PercDobra) || 50;
             const total = Number(existing.U_Total) || 0;
@@ -8827,6 +9166,11 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
               U_NotNob: notNob,
               U_HExtraDiu: hExtraDiu,
               U_HExtraNot: hExtraNot,
+              U_HrExtraDiurna: hrExtraDiurna,
+              U_TxExtraDiurna: txExtraDiurna,
+              U_HrExtraNot: hrExtraNot,
+              U_TxExtraNot: txExtraNot,
+              U_TotalGeral: totalGeral,
               U_QtdDobra: qtdDobra,
               U_PercDobra: percDobra,
               U_Total: total
@@ -8855,6 +9199,11 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         U_NotNob: 0,
         U_HExtraDiu: 0,
         U_HExtraNot: 0,
+        U_HrExtraDiurna: 0,
+        U_TxExtraDiurna: 0,
+        U_HrExtraNot: 0,
+        U_TxExtraNot: 0,
+        U_TotalGeral: 0,
         U_QtdDobra: 0,
         U_PercDobra: 50,
         U_Total: 0
@@ -8871,17 +9220,28 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     noturnoNob: formData.U_NotNob,
     hExtraDiurna: formData.U_HExtraDiu,
     hExtraNoturna: formData.U_HExtraNot,
+    hrExtraDiurna: formData.U_HrExtraDiurna,
+    hrExtraNot: formData.U_HrExtraNot,
     qtdDobraColaborador: formData.U_QtdDobra,
     percDobraColaborador: formData.U_PercDobra
   });
 
   useEffect(() => {
     if (isFetchingExisting) return;
-    if (formData.U_StandBy !== currentBreakdown.standByRate || formData.U_Total !== currentBreakdown.totalGeral) {
+    if (
+      formData.U_StandBy !== currentBreakdown.standByRate || 
+      formData.U_Total !== currentBreakdown.totalGeral ||
+      formData.U_TxExtraDiurna !== currentBreakdown.totalTxExtraDiurna ||
+      formData.U_TxExtraNot !== currentBreakdown.totalTxExtraNoturna ||
+      formData.U_TotalGeral !== currentBreakdown.totalTaxas
+    ) {
       setFormData(prev => ({ 
         ...prev, 
         U_StandBy: currentBreakdown.standByRate, 
-        U_Total: currentBreakdown.totalGeral 
+        U_Total: currentBreakdown.totalGeral,
+        U_TxExtraDiurna: currentBreakdown.totalTxExtraDiurna,
+        U_TxExtraNot: currentBreakdown.totalTxExtraNoturna,
+        U_TotalGeral: currentBreakdown.totalTaxas
       }));
     }
   }, [
@@ -8893,10 +9253,15 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
     formData.U_NotNob, 
     formData.U_HExtraDiu, 
     formData.U_HExtraNot,
+    formData.U_HrExtraDiurna,
+    formData.U_HrExtraNot,
     formData.U_QtdDobra,
     formData.U_PercDobra,
     currentBreakdown.standByRate,
-    currentBreakdown.totalGeral
+    currentBreakdown.totalGeral,
+    currentBreakdown.totalTxExtraDiurna,
+    currentBreakdown.totalTxExtraNoturna,
+    currentBreakdown.totalTaxas
   ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -8918,12 +9283,18 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_HrExtraDiurna: Number(formData.U_HrExtraDiurna) || 0,
+          U_TxExtraDiurna: currentBreakdown.totalTxExtraDiurna,
+          U_HrExtraNot: Number(formData.U_HrExtraNot) || 0,
+          U_TxExtraNot: currentBreakdown.totalTxExtraNoturna,
+          U_TotalGeral: currentBreakdown.totalTaxas,
           U_Total: currentBreakdown.totalGeral || Number(formData.U_Total) || 0
         };
 
-        console.log(`Atualizando registro de custo pessoal #${cleanCode} em @CUSTOSPESSOAL:`, payload);
+        console.log(`Atualizando registro de receita pessoal #${cleanCode} em @CUSTOSPESSOAL:`, payload);
         await sapService.updatePersonnelCost(cleanCode, payload);
-        toast.success(`Custo Pessoal #${cleanCode} atualizado com sucesso no SAP!`);
+        toast.success(`Receita Pessoa #${cleanCode} atualizada com sucesso no SAP!`);
+        isSavedRef.current = true;
         onSaved(cleanCode, currentBreakdown.totalGeral);
       } else {
         // Cria novo registro com código sequencial em @CUSTOSPESSOAL
@@ -8942,30 +9313,49 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
           U_NotNob: Number(formData.U_NotNob) || 0,
           U_HExtraDiu: Number(formData.U_HExtraDiu) || 0,
           U_HExtraNot: Number(formData.U_HExtraNot) || 0,
+          U_HrExtraDiurna: Number(formData.U_HrExtraDiurna) || 0,
+          U_TxExtraDiurna: currentBreakdown.totalTxExtraDiurna,
+          U_HrExtraNot: Number(formData.U_HrExtraNot) || 0,
+          U_TxExtraNot: currentBreakdown.totalTxExtraNoturna,
+          U_TotalGeral: currentBreakdown.totalTaxas,
           U_Total: currentBreakdown.totalGeral || Number(formData.U_Total) || 0
         };
         
         console.log(`Criando novo registro em @CUSTOSPESSOAL #${newCode}:`, payload);
         await sapService.createPersonnelCost(payload);
-        toast.success(`Custo Pessoal #${newCode} criado e vinculado com sucesso!`);
+        toast.success(`Receita Pessoa #${newCode} criada e vinculada com sucesso!`);
+        isSavedRef.current = true;
         onSaved(newCode, currentBreakdown.totalGeral);
       }
     } catch (error: any) {
-      console.error('Falha ao salvar custo pessoal:', error.response?.data || error);
-      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo pessoal.';
+      console.error('Falha ao salvar receita pessoal:', error.response?.data || error);
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar receita pessoal.';
       toast.error(errorMsg);
     } finally {
       setIsLoading(false);
+      isSavedRef.current = false;
     }
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <>
+      <Dialog 
+        open={isOpen} 
+      onOpenChange={(open) => {
+        if (!open) {
+          if (isSavedRef.current) {
+            onClose();
+          } else {
+            setShowConfirmClose(true);
+          }
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
         <DialogHeader>
           <div className="flex items-center justify-between gap-4">
             <DialogTitle className="uppercase tracking-tight font-black flex items-center gap-3">
-              <span>{existingCode ? 'Editar Custo Pessoal' : 'Vincular Custo Pessoal'}</span>
+              <span>{existingCode ? 'Editar Receita Pessoa' : 'Vincular Receita Pessoa'}</span>
               {existingCode && (
                 <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-400 px-2.5 py-0.5 tracking-normal">
                   @CUSTOSPESSOAL Code #{existingCode}
@@ -9140,8 +9530,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <div className="flex justify-between items-center">
-                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Diurna</Label>
-                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraDiu (Total)</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                     </div>
                     <DecimalInput 
                       value={formData.U_HExtraDiu} 
@@ -9153,8 +9543,8 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex justify-between items-center">
-                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Noturna</Label>
-                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
+                      <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraNot (Total)</Label>
+                      <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                     </div>
                     <DecimalInput 
                       value={formData.U_HExtraNot} 
@@ -9163,6 +9553,42 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                       placeholder="0,0"
                       title="Ex: 2,5 ou 2.5 ou 2:30"
                     />
+                  </div>
+                </div>
+
+                {/* Seção Taxas Extras SAP (Hr Extra Diurna, TxExtraDiurna, Hr Extra Not, TxExtraNot, Total Taxas) */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-none space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-tight text-evo-dark">Taxas Extras SAP (Tabela @CUSTOSPESSOAL)</span>
+                    <span className="text-[9px] font-bold font-mono text-evo-teal">Total Taxas: R$ {currentBreakdown.totalTaxas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Diurna</Label>
+                        <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentBreakdown.totalTxExtraDiurna.toFixed(2)}</span>
+                      </div>
+                      <DecimalInput 
+                        value={formData.U_HrExtraDiurna} 
+                        onChange={val => setFormData({...formData, U_HrExtraDiurna: val})} 
+                        className="rounded-none h-9 border-slate-300 bg-white font-bold" 
+                        placeholder="0,0" 
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Not</Label>
+                        <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentBreakdown.totalTxExtraNoturna.toFixed(2)}</span>
+                      </div>
+                      <DecimalInput 
+                        value={formData.U_HrExtraNot} 
+                        onChange={val => setFormData({...formData, U_HrExtraNot: val})} 
+                        className="rounded-none h-9 border-slate-300 bg-white font-bold" 
+                        placeholder="0,0" 
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -9200,16 +9626,24 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
                       <span>H.E. Noturna (1.5x + 8%):</span>
                       <span className="font-mono font-bold">R$ {currentBreakdown.totalHExtraNoturna.toFixed(2)}</span>
                     </div>
+                    <div className="flex justify-between text-teal-300">
+                      <span>TxExtraDiurna (SAP):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalTxExtraDiurna.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-teal-300">
+                      <span>TxExtraNot (SAP):</span>
+                      <span className="font-mono font-bold">R$ {currentBreakdown.totalTxExtraNoturna.toFixed(2)}</span>
+                    </div>
                   </div>
                   <div className="pt-2 border-t border-white/10 flex justify-between items-center">
                     <div>
-                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto</p>
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-white/50">Total Geral Previsto (U_Total)</p>
                       <h3 className="text-2xl font-black tracking-tighter text-evo-teal">
                         R$ {currentBreakdown.totalGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </h3>
                     </div>
                     <div className="text-right text-[9px] text-white/60">
-                      <div>Taxas extras: <span className="font-mono text-teal-300 font-bold">R$ {currentBreakdown.taxasNoturnas.toFixed(2)}</span></div>
+                      <div>Total Taxas (SAP): <span className="font-mono text-teal-300 font-bold">R$ {currentBreakdown.totalTaxas.toFixed(2)}</span></div>
                       <div>Valor Base/h: <span className="font-mono text-white/90">R$ {currentBreakdown.valorHora.toFixed(2)}</span></div>
                     </div>
                   </div>
@@ -9217,15 +9651,25 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
               </div>
             </div>
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+              <Button type="button" variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
               <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
-                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações no Custo Pessoal' : 'Gravar e Vincular')}
+                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações na Receita Pessoa' : 'Gravar e Vincular')}
               </Button>
             </DialogFooter>
           </form>
         )}
       </DialogContent>
     </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmClose}
+        onConfirm={() => {
+          setShowConfirmClose(false);
+          onClose();
+        }}
+        onCancel={() => setShowConfirmClose(false)}
+      />
+    </>
   );
 }
 
@@ -9255,6 +9699,9 @@ function RentalCostModal({
 }) {
   const initialStartDate = new Date().toISOString().split('T')[0];
   const initialFinalDate = new Date().toISOString().split('T')[0];
+
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const isSavedRef = useRef(false);
 
   const [formData, setFormData] = useState({
     U_DtInicial: initialStartDate,
@@ -9356,7 +9803,8 @@ function RentalCostModal({
           U_Total: Number(currentBreakdown.totalGeral) || 0
         };
         await sapService.updateRentalCost(cleanCode, payload);
-        toast.success(`Custo Locação #${cleanCode} atualizado com sucesso no SAP!`);
+        toast.success(`Receita Locação #${cleanCode} atualizada com sucesso no SAP!`);
+        isSavedRef.current = true;
         onSaved(cleanCode, currentBreakdown.totalGeral);
       } else {
         const newCode = await sapService.getNextRentalCostCode();
@@ -9374,25 +9822,39 @@ function RentalCostModal({
           U_Total: Number(currentBreakdown.totalGeral) || 0
         };
         await sapService.createRentalCost(payload);
-        toast.success(`Custo Locação #${newCode} criado e vinculado com sucesso!`);
+        toast.success(`Receita Locação #${newCode} criada e vinculada com sucesso!`);
+        isSavedRef.current = true;
         onSaved(newCode, currentBreakdown.totalGeral);
       }
     } catch (error: any) {
-      console.error('Falha ao salvar custo locação:', error.response?.data || error);
-      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar custo de locação.';
+      console.error('Falha ao salvar receita locação:', error.response?.data || error);
+      const errorMsg = error.response?.data?.error?.message?.value || 'Erro ao salvar receita de locação.';
       toast.error(errorMsg);
     } finally {
       setIsLoading(false);
+      isSavedRef.current = false;
     }
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <>
+      <Dialog 
+        open={isOpen} 
+      onOpenChange={(open) => {
+        if (!open) {
+          if (isSavedRef.current) {
+            onClose();
+          } else {
+            setShowConfirmClose(true);
+          }
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-4xl w-[95vw] max-h-[95vh] overflow-y-auto rounded-none border-evo-teal border-t-8 shadow-2xl">
         <DialogHeader>
           <div className="flex items-center justify-between gap-4">
             <DialogTitle className="uppercase tracking-tight font-black flex items-center gap-3">
-              <span>{existingCode ? 'Editar Custo Locação' : 'Vincular Custo Locação'}</span>
+              <span>{existingCode ? 'Editar Receita Locação' : 'Vincular Receita Locação'}</span>
               {existingCode && (
                 <span className="text-[10px] font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-400 px-2.5 py-0.5 tracking-normal">
                   @CUSTOSLOC Code #{existingCode}
@@ -9403,7 +9865,7 @@ function RentalCostModal({
           <DialogDescription className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
             {existingCode 
               ? `Registro vinculado pelo campo U_ItemLoc (#${existingCode}) na linha do documento (Fórmulas Oficiais Excel).`
-              : 'Controle de custos de equipamentos e locação conforme fórmula do Excel e tabela @CUSTOSLOC.'}
+              : 'Controle de receita de equipamentos e locação conforme fórmula do Excel e tabela @CUSTOSLOC.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -9609,15 +10071,25 @@ function RentalCostModal({
             </div>
 
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest" />}>Cancelar</DialogClose>
+              <Button type="button" variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
               <Button type="submit" disabled={isLoading} className="evo-button-primary rounded-none px-10">
-                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações no Custo' : 'Gravar e Vincular')}
+                {isLoading ? 'Salvando...' : (existingCode ? 'Salvar Alterações na Receita Locação' : 'Gravar e Vincular')}
               </Button>
             </DialogFooter>
           </form>
         )}
       </DialogContent>
     </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmClose}
+        onConfirm={() => {
+          setShowConfirmClose(false);
+          onClose();
+        }}
+        onCancel={() => setShowConfirmClose(false)}
+      />
+    </>
   );
 }
 
@@ -9627,6 +10099,8 @@ function CalibrationView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
+  const isSavedRef = useRef(false);
   
   const [formData, setFormData] = useState<any>({
     U_Item: '',
@@ -9713,6 +10187,7 @@ function CalibrationView() {
 
   const handleSave = async () => {
     setIsSaving(true);
+    isSavedRef.current = true;
     try {
       if (formData.DocEntry) {
         await sapService.updateCalibrationRecord(formData.DocEntry, formData);
@@ -9730,6 +10205,7 @@ function CalibrationView() {
       toast.error('Erro ao salvar calibração.');
     } finally {
       setIsSaving(false);
+      isSavedRef.current = false;
     }
   };
 
@@ -9948,7 +10424,20 @@ function CalibrationView() {
       </div>
 
       {/* CRUD Modal */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+      <Dialog 
+        open={isModalOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavedRef.current) {
+              setIsModalOpen(false);
+            } else {
+              setShowConfirmClose(true);
+            }
+          } else {
+            setIsModalOpen(true);
+          }
+        }}
+      >
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-none border-evo-dark">
           <DialogHeader>
             <DialogTitle className="text-xl font-black uppercase tracking-tight">
@@ -10139,7 +10628,7 @@ function CalibrationView() {
           </div>
 
           <DialogFooter className="mt-8 gap-4">
-            <Button onClick={() => setIsModalOpen(false)} variant="outline" className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest">
+            <Button onClick={() => setShowConfirmClose(true)} variant="outline" className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest">
               Cancelar
             </Button>
             <Button onClick={handleSave} disabled={isSaving} className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-evo-dark text-[10px] font-black uppercase tracking-widest">
@@ -10148,6 +10637,15 @@ function CalibrationView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmClose}
+        onConfirm={() => {
+          setShowConfirmClose(false);
+          setIsModalOpen(false);
+        }}
+        onCancel={() => setShowConfirmClose(false)}
+      />
     </motion.div>
   );
 }

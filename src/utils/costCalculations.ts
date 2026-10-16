@@ -11,8 +11,12 @@ export interface PersonnelCostInput {
   qtdDiariasStandBy: number;     // K41 - Qtd diárias: Stand-by Rate (ex: 1)
   noturnoNormal: number;         // L41 - Noturno Normal (ex: 1)
   noturnoNob: number;            // M41 - Noturno Dobrado / Stand-by (ex: 1)
+  hExtraDiu?: number;            // U_HExtraDiu - Horas Extras Diurnas no Total
   hExtraDiurna: number;          // N41 - Horas Extras Diurnas (ex: 1)
+  hExtraNot?: number;            // U_HExtraNot - Horas Extras Noturnas no Total
   hExtraNoturna: number;         // O41 - Horas Extras Noturnas (ex: 1)
+  hrExtraDiurna?: number;        // U_HrExtraDiurna - Horas da Taxa Extra Diurna
+  hrExtraNot?: number;           // U_HrExtraNot - Horas da Taxa Extra Noturna
   qtdDobraColaborador?: number;  // Qtd Dobras de Colaborador (ex: 1, 1.5, 2)
   percDobraColaborador?: number; // Percentual da Dobra (40% ou 50%, padrão 50)
 }
@@ -168,18 +172,18 @@ export interface PersonnelCostBreakdown {
   unitHrExtraDiurna: number;        // (H / 12) * 1.5
   totalHrExtraDiurna: number;       // ((H / 12) * 1.5) * N
   totalHExtraDiurna: number;        // Alias for totalHrExtraDiurna
-  unitTxExtraDiurna: number;        // 0.00
-  totalTxExtraDiurna: number;       // 0.00
+  unitTxExtraDiurna: number;        // (H / 12) * 1.5
+  totalTxExtraDiurna: number;       // U_TxExtraDiurna: ((H / 12) * 1.5) * hrExtraDiurna
   unitHrExtraNoturna: number;       // (H / 12) * 1.5
   totalHrExtraNoturna: number;      // ((H / 12) * 1.5) * O
   totalHExtraNoturna: number;       // ((H / 12 * 1.5) * O) + ((H / 12 * O) * 0.08)
   unitTxExtraNoturna: number;       // (H / 12) * 0.08
-  totalTxExtraNoturna: number;      // ((H / 12) * 0.08) * O
+  totalTxExtraNoturna: number;      // U_TxExtraNot: (((H / 12) * 1.5) + ((H / 12) * 0.08)) * hrExtraNot
 
-  // Totais Consolidados
-  totalTaxas: number;               // taxaNoturnoNormal + totalTxExtraNoturna
-  taxasNoturnas: number;            // taxaNoturnoNormal + totalTxExtraNoturna
-  totalGeral: number;               // Soma exata de todos os componentes
+  // Totais Consolidados Fiel ao SAP
+  totalTaxas: number;               // U_TotalGeral no SAP = totalTxExtraDiurna + totalTxExtraNoturna
+  taxasNoturnas: number;            // U_TotalGeral no SAP
+  totalGeral: number;               // U_Total no SAP = Soma de todos os componentes
 }
 
 export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): PersonnelCostBreakdown {
@@ -189,8 +193,10 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
   const K = Math.max(0, Number(input.qtdDiariasStandBy) || 0);
   const L = Math.max(0, Number(input.noturnoNormal) || 0);
   const M = Math.max(0, Number(input.noturnoNob) || 0);
-  const N = Math.max(0, Number(input.hExtraDiurna) || 0);
-  const O = Math.max(0, Number(input.hExtraNoturna) || 0);
+  const N = Math.max(0, Number(input.hExtraDiu ?? input.hExtraDiurna) || 0);
+  const O = Math.max(0, Number(input.hExtraNot ?? input.hExtraNoturna) || 0);
+  const hrExtraDiurna = input.hrExtraDiurna !== undefined ? Math.max(0, Number(input.hrExtraDiurna) || 0) : N;
+  const hrExtraNot = input.hrExtraNot !== undefined ? Math.max(0, Number(input.hrExtraNot) || 0) : O;
   const P = Math.max(0, Number(input.qtdDobraColaborador) || 0);
   const percDobra = (input.percDobraColaborador !== undefined && Number(input.percDobraColaborador) > 0)
     ? Number(input.percDobraColaborador)
@@ -208,34 +214,36 @@ export function calculatePersonnelCost(input: Partial<PersonnelCostInput>): Pers
   const unitDobraColaborador = H * (percDobra / 100);
   const totalDobraColaborador = P * unitDobraColaborador;
 
-  // Componentes de Horas Extras
+  // Componentes de Horas Extras e Taxas Extras (Fiel ao SAP @CUSTOSPESSOAL)
   const valorHoraBase = H > 0 ? H / 12 : 0;
   const unitHrExtraDiurna = valorHoraBase * 1.5;
   const totalHrExtraDiurna = unitHrExtraDiurna * N;
   
-  const unitTxExtraDiurna = 0;
-  const totalTxExtraDiurna = 0;
+  // Taxa Extra Diurna: (Valor Normal / 12 * 1.5) * HrExtraDiurna
+  const unitTxExtraDiurna = unitHrExtraDiurna;
+  const totalTxExtraDiurna = Math.round((unitTxExtraDiurna * hrExtraDiurna) * 100) / 100;
 
+  // Taxa Extra Noturna: ((Valor Normal / 12 * 1.5) + (Valor Normal / 12 * 0.08)) * HrExtraNot
   const unitHrExtraNoturna = valorHoraBase * 1.5;
-  const totalHrExtraNoturna = unitHrExtraNoturna * O;
-
   const unitTxExtraNoturna = valorHoraBase * 0.08;
-  const totalTxExtraNoturna = unitTxExtraNoturna * O;
-  const totalHExtraNoturna = totalHrExtraNoturna + totalTxExtraNoturna;
+  const unitTaxaNoturnaTotal = unitHrExtraNoturna + unitTxExtraNoturna;
+  const totalHrExtraNoturna = unitHrExtraNoturna * O;
+  const totalTxExtraNoturna = Math.round((unitTaxaNoturnaTotal * hrExtraNot) * 100) / 100;
+  const totalHExtraNoturna = totalHrExtraNoturna + (unitTxExtraNoturna * O);
 
-  // Consolidados
-  const totalTaxas = taxaNoturnoNormal + totalTxExtraNoturna + totalDobraColaborador;
+  // Total Taxas (U_TotalGeral no SAP)
+  const totalTaxas = Math.round((totalTxExtraDiurna + totalTxExtraNoturna) * 100) / 100;
   
-  const totalGeral = 
+  // Total Geral da Linha (U_Total no SAP)
+  const totalGeral = Math.round((
     totalDiariasNormais + 
     totalDiariasStandBy + 
-    taxaNoturnoNormal + 
-    adicionalNoturnoNormal + 
+    totalNoturnoNormal + 
     totalNoturnoDobrado + 
     totalDobraColaborador +
     totalHrExtraDiurna + 
-    totalTxExtraNoturna + 
-    totalHrExtraNoturna;
+    totalHExtraNoturna
+  ) * 100) / 100;
 
   return {
     valorNormal: H,

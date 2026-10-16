@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   X, 
   Search, 
@@ -31,6 +31,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { getDocumentWO } from '../services/sapService';
+import { ConfirmCloseModal } from './ConfirmCloseModal';
 
 export interface MeasurementRecord {
   docEntry: number;
@@ -75,6 +76,8 @@ export function MeasurementsSummaryModal({
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [isAddMeasurementOpen, setIsAddMeasurementOpen] = useState(false);
   const [selectedRecordForMeasurement, setSelectedRecordForMeasurement] = useState<MeasurementRecord | null>(null);
+  const [showConfirmCloseMeasurement, setShowConfirmCloseMeasurement] = useState(false);
+  const isSavingMeasurementRef = useRef(false);
 
   // Manual measurements override stored locally
   const [manualMeasurements, setManualMeasurements] = useState<Record<number, { serviceMeasured: number; equipmentMeasured: number; notes?: string }>>({});
@@ -306,25 +309,30 @@ export function MeasurementsSummaryModal({
   const handleSaveMeasurement = () => {
     if (!selectedRecordForMeasurement) return;
 
-    const docEntry = selectedRecordForMeasurement.docEntry;
-    const updated = {
-      ...manualMeasurements,
-      [docEntry]: {
-        serviceMeasured: Number(formServiceMeasured) || 0,
-        equipmentMeasured: Number(formEquipmentMeasured) || 0,
-        notes: formNotes
-      }
-    };
-
-    setManualMeasurements(updated);
+    isSavingMeasurementRef.current = true;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {
-      console.error('Failed to save to localStorage', e);
-    }
+      const docEntry = selectedRecordForMeasurement.docEntry;
+      const updated = {
+        ...manualMeasurements,
+        [docEntry]: {
+          serviceMeasured: Number(formServiceMeasured) || 0,
+          equipmentMeasured: Number(formEquipmentMeasured) || 0,
+          notes: formNotes
+        }
+      };
 
-    toast.success(`Medição registrada com sucesso para ${selectedRecordForMeasurement.cotacao} (${selectedRecordForMeasurement.projeto})!`);
-    setIsAddMeasurementOpen(false);
+      setManualMeasurements(updated);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save to localStorage', e);
+      }
+
+      toast.success(`Medição registrada com sucesso para ${selectedRecordForMeasurement.cotacao} (${selectedRecordForMeasurement.projeto})!`);
+      setIsAddMeasurementOpen(false);
+    } finally {
+      isSavingMeasurementRef.current = false;
+    }
   };
 
   // Export to CSV
@@ -797,7 +805,20 @@ export function MeasurementsSummaryModal({
       </Dialog>
 
       {/* Sub-modal: Record Measurement for Quotation / Project */}
-      <Dialog open={isAddMeasurementOpen} onOpenChange={setIsAddMeasurementOpen}>
+      <Dialog 
+        open={isAddMeasurementOpen} 
+        onOpenChange={(open) => {
+          if (!open) {
+            if (isSavingMeasurementRef.current) {
+              setIsAddMeasurementOpen(false);
+            } else {
+              setShowConfirmCloseMeasurement(true);
+            }
+          } else {
+            setIsAddMeasurementOpen(true);
+          }
+        }}
+      >
         <DialogContent className="max-w-lg rounded-none border-slate-200 shadow-2xl p-0 overflow-hidden">
           <DialogHeader className="bg-[#1b2a4e] text-white p-6">
             <DialogTitle className="text-lg font-black uppercase tracking-tight text-white flex items-center gap-2">
@@ -901,7 +922,7 @@ export function MeasurementsSummaryModal({
           <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex justify-end gap-2">
             <Button 
               variant="outline" 
-              onClick={() => setIsAddMeasurementOpen(false)} 
+              onClick={() => setShowConfirmCloseMeasurement(true)} 
               className="rounded-none uppercase text-[10px] font-black h-10 px-4"
             >
               Cancelar
@@ -915,6 +936,15 @@ export function MeasurementsSummaryModal({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmCloseModal
+        isOpen={showConfirmCloseMeasurement}
+        onConfirm={() => {
+          setShowConfirmCloseMeasurement(false);
+          setIsAddMeasurementOpen(false);
+        }}
+        onCancel={() => setShowConfirmCloseMeasurement(false)}
+      />
     </>
   );
 }
