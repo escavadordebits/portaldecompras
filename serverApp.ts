@@ -67,7 +67,7 @@ const getSapConfig = (req: express.Request) => {
 export const normalizeCompany = (comp?: string): string => {
   if (!comp) return 'SBO_QUALITECH';
   const trimmed = comp.trim();
-  if (!trimmed || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+  if (!trimmed || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
   return trimmed;
@@ -721,6 +721,20 @@ apiRouter.all('/sap/*', async (req, res) => {
         if (!copy.CostingCode) copy.CostingCode = 'BR';
         if (!copy.CostingCode2) copy.CostingCode2 = 'MATRIZ';
         if (!copy.CostingCode3) copy.CostingCode3 = 'OPER_OFF';
+
+        const rawTaxa = copy.CommisionPercent ?? copy.CommissionPercent ?? copy.Commission ?? copy.Taxa;
+        if (rawTaxa !== undefined && rawTaxa !== null && rawTaxa !== '') {
+          const num = Number(String(rawTaxa).replace(',', '.'));
+          if (!isNaN(num) && num > 0) {
+            copy.CommisionPercent = num;
+            copy.CommissionPercent = num;
+            copy.Commission = num;
+            copy.U_nItem = null;
+            copy.U_ItemLoc = null;
+            delete copy.U_nITEM;
+            delete copy.U_ITEMLOC;
+          }
+        }
         return copy;
       });
     }

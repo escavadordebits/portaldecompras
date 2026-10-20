@@ -1172,9 +1172,15 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                 <Input 
                   value={newUser.sapCompany}
                   onChange={(e) => setNewUser({ ...newUser, sapCompany: e.target.value })}
-                  placeholder="SBO_QUALITECH"
+                  placeholder="SBO_QUALITECH ou SBO_QUALITECH_QAS"
+                  list="sap-company-options"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
+                <datalist id="sap-company-options">
+                  <option value="SBO_QUALITECH">SBO_QUALITECH (Produção)</option>
+                  <option value="SBO_QUALITECH_QAS">SBO_QUALITECH_QAS (Homologação)</option>
+                  <option value="SBO_QUALITECH_IRML">SBO_QUALITECH_IRML</option>
+                </datalist>
               </div>
             </div>
 
@@ -1397,7 +1403,8 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                 <Input 
                   value={selectedUser?.sapCompany || ''}
                   onChange={(e) => setSelectedUser({ ...selectedUser, sapCompany: e.target.value })}
-                  placeholder="SBO_QUALITECH"
+                  placeholder="SBO_QUALITECH ou SBO_QUALITECH_QAS"
+                  list="sap-company-options"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
               </div>

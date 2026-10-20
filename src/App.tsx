@@ -721,11 +721,11 @@ export default function App() {
   useEffect(() => {
     const defaultComp = 'SBO_QUALITECH';
     const storedComp = localStorage.getItem('sap_portal_company');
-    if (!storedComp || storedComp === 'SBO_QUALITECH_QAS' || storedComp === 'QUALITECH' || storedComp === 'SBO_QUALITECH_' || storedComp === 'SBO_QUALITECH_IRML') {
+    if (!storedComp || storedComp === 'QUALITECH' || storedComp === 'SBO_QUALITECH_') {
       localStorage.setItem('sap_portal_company', defaultComp);
     }
     const sessionComp = sessionStorage.getItem('sap_portal_company');
-    if (!sessionComp || sessionComp === 'SBO_QUALITECH_QAS' || sessionComp === 'QUALITECH' || sessionComp === 'SBO_QUALITECH_' || sessionComp === 'SBO_QUALITECH_IRML') {
+    if (!sessionComp || sessionComp === 'QUALITECH' || sessionComp === 'SBO_QUALITECH_') {
       sessionStorage.setItem('sap_portal_company', defaultComp);
     }
 
@@ -762,7 +762,9 @@ export default function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [loginCompany, setLoginCompany] = useState('SBO_QUALITECH');
+  const [loginCompany, setLoginCompany] = useState(() => {
+    return localStorage.getItem('sap_portal_company') || 'SBO_QUALITECH';
+  });
 
   // SAP Config State
   const [sapConfig, setSapConfig] = useState<SAPConfig>(() => {
@@ -1192,6 +1194,7 @@ export default function App() {
       localStorage.removeItem('sap_portal_active_user');
       if (activeProfile.sapCompany) {
         sessionStorage.setItem('sap_portal_company', activeProfile.sapCompany);
+        localStorage.setItem('sap_portal_company', activeProfile.sapCompany);
       }
 
       // 5. Validar conexão de sessão do SAP
@@ -1503,14 +1506,14 @@ export default function App() {
         }] : []),
         ...(activeModules.salesOrders ? [{
           id: 'sales-orders',
-          label: 'Pedido de Venda',
+          label: 'Pedido de Venda (Draft Invoice)',
           icon: <ShoppingCart />,
           active: currentView === 'sales-orders',
           onClick: () => {
             setCurrentView('sales-orders');
             if (window.innerWidth < 1024) setSidebarOpen(false);
           },
-          keywords: ['venda', 'pedido de venda', 'wo', 'po cliente', 'orders']
+          keywords: ['venda', 'pedido de venda', 'wo', 'po cliente', 'orders', 'draft invoice']
         }] : [])
       ]
     },
@@ -1910,7 +1913,7 @@ export default function App() {
                 onClick={() => setCurrentView('sales-orders')}
                 className={`evo-nav-link ${currentView === 'sales-orders' ? 'active' : ''}`}
               >
-                Vendas
+                Vendas (Draft Invoice)
               </button>
             )}
             {activeModules.quality && (
@@ -6236,16 +6239,18 @@ function QuotationsView({
       const fullQuote = await sapService.getQuotation(quote.DocEntry);
       if (fullQuote && fullQuote.DocumentLines) {
         fullQuote.DocumentLines = fullQuote.DocumentLines.map((l: any) => {
-          const nItem = l.U_nItem ?? l.U_nITEM ?? '';
-          const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
-          const commVal = l.CommissionPercent ?? l.Commission;
+          const commVal = l.CommisionPercent ?? l.CommissionPercent ?? l.Commission;
           const taxaVal = (commVal !== undefined && commVal !== null && Number(commVal) > 0)
             ? String(commVal).replace('.', ',')
             : (l.Taxa ? String(l.Taxa).replace('.', ',') : '');
+          const hasTaxa = (Number(commVal) > 0) || (taxaVal !== '' && parseDecimalInput(taxaVal) > 0);
+          const nItem = hasTaxa ? '' : (l.U_nItem ?? l.U_nITEM ?? '');
+          const itemLoc = hasTaxa ? '' : (l.U_ItemLoc ?? l.U_ITEMLOC ?? '');
 
           return {
             ...l,
             Taxa: taxaVal,
+            CommisionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             CommissionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             Commission: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
@@ -6283,13 +6288,19 @@ function QuotationsView({
       const preparedLines = (selectedQuote.DocumentLines || []).map((line: any) => {
         const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
           ? parseDecimalInput(line.Taxa)
-          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+          : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+        const hasTaxa = taxaNum > 0;
 
         return {
           ...line,
           Taxa: line.Taxa,
-          CommissionPercent: taxaNum > 0 ? taxaNum : 0,
-          Commission: taxaNum > 0 ? taxaNum : 0,
+          CommisionPercent: hasTaxa ? taxaNum : 0,
+          CommissionPercent: hasTaxa ? taxaNum : 0,
+          Commission: hasTaxa ? taxaNum : 0,
+          U_nItem: hasTaxa ? null : (line.U_nItem ?? null),
+          U_nITEM: hasTaxa ? null : (line.U_nITEM ?? null),
+          U_ItemLoc: hasTaxa ? null : (line.U_ItemLoc ?? null),
+          U_ITEMLOC: hasTaxa ? null : (line.U_ITEMLOC ?? null),
           DiscountPercent: Number(line.DiscountPercent) || 0,
           CostingCode: line.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || 'MATRIZ',
@@ -6391,6 +6402,9 @@ function QuotationsView({
 
       lines[lineIdx] = {
         ...line,
+        Taxa: '',
+        Commission: 0,
+        CommissionPercent: 0,
         U_nItem: code,
         U_nITEM: code,
         linePersonnelCost: newPersonnelCost,
@@ -6402,7 +6416,7 @@ function QuotationsView({
     toast.success(`Receita Pessoa (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
-  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
+  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number, measurementData?: any) => {
     setSelectedQuote((prev: any) => {
       if (!prev) return prev;
       const lines = [...(prev.DocumentLines || [])];
@@ -6416,9 +6430,13 @@ function QuotationsView({
 
       lines[lineIdx] = {
         ...line,
+        Taxa: '',
+        Commission: 0,
+        CommissionPercent: 0,
         U_ItemLoc: code,
         U_ITEMLOC: code,
         lineRentalCost: newRentalCost,
+        _rentCost: measurementData,
         Price: combinedTotal > 0 ? newUnitPrice : line.Price,
         UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
       };
@@ -6461,10 +6479,23 @@ function QuotationsView({
       if (!prev) return prev;
       const newLines = [...(prev.DocumentLines || [])];
       if (newLines[index]) {
+        const isTaxaField = field === 'Taxa';
+        const taxaVal = isTaxaField ? parseDecimalInput(value) : 0;
         newLines[index] = { 
           ...newLines[index], 
           [field]: value,
-          ...(field === 'CostingCode4' ? { ProjectCode: value } : {})
+          ...(field === 'CostingCode4' ? { ProjectCode: value } : {}),
+          ...(isTaxaField && taxaVal > 0 ? {
+            CommisionPercent: taxaVal,
+            Commission: taxaVal,
+            CommissionPercent: taxaVal,
+            U_nItem: '',
+            U_nITEM: '',
+            U_ItemLoc: '',
+            U_ITEMLOC: '',
+            linePersonnelCost: 0,
+            lineRentalCost: 0
+          } : {})
         };
       }
       return { ...prev, DocumentLines: newLines };
@@ -7050,8 +7081,12 @@ function QuotationsView({
                             </TableCell>
                             <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
                               {(() => {
-                                const nItemVal = line.U_nItem || line.U_nITEM;
-                                const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
+                                const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+                                  ? parseDecimalInput(line.Taxa)
+                                  : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+                                const hasTaxa = taxaNum > 0;
+                                const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
+                                const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
                                 return (
                                   <div className="space-y-1.5">
                                     <div className="flex items-center gap-6">
@@ -7061,17 +7096,28 @@ function QuotationsView({
                                           <Button 
                                             size="sm" 
                                             variant="ghost" 
-                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                            disabled={hasTaxa}
+                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${
+                                              hasTaxa 
+                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                : nItemVal 
+                                                  ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
+                                                  : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
+                                            }`}
                                             onClick={() => {
+                                              if (hasTaxa) {
+                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                return;
+                                              }
                                               setActiveLineIndex(idx);
                                               setIsPersCostModalOpen(true);
                                             }}
-                                            title={nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
+                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
                                           >
                                             <User className="w-3.5 h-3.5" />
                                           </Button>
-                                          <span className={`text-[9px] font-black uppercase font-mono ${nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
-                                            {nItemVal ? `#${nItemVal}` : 'PENDENTE'}
+                                          <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                            {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
                                           </span>
                                         </div>
                                       </div>
@@ -7084,17 +7130,28 @@ function QuotationsView({
                                           <Button 
                                             size="sm" 
                                             variant="ghost" 
-                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                            disabled={hasTaxa}
+                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${
+                                              hasTaxa 
+                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                : itemLocVal 
+                                                  ? 'bg-indigo-100 border-indigo-400 text-indigo-700' 
+                                                  : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
+                                            }`}
                                             onClick={() => {
+                                              if (hasTaxa) {
+                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                return;
+                                              }
                                               setActiveLineIndex(idx);
                                               setIsRentalCostModalOpen(true);
                                             }}
-                                            title={itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
+                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
                                           >
                                             <Truck className="w-3.5 h-3.5" />
                                           </Button>
-                                          <span className={`text-[9px] font-black uppercase font-mono ${itemLocVal ? 'text-indigo-600' : 'text-indigo-400'}`}>
-                                            {itemLocVal ? `#${itemLocVal}` : 'PENDENTE'}
+                                          <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-indigo-600' : 'text-indigo-400'}`}>
+                                            {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
                                           </span>
                                         </div>
                                       </div>
@@ -7480,9 +7537,9 @@ function QuotationsView({
         itemCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? selectedQuote.DocumentLines[activeLineIndex].ItemCode : ''}
         initialUnitPrice={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? Number(selectedQuote.DocumentLines[activeLineIndex].Price || selectedQuote.DocumentLines[activeLineIndex].UnitPrice || 0) : 0}
         lineQuantity={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? Number(selectedQuote.DocumentLines[activeLineIndex].Quantity || 1) : 1}
-        onSaved={(code, calculatedTotal) => {
+        onSaved={(code, calculatedTotal, measurementData) => {
           if (activeLineIndex !== null) {
-            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal);
+            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal, measurementData);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -7691,16 +7748,18 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       const fullOrder = await sapService.getOrder(order.DocEntry);
       if (fullOrder && fullOrder.DocumentLines) {
         fullOrder.DocumentLines = fullOrder.DocumentLines.map((l: any) => {
-          const nItem = l.U_nItem ?? l.U_nITEM ?? '';
-          const itemLoc = l.U_ItemLoc ?? l.U_ITEMLOC ?? '';
-          const commVal = l.CommissionPercent ?? l.Commission;
+          const commVal = l.CommisionPercent ?? l.CommissionPercent ?? l.Commission;
           const taxaVal = (commVal !== undefined && commVal !== null && Number(commVal) > 0)
             ? String(commVal).replace('.', ',')
             : (l.Taxa ? String(l.Taxa).replace('.', ',') : '');
+          const hasTaxa = (Number(commVal) > 0) || (taxaVal !== '' && parseDecimalInput(taxaVal) > 0);
+          const nItem = hasTaxa ? '' : (l.U_nItem ?? l.U_nITEM ?? '');
+          const itemLoc = hasTaxa ? '' : (l.U_ItemLoc ?? l.U_ITEMLOC ?? '');
 
           return {
             ...l,
             Taxa: taxaVal,
+            CommisionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             CommissionPercent: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             Commission: commVal !== undefined && commVal !== null ? Number(commVal) : (taxaVal ? parseDecimalInput(taxaVal) : undefined),
             ItemDescription: l.ItemDescription || l.ItemName || l.Dscription || '',
@@ -7742,13 +7801,19 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       const preparedLines = (selectedOrder.DocumentLines || []).map((line: any) => {
         const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
           ? parseDecimalInput(line.Taxa)
-          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+          : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+        const hasTaxa = taxaNum > 0;
 
         return {
           ...line,
           Taxa: line.Taxa,
-          CommissionPercent: taxaNum > 0 ? taxaNum : 0,
-          Commission: taxaNum > 0 ? taxaNum : 0,
+          CommisionPercent: hasTaxa ? taxaNum : 0,
+          CommissionPercent: hasTaxa ? taxaNum : 0,
+          Commission: hasTaxa ? taxaNum : 0,
+          U_nItem: hasTaxa ? null : (line.U_nItem ?? null),
+          U_nITEM: hasTaxa ? null : (line.U_nITEM ?? null),
+          U_ItemLoc: hasTaxa ? null : (line.U_ItemLoc ?? null),
+          U_ITEMLOC: hasTaxa ? null : (line.U_ITEMLOC ?? null),
           DiscountPercent: Number(line.DiscountPercent) || 0,
           CostingCode: line.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || 'MATRIZ',
@@ -7818,6 +7883,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
 
       lines[lineIdx] = {
         ...line,
+        Taxa: '',
+        Commission: 0,
+        CommissionPercent: 0,
         U_nItem: code,
         U_nITEM: code,
         linePersonnelCost: newPersonnelCost,
@@ -7829,7 +7897,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     toast.success(`Receita Pessoa (R$ ${personnelTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) vinculada! Linha atualizada.`);
   };
 
-  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number) => {
+  const handleSaveRentalMeasurement = (lineIdx: number, code: string, rentalTotal: number, measurementData?: any) => {
     setSelectedOrder((prev: any) => {
       if (!prev) return prev;
       const lines = [...(prev.DocumentLines || [])];
@@ -7843,9 +7911,13 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
 
       lines[lineIdx] = {
         ...line,
+        Taxa: '',
+        Commission: 0,
+        CommissionPercent: 0,
         U_ItemLoc: code,
         U_ITEMLOC: code,
         lineRentalCost: newRentalCost,
+        _rentCost: measurementData,
         Price: combinedTotal > 0 ? newUnitPrice : line.Price,
         UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
       };
@@ -7896,10 +7968,23 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       if (!prev) return prev;
       const newLines = [...(prev.DocumentLines || [])];
       if (newLines[index]) {
+        const isTaxaField = field === 'Taxa';
+        const taxaVal = isTaxaField ? parseDecimalInput(value) : 0;
         newLines[index] = { 
           ...newLines[index], 
           [field]: value,
-          ...(field === 'CostingCode4' ? { ProjectCode: value } : {})
+          ...(field === 'CostingCode4' ? { ProjectCode: value } : {}),
+          ...(isTaxaField && taxaVal > 0 ? {
+            CommisionPercent: taxaVal,
+            CommissionPercent: taxaVal,
+            Commission: taxaVal,
+            U_nItem: '',
+            U_nITEM: '',
+            U_ItemLoc: '',
+            U_ITEMLOC: '',
+            linePersonnelCost: 0,
+            lineRentalCost: 0
+          } : {})
         };
       }
       return { ...prev, DocumentLines: newLines };
@@ -7912,7 +7997,7 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         <div>
           <div className="flex items-center gap-3">
             <ShoppingCart className="w-8 h-8 text-evo-teal" />
-            <h1 className="text-3xl font-black tracking-tighter uppercase text-evo-dark">Pedidos de Venda (Orders)</h1>
+            <h1 className="text-3xl font-black tracking-tighter uppercase text-evo-dark">Pedidos de Venda (Draft Invoice)</h1>
           </div>
           <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas, WO, PO Cliente e Documentos Comprobatórios</p>
         </div>
@@ -8497,8 +8582,12 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                             </TableCell>
                             <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
                               {(() => {
-                                const nItemVal = line.U_nItem || line.U_nITEM;
-                                const itemLocVal = line.U_ItemLoc || line.U_ITEMLOC;
+                                const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+                                  ? parseDecimalInput(line.Taxa)
+                                  : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+                                const hasTaxa = taxaNum > 0;
+                                const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
+                                const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
                                 return (
                                   <div className="flex items-center gap-4">
                                     <div className="flex flex-col gap-0.5">
@@ -8507,15 +8596,27 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                         <Button 
                                           size="sm" 
                                           variant="ghost" 
-                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${nItemVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'}`}
+                                          disabled={hasTaxa}
+                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${
+                                            hasTaxa 
+                                              ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                              : nItemVal 
+                                                ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
+                                          }`}
                                           onClick={() => {
+                                            if (hasTaxa) {
+                                              toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                              return;
+                                            }
                                             setActiveLineIndex(idx);
                                             setIsPersCostModalOpen(true);
                                           }}
+                                          title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
                                         >
                                           <User className="w-3 h-3" />
                                         </Button>
-                                        <span className={`text-[8px] font-black uppercase ${nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
+                                        <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
                                           {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
                                         </span>
                                       </div>
@@ -8529,15 +8630,27 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                                         <Button 
                                           size="sm" 
                                           variant="ghost" 
-                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${itemLocVal ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'}`}
+                                          disabled={hasTaxa}
+                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${
+                                            hasTaxa 
+                                              ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                              : itemLocVal 
+                                                ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
+                                                : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
+                                          }`}
                                           onClick={() => {
+                                            if (hasTaxa) {
+                                              toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                              return;
+                                            }
                                             setActiveLineIndex(idx);
                                             setIsRentalCostModalOpen(true);
                                           }}
+                                          title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
                                         >
                                           <Truck className="w-3 h-3" />
                                         </Button>
-                                        <span className={`text-[8px] font-black uppercase ${itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
+                                        <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
                                           {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
                                         </span>
                                       </div>
@@ -8928,9 +9041,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         itemCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? selectedOrder.DocumentLines[activeLineIndex].ItemCode : ''}
         initialUnitPrice={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? Number(selectedOrder.DocumentLines[activeLineIndex].Price || selectedOrder.DocumentLines[activeLineIndex].UnitPrice || 0) : 0}
         lineQuantity={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? Number(selectedOrder.DocumentLines[activeLineIndex].Quantity || 1) : 1}
-        onSaved={(code, calculatedTotal) => {
+        onSaved={(code, calculatedTotal, measurementData) => {
           if (activeLineIndex !== null) {
-            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal);
+            handleSaveRentalMeasurement(activeLineIndex, code, calculatedTotal, measurementData);
           }
           setIsRentalCostModalOpen(false);
         }}
@@ -9722,7 +9835,7 @@ function RentalCostModal({
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (code: string, calculatedTotal: number) => void,
+  onSaved: (code: string, calculatedTotal: number, measurementData?: any) => void,
   docEntry?: number,
   lineIndex: number | null,
   existingCode?: string | number | null,
@@ -9758,10 +9871,10 @@ function RentalCostModal({
       sapService.getRentalCost(String(existingCode))
         .then((existing: any) => {
           if (existing) {
-            const dtInit = existing.U_DtInicial ? existing.U_DtInicial.split('T')[0] : initialStartDate;
-            const dtFin = existing.U_DtFinal ? existing.U_DtFinal.split('T')[0] : initialFinalDate;
-            const vlOnSite = Number(existing.U_VlOnSite) || Number(initialUnitPrice) || 0;
-            const vlInTransit = Number(existing.U_InTransit) || 0;
+            const dtInit = (existing.U_DtInicial || existing.U_DataInicial) ? String(existing.U_DtInicial || existing.U_DataInicial).split('T')[0] : initialStartDate;
+            const dtFin = (existing.U_DtFinal || existing.U_DataFinal) ? String(existing.U_DtFinal || existing.U_DataFinal).split('T')[0] : initialFinalDate;
+            const vlOnSite = Number(existing.U_VlOnSite ?? existing.U_ValorBase) || Number(initialUnitPrice) || 0;
+            const vlInTransit = Number(existing.U_InTransit ?? existing.U_VlInTransit) || 0;
             const perc = (vlOnSite > 0 && vlInTransit > 0) 
               ? Math.round((vlInTransit / vlOnSite) * 100) 
               : 50;
@@ -9777,7 +9890,7 @@ function RentalCostModal({
               U_VlOnSite: vlOnSite > 0 ? vlOnSite : (Number(initialUnitPrice) || 0),
               percInTransit: perc,
               U_QtdDiariasInTransit: Number(existing.U_QtdDiariasInTransit) || 0,
-              U_Qtd_Dias: Number(existing.U_Qtd_Dias) || Number(lineQuantity) || 1
+              U_Qtd_Dias: Number(existing.U_Qtd_Dias ?? existing.U_Quantidade ?? existing.U_Qtd) || Number(lineQuantity) || 1
             });
           }
         })
@@ -9839,7 +9952,7 @@ function RentalCostModal({
         await sapService.updateRentalCost(cleanCode, payload);
         toast.success(`Receita Locação #${cleanCode} atualizada com sucesso no SAP!`);
         isSavedRef.current = true;
-        onSaved(cleanCode, currentBreakdown.totalGeral);
+        onSaved(cleanCode, currentBreakdown.totalGeral, { ...payload, Code: cleanCode });
       } else {
         const newCode = await sapService.getNextRentalCostCode();
         const payload = {
@@ -9858,7 +9971,7 @@ function RentalCostModal({
         await sapService.createRentalCost(payload);
         toast.success(`Receita Locação #${newCode} criada e vinculada com sucesso!`);
         isSavedRef.current = true;
-        onSaved(newCode, currentBreakdown.totalGeral);
+        onSaved(newCode, currentBreakdown.totalGeral, { ...payload, Code: newCode });
       }
     } catch (error: any) {
       console.error('Falha ao salvar receita locação:', error.response?.data || error);

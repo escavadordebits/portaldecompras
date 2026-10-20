@@ -266,7 +266,8 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
     rawLines.forEach((line: any, idx: number) => {
       const desc = (line.ItemDescription || line.ItemName || line.Dscription || '').toLowerCase();
       const code = (line.ItemCode || '').toLowerCase();
-      const isRental = line.U_ItemLoc || desc.includes('equipamento') || desc.includes('loca') || desc.includes('kit') || desc.includes('rope') || code.includes('eq') || code.includes('loc');
+      const isLogistics = desc.includes('logistica') || desc.includes('logística') || code.includes('log') || code === 's000073';
+      const isRental = !isLogistics && (line.U_ItemLoc || desc.includes('equipamento') || desc.includes('loca') || desc.includes('kit') || desc.includes('rope') || code.includes('eq') || code.includes('loc'));
 
       const qty = Number(line.Quantity || 1);
       const unitPrice = Number(line.Price || line.UnitPrice || 0);
@@ -282,7 +283,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
 
       const rawTaxa = line.Taxa !== undefined && line.Taxa !== null && line.Taxa !== ''
         ? line.Taxa
-        : (line.CommissionPercent ?? line.Commission);
+        : (line.CommisionPercent ?? line.CommissionPercent ?? line.Commission);
       const taxaVal = parseTaxaVal(rawTaxa);
       const hasTaxa = taxaVal > 0;
       const baseCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
@@ -290,30 +291,74 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
       const lineTotal = Number(line.LineTotal) || (baseCalc * (1 - lineDiscPct / 100));
 
       if (isRental) {
-        const custoLoc = rentalCosts[String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '')] || (line as any)._rentCost;
+        const itemLocKey = String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '').trim();
+        const custoLoc = (itemLocKey ? rentalCosts[itemLocKey] : null) || (line as any)._rentCost || (line as any).rentalCost;
+
         const vlrOnSiteNum = custoLoc?.U_VlOnSite !== undefined && Number(custoLoc.U_VlOnSite) > 0
           ? Number(custoLoc.U_VlOnSite)
-          : Number(line.Price || 60);
+          : (custoLoc?.U_ValorBase !== undefined && Number(custoLoc.U_ValorBase) > 0)
+            ? Number(custoLoc.U_ValorBase)
+            : Number(line.Price || line.UnitPrice || 60);
 
-        const vlrInTransitNum = custoLoc?.U_VlInTransit !== undefined && Number(custoLoc.U_VlInTransit) > 0
-          ? Number(custoLoc.U_VlInTransit)
-          : (vlrOnSiteNum * ((Number(custoLoc?.U_PercInTransit) || 50) / 100));
+        const vlrInTransitNum = (custoLoc?.U_InTransit !== undefined && Number(custoLoc.U_InTransit) > 0)
+          ? Number(custoLoc.U_InTransit)
+          : (custoLoc?.U_VlInTransit !== undefined && Number(custoLoc.U_VlInTransit) > 0)
+            ? Number(custoLoc.U_VlInTransit)
+            : (vlrOnSiteNum * ((Number(custoLoc?.U_PercInTransit ?? custoLoc?.percInTransit) || 50) / 100));
 
         const rentTotalFinal = (custoLoc?.U_Total !== undefined && Number(custoLoc.U_Total) > 0)
           ? Number(custoLoc.U_Total)
           : lineTotal;
 
+        const rawStartDate = custoLoc?.U_DtInicial || custoLoc?.U_DataInicial || line.U_DataInicial || line.U_DtInicial;
+        const rawEndDate = custoLoc?.U_DtFinal || custoLoc?.U_DataFinal || line.U_DataFinal || line.U_DtFinal;
+
+        let calculatedDays = 0;
+        if (rawStartDate && rawEndDate) {
+          try {
+            const d1 = new Date(String(rawStartDate).split('T')[0]);
+            const d2 = new Date(String(rawEndDate).split('T')[0]);
+            if (!isNaN(d1.getTime()) && !isNaN(d2.getTime())) {
+              calculatedDays = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+            }
+          } catch {}
+        }
+
+        const qtdDiasABordo = custoLoc?.U_QtdDiariasBordo !== undefined && Number(custoLoc.U_QtdDiariasBordo) > 0
+          ? Number(custoLoc.U_QtdDiariasBordo)
+          : custoLoc?.U_QtdDiariasABordo !== undefined && Number(custoLoc.U_QtdDiariasABordo) > 0
+            ? Number(custoLoc.U_QtdDiariasABordo)
+            : custoLoc?.U_QtdDias !== undefined && Number(custoLoc.U_QtdDias) > 0
+              ? Number(custoLoc.U_QtdDias)
+              : (calculatedDays > 0 ? calculatedDays : 11);
+
+        const qtdDiasTotal = calculatedDays > 0 ? calculatedDays : qtdDiasABordo;
+
+        const qtdDiariasInTransit = custoLoc?.U_QtdDiariasInTransit !== undefined
+          ? Number(custoLoc.U_QtdDiariasInTransit)
+          : 0;
+
+        const qtdDiariasOnSite = custoLoc?.U_QtdDiariasOnSite !== undefined && Number(custoLoc.U_QtdDiariasOnSite) > 0
+          ? Number(custoLoc.U_QtdDiariasOnSite)
+          : Math.max(0, qtdDiasABordo - qtdDiariasInTransit);
+
+        const equipQty = custoLoc?.U_Qtd_Dias !== undefined && Number(custoLoc.U_Qtd_Dias) > 0
+          ? Number(custoLoc.U_Qtd_Dias)
+          : custoLoc?.U_Quantidade !== undefined && Number(custoLoc.U_Quantidade) > 0
+            ? Number(custoLoc.U_Quantidade)
+            : Number(line.Quantity || 1);
+
         rentals.push({
-          inicio: formatDateDisplay(custoLoc?.U_DataInicial || line.U_DataInicial, '03/04/2025'),
-          final: formatDateDisplay(custoLoc?.U_DataFinal || line.U_DataFinal, '20/04/2025'),
-          qtde: Number(custoLoc?.U_Quantidade || line.Quantity || 13).toFixed(2).replace('.', ','),
-          descricao: custoLoc?.U_Recurso || line.ItemDescription || line.ItemName || line.Dscription || 'Rope Access Kits - Each',
-          qtdeDias: custoLoc?.U_QtdDias ? Number(custoLoc.U_QtdDias) : 13,
+          inicio: formatDateDisplay(rawStartDate, '03/04/2025'),
+          final: formatDateDisplay(rawEndDate, '20/04/2025'),
+          qtde: equipQty.toFixed(2).replace('.', ','),
+          descricao: custoLoc?.Name || custoLoc?.U_Recurso || line.ItemDescription || line.ItemName || line.Dscription || 'LOCAÇÃO DE EQUIPAMENTOS',
+          qtdeDias: qtdDiasTotal,
           vlrOnSite: vlrOnSiteNum.toFixed(2).replace('.', ','),
           vlrInTransit: vlrInTransitNum.toFixed(2).replace('.', ','),
-          qtdeDiariasABordo: custoLoc?.U_QtdDiariasABordo ? Number(custoLoc.U_QtdDiariasABordo) : 18,
-          qtdeDiariasOnSite: custoLoc?.U_QtdDiariasOnSite ? Number(custoLoc.U_QtdDiariasOnSite) : 16,
-          qtdeDiariasInTransit: custoLoc?.U_QtdDiariasInTransit ? Number(custoLoc.U_QtdDiariasInTransit) : 2,
+          qtdeDiariasABordo: qtdDiasABordo,
+          qtdeDiariasOnSite: qtdDiariasOnSite,
+          qtdeDiariasInTransit: qtdDiariasInTransit,
           taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
           total: rentTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
@@ -368,21 +413,46 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
         const hExtraDiu = custoPessoal?.U_HExtraDiu !== undefined ? Number(custoPessoal.U_HExtraDiu) : 0;
         const hExtraNot = custoPessoal?.U_HExtraNot !== undefined ? Number(custoPessoal.U_HExtraNot) : 0;
 
-        services.push({
-          inicio: formatDateDisplay(custoPessoal?.U_DataInicial || line.U_DataInicial, idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
-          fim: formatDateDisplay(custoPessoal?.U_DataFinal || line.U_DataFinal, idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
-          cargo: line.ItemDescription || line.ItemName || line.Dscription || custoPessoal?.Name || 'SERVICO - LOGISTICA',
-          colaborador: custoPessoal?.U_Colaborador || line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
-          vlrNormal: vlrNormalNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
-          standByRate: standByRateNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-          diariasNormalMob: `${formatNum(qtdDiariasNormal)}  ${formatNum(qtdDiariasStandBy)}`,
-          noturnoNorDob: `${formatNum(noturnoNormal)}  ${formatNum(noturnoDob)}`,
-          hrExtrasDiurNot: `${formatNum(hExtraDiu)}  ${formatNum(hExtraNot)}`,
-          taxaDobDiurNot: taxaDobText,
-          totalTaxas: totalTaxasStr,
-          totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-        });
+        const isLogistics = desc.includes('logistica') || desc.includes('logística') || code.includes('log') || code === 's000073';
+
+        if (isLogistics) {
+          services.push({
+            inicio: '-',
+            fim: '-',
+            cargo: line.ItemDescription || line.ItemName || line.Dscription || 'SERVICO - LOGISTICA',
+            colaborador: '-',
+            vlrNormal: unitPrice > 0 
+              ? unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) 
+              : vlrNormalNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+            taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
+            standByRate: '-',
+            diariasNormalMob: `${formatNum(qty)}`,
+            noturnoNorDob: '-',
+            hrExtrasDiurNot: '-',
+            taxaDobDiurNot: '-',
+            totalTaxas: '-',
+            totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          });
+        } else {
+          const rawPersStartDate = custoPessoal?.U_DtInicial || custoPessoal?.U_DataInicial || line.U_DataInicial || line.U_DtInicial;
+          const rawPersEndDate = custoPessoal?.U_DtFinal || custoPessoal?.U_DataFinal || line.U_DataFinal || line.U_DtFinal;
+
+          services.push({
+            inicio: formatDateDisplay(rawPersStartDate, idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
+            fim: formatDateDisplay(rawPersEndDate, idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
+            cargo: line.ItemDescription || line.ItemName || line.Dscription || custoPessoal?.Name || 'SERVICO - LOGISTICA',
+            colaborador: custoPessoal?.U_Colaborador || line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
+            vlrNormal: vlrNormalNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+            taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
+            standByRate: standByRateNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+            diariasNormalMob: `${formatNum(qtdDiariasNormal)}  ${formatNum(qtdDiariasStandBy)}`,
+            noturnoNorDob: `${formatNum(noturnoNormal)}  ${formatNum(noturnoDob)}`,
+            hrExtrasDiurNot: `${formatNum(hExtraDiu)}  ${formatNum(hExtraNot)}`,
+            taxaDobDiurNot: taxaDobText,
+            totalTaxas: totalTaxasStr,
+            totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          });
+        }
       }
     });
 
@@ -405,34 +475,34 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
           totalGeral: '5.668,33'
         },
         {
-          inicio: '07/12/2025',
-          fim: '14/12/2025',
+          inicio: '-',
+          fim: '-',
           cargo: 'SERVICO - LOGISTICA',
-          colaborador: 'Julio Scofano',
+          colaborador: '-',
           vlrNormal: '2.540,75',
           taxaPct: '-',
-          standByRate: '1.270,38',
-          diariasNormalMob: '1  1',
-          noturnoNorDob: '1  1',
-          hrExtrasDiurNot: '1  1',
-          taxaDobDiurNot: '0,00  0,00',
-          totalTaxas: '0,00',
-          totalGeral: '21.181,40'
+          standByRate: '-',
+          diariasNormalMob: '1',
+          noturnoNorDob: '-',
+          hrExtrasDiurNot: '-',
+          taxaDobDiurNot: '-',
+          totalTaxas: '-',
+          totalGeral: '2.540,75'
         },
         {
-          inicio: '04/01/2026',
-          fim: '14/01/2026',
+          inicio: '-',
+          fim: '-',
           cargo: 'SERVICO - LOGISTICA',
-          colaborador: 'Cleiton Ramos dos Santos',
-          vlrNormal: '5,00',
+          colaborador: '-',
+          vlrNormal: '9.180,00',
           taxaPct: '-',
-          standByRate: '2,50',
-          diariasNormalMob: '2  2',
-          noturnoNorDob: '3  3',
-          hrExtrasDiurNot: '5  6',
-          taxaDobDiurNot: '0,00  0,00',
-          totalTaxas: '0,00',
-          totalGeral: '68,27'
+          standByRate: '-',
+          diariasNormalMob: '2',
+          noturnoNorDob: '-',
+          hrExtrasDiurNot: '-',
+          taxaDobDiurNot: '-',
+          totalTaxas: '-',
+          totalGeral: '18.360,00'
         }
       );
 

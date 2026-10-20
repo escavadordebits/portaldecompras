@@ -15,7 +15,7 @@ let _cachedCustomersPromise: Promise<any[]> | null = null;
 export const normalizeSapCompany = (comp?: string): string => {
   if (!comp) return 'SBO_QUALITECH';
   const trimmed = comp.trim();
-  if (!trimmed || trimmed === 'SBO_QUALITECH_QAS' || trimmed === 'SBO_QUALITECH_IRML' || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
+  if (!trimmed || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
   return trimmed;
@@ -1831,7 +1831,11 @@ export const sapService = {
             const lineProj = line.CostingCode4 || project || '';
             const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
               ? Number(String(line.Taxa).replace(/\s/g, '').replace(',', '.'))
-              : (Number(line.CommissionPercent ?? line.Commission) || 0);
+              : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+
+            const hasTaxa = !isNaN(taxaNum) && taxaNum > 0;
+            const uNItem = line.U_nItem ?? line.U_nITEM ?? line.U_NItem;
+            const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
 
             return {
               ...line,
@@ -1839,8 +1843,12 @@ export const sapService = {
               CostingCode2: line.CostingCode2 || 'MATRIZ',
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
               CostingCode4: lineProj || undefined,
-              CommissionPercent: !isNaN(taxaNum) && taxaNum > 0 ? taxaNum : undefined,
+              CommisionPercent: hasTaxa ? taxaNum : undefined,
+              CommissionPercent: hasTaxa ? taxaNum : undefined,
+              Commission: hasTaxa ? taxaNum : undefined,
               DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
+              U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null),
+              U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null),
               U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
               BPL_IDAssignedToInvoice: 1
             };
@@ -1883,7 +1891,11 @@ export const sapService = {
             const lineProj = line.CostingCode4 || project || '';
             const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
               ? Number(String(line.Taxa).replace(/\s/g, '').replace(',', '.'))
-              : (Number(line.CommissionPercent ?? line.Commission) || 0);
+              : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+
+            const hasTaxa = !isNaN(taxaNum) && taxaNum > 0;
+            const uNItem = line.U_nItem ?? line.U_nITEM ?? line.U_NItem;
+            const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
 
             return {
               ...line,
@@ -1891,8 +1903,12 @@ export const sapService = {
               CostingCode2: line.CostingCode2 || 'MATRIZ',
               CostingCode3: line.CostingCode3 || 'OPER_OFF',
               CostingCode4: lineProj || undefined,
-              CommissionPercent: !isNaN(taxaNum) && taxaNum > 0 ? taxaNum : undefined,
+              CommisionPercent: hasTaxa ? taxaNum : undefined,
+              CommissionPercent: hasTaxa ? taxaNum : undefined,
+              Commission: hasTaxa ? taxaNum : undefined,
               DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
+              U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null),
+              U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null),
               U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1'
             };
           });
@@ -2016,7 +2032,9 @@ export const sapService = {
         const lineProject = line.CostingCode4 || headerProject || '';
         const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
           ? Number(String(line.Taxa).replace(/\s/g, '').replace(',', '.'))
-          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+          : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+
+        const hasTaxa = !isNaN(taxaNum) && taxaNum > 0;
 
         return {
           ItemCode: line.ItemCode,
@@ -2028,10 +2046,12 @@ export const sapService = {
           CostingCode3: line.CostingCode3 || 'OPER_OFF',
           CostingCode4: lineProject || undefined,
           CostingCode5: line.CostingCode5 || undefined,
-          CommissionPercent: !isNaN(taxaNum) && taxaNum > 0 ? taxaNum : undefined,
+          CommisionPercent: hasTaxa ? taxaNum : undefined,
+          CommissionPercent: hasTaxa ? taxaNum : undefined,
+          Commission: hasTaxa ? taxaNum : undefined,
           DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
-          U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
-          U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
+          U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null),
+          U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null),
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
           BPL_IDAssignedToInvoice: 1
         };
@@ -2079,7 +2099,9 @@ export const sapService = {
         const lineProject = line.CostingCode4 || headerProject || '';
         const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
           ? Number(String(line.Taxa).replace(/\s/g, '').replace(',', '.'))
-          : (Number(line.CommissionPercent ?? line.Commission) || 0);
+          : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+
+        const hasTaxa = !isNaN(taxaNum) && taxaNum > 0;
 
         return {
           LineNum: lineNum,
@@ -2092,10 +2114,12 @@ export const sapService = {
           CostingCode3: line.CostingCode3 || 'OPER_OFF',
           CostingCode4: lineProject || undefined,
           CostingCode5: line.CostingCode5 || undefined,
-          CommissionPercent: !isNaN(taxaNum) && taxaNum > 0 ? taxaNum : undefined,
+          CommisionPercent: hasTaxa ? taxaNum : undefined,
+          CommissionPercent: hasTaxa ? taxaNum : undefined,
+          Commission: hasTaxa ? taxaNum : undefined,
           DiscountPercent: line.DiscountPercent !== undefined && line.DiscountPercent !== null ? Number(line.DiscountPercent) : undefined,
-          U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null,
-          U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null,
+          U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : null),
+          U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : null),
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1'
         };
       });
@@ -2173,7 +2197,9 @@ export const sapService = {
         const uItemLoc = line.U_ItemLoc ?? line.U_ITEMLOC ?? matchingPassedLine?.U_ItemLoc ?? matchingPassedLine?.U_ITEMLOC;
         const taxaNum = matchingPassedLine?.Taxa !== undefined && matchingPassedLine?.Taxa !== null && String(matchingPassedLine.Taxa).trim() !== ''
           ? Number(String(matchingPassedLine.Taxa).replace(/\s/g, '').replace(',', '.'))
-          : (Number(line.CommissionPercent ?? line.Commission ?? matchingPassedLine?.CommissionPercent) || 0);
+          : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission ?? matchingPassedLine?.CommisionPercent ?? matchingPassedLine?.CommissionPercent) || 0);
+
+        const hasTaxa = !isNaN(taxaNum) && taxaNum > 0;
 
         return {
           BaseType: 23, // Quotations
@@ -2184,9 +2210,11 @@ export const sapService = {
           CostingCode2: line.CostingCode2 || matchingPassedLine?.CostingCode2 || 'MATRIZ',
           CostingCode3: line.CostingCode3 || matchingPassedLine?.CostingCode3 || 'OPER_OFF',
           CostingCode4: lineProject || undefined,
-          CommissionPercent: !isNaN(taxaNum) && taxaNum > 0 ? taxaNum : undefined,
-          U_nItem: (uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : undefined,
-          U_ItemLoc: (uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : undefined,
+          CommisionPercent: hasTaxa ? taxaNum : undefined,
+          CommissionPercent: hasTaxa ? taxaNum : undefined,
+          Commission: hasTaxa ? taxaNum : undefined,
+          U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : undefined),
+          U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : undefined),
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
           BPL_IDAssignedToInvoice: 1
         };
