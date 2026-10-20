@@ -232,9 +232,9 @@ export const resolveSapFinancialProject = (proj?: string | null): string | undef
 export const getDocumentWO = (doc: any): string => {
   if (!doc) return '-';
 
-  // 1. Direct header project or WO (exclude placeholder 'BASE')
+  // 1. Direct header project or WO
   const headerWO = doc.CostingCode4 || doc.U_Projeto || doc.Project || doc.ProjectCode || doc.U_WO || doc.U_NumWO;
-  if (headerWO && String(headerWO).trim() !== '' && String(headerWO).trim().toUpperCase() !== 'BASE') {
+  if (headerWO && String(headerWO).trim() !== '') {
     return String(headerWO).trim();
   }
 
@@ -242,16 +242,12 @@ export const getDocumentWO = (doc: any): string => {
   if (Array.isArray(doc.DocumentLines) && doc.DocumentLines.length > 0) {
     const lineWos = doc.DocumentLines
       .map((l: any) => l.CostingCode4 || l.ProjectCode || l.U_Projeto || l.U_WO || l.U_NumWO || l.Project)
-      .filter((w: any) => w && String(w).trim() !== '' && String(w).trim().toUpperCase() !== 'BASE');
+      .filter((w: any) => w && String(w).trim() !== '');
 
     if (lineWos.length > 0) {
       const unique = Array.from(new Set(lineWos.map((w: any) => String(w).trim())));
       return unique.join(', ');
     }
-  }
-
-  if (headerWO && String(headerWO).trim() !== '') {
-    return String(headerWO).trim();
   }
 
   return '-';
