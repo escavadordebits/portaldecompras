@@ -713,11 +713,21 @@ apiRouter.all('/sap/*', async (req, res) => {
     body = { ...body };
     // Leave financial Project blank as requested
     delete body.Project;
+    if (endpoint.startsWith('Orders')) {
+      body.MainUsage = 9;
+      if (!body.TaxExtension || typeof body.TaxExtension !== 'object') {
+        body.TaxExtension = {};
+      }
+      body.TaxExtension.MainUsage = 9;
+    }
     if (Array.isArray(body.DocumentLines)) {
       body.DocumentLines = body.DocumentLines.map((line: any) => {
         if (!line) return line;
         const copy = { ...line };
         delete copy.ProjectCode;
+        if (endpoint.startsWith('Orders') && (copy.Usage === undefined || copy.Usage === null)) {
+          copy.Usage = 9;
+        }
         if (!copy.CostingCode) copy.CostingCode = 'BR';
         if (!copy.CostingCode2) copy.CostingCode2 = 'MATRIZ';
         if (!copy.CostingCode3) copy.CostingCode3 = 'OPER_OFF';

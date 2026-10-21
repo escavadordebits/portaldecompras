@@ -7598,6 +7598,12 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
     setIsPrintModalOpen(true);
   };
 
+  const isOrderServiceMainUsage = (o: any) => {
+    if (!o) return false;
+    const usage = o.TaxExtension?.MainUsage ?? o.MainUsage ?? o.mainusage ?? (o.DocumentLines && o.DocumentLines.length > 0 ? o.DocumentLines[0]?.Usage : undefined);
+    return Number(usage) === 9;
+  };
+
   const fetchOrders = async (targetPage = page, targetFilters = appliedFilters, targetPageSize = pageSize) => {
     setIsLoading(true);
     try {
@@ -7612,9 +7618,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         top: targetPageSize,
         search: searchTarget
       });
-      const orderList = Array.isArray(data) ? data : [];
+      const rawList = Array.isArray(data) ? data : [];
+      const orderList = rawList.filter(isOrderServiceMainUsage);
       setOrders(orderList);
-      setHasMore(orderList.length >= targetPageSize);
+      setHasMore(rawList.length >= targetPageSize);
     } catch (error) {
       toast.error('Erro ao buscar pedidos de venda.');
     } finally {
@@ -7675,6 +7682,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
   };
 
   const filteredOrders = orders.filter(o => {
+    // Apenas pedidos com campo mainusage = 9 (serviço prestado)
+    if (!isOrderServiceMainUsage(o)) return false;
+
     const isOpen = o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O';
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'open' && isOpen) || 
@@ -7736,8 +7746,12 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       DiscountPercent: 0,
       TotalDiscount: 0,
       BPL_IDAssignedToInvoice: 1,
+      MainUsage: 9,
+      TaxExtension: {
+        MainUsage: 9
+      },
       DocumentLines: [
-        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
+        { ItemCode: '', ItemDescription: '', Quantity: 1, Price: 0, DiscountPercent: 0, Usage: 9, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE', ProjectCode: '', U_nITEM: '', U_ItemLoc: '' }
       ]
     });
     setIsModalOpen(true);
@@ -7831,7 +7845,12 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         Project: financialProj || undefined,
         ProjectCode: financialProj || undefined,
         CostingCode4: proj,
-        DocumentLines: preparedLines
+        MainUsage: 9,
+        TaxExtension: {
+          ...(selectedOrder.TaxExtension || {}),
+          MainUsage: 9
+        },
+        DocumentLines: preparedLines.map((l: any) => ({ ...l, Usage: l.Usage ? Number(l.Usage) : 9 }))
       };
 
       if (selectedOrder.DocEntry) {
@@ -7998,8 +8017,11 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
           <div className="flex items-center gap-3">
             <ShoppingCart className="w-8 h-8 text-evo-teal" />
             <h1 className="text-3xl font-black tracking-tighter uppercase text-evo-dark">Pedidos de Venda (Draft Invoice)</h1>
+            <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 text-[10px] font-black uppercase tracking-wider">
+              Serviço Prestado (ID 9)
+            </span>
           </div>
-          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas, WO, PO Cliente e Documentos Comprobatórios</p>
+          <p className="text-[10px] font-bold text-evo-dark/40 uppercase tracking-[0.3em] mt-1">Gestão de Vendas (Serviço Prestado • Utilização 9), WO, PO Cliente e Documentos Comprobatórios</p>
         </div>
         <Button onClick={handleCreateNew} className="evo-button-primary rounded-none px-8 h-12 text-xs uppercase tracking-widest font-black shadow-xl">
           <Plus className="w-4 h-4 mr-2" /> Novo Pedido de Venda
@@ -8041,9 +8063,9 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando com SAP Orders...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-20 opacity-30 animate-pulse uppercase text-[10px] font-black tracking-widest">Sincronizando pedidos de venda (Serviço Prestado - ID 9)...</TableCell></TableRow>
               ) : filteredOrders.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda encontrado</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-20 text-[10px] font-black uppercase tracking-widest opacity-20">Nenhum pedido de venda (Serviço Prestado - ID 9) encontrado</TableCell></TableRow>
               ) : filteredOrders.map((o) => {
                 const wo = getDocumentWO(o);
                 const poCliente = o.NumAtCard || o.U_POCliente || '-';
@@ -8215,8 +8237,11 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
                 <X className="w-6 h-6" />
               </Button>
             </div>
-            <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48">
-              {selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocNum || selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}
+            <DialogTitle className="text-3xl font-black tracking-tighter uppercase pr-48 flex items-center gap-3">
+              <span>{selectedOrder?.DocEntry ? `Pedido de Venda #${selectedOrder.DocNum || selectedOrder.DocEntry}` : 'Novo Pedido de Venda'}</span>
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 tracking-wider font-mono">
+                Utilização 9 - Serviço Prestado
+              </span>
             </DialogTitle>
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.4em] mt-1">Preenchimento de Venda, WO, PO Cliente, Centros de Custo e Anexos de Comprovação</p>
           </DialogHeader>

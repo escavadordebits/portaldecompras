@@ -253,7 +253,14 @@ export const getDocumentWO = (doc: any): string => {
   return '-';
 };
 
+export const isServiceOrder = (order: any): boolean => {
+  if (!order) return false;
+  const usage = order.TaxExtension?.MainUsage ?? order.MainUsage ?? order.mainusage ?? (order.DocumentLines && order.DocumentLines.length > 0 ? order.DocumentLines[0]?.Usage : undefined);
+  return Number(usage) === 9;
+};
+
 export const sapService = {
+  isServiceOrder,
   login: async (email: string, companyDB?: string) => {
     try {
       const normalizedCompany = normalizeSapCompany(companyDB);
@@ -1934,12 +1941,58 @@ export const sapService = {
     }
   },
 
-  // Orders (SalesOrders)
+  // Orders (SalesOrders) - Exclusivo para MainUsage = 9 (Serviço Prestado)
   getOrders: async (options?: number | ODataQueryOptions) => {
+    let skip = 0;
+    let top = 20;
+    let hasSearch = false;
+    if (typeof options === 'number') {
+      skip = options;
+    } else if (typeof options === 'object' && options !== null) {
+      if (options.skip !== undefined) skip = options.skip;
+      if (options.top !== undefined) top = options.top;
+      if (options.search && options.search.trim()) hasSearch = true;
+    }
+
     try {
+      // Quando não há busca específica de texto/WO, pagina diretamente pelos DocEntries com MainUsage = 9
+      if (!hasSearch) {
+        try {
+          const sqlRes = await api.get(`/sap/SQLQueries('GET_ORDERS_SERVICE_9')/List?$skip=${skip}&$top=${top}`);
+          if (sqlRes.data?.value && Array.isArray(sqlRes.data.value)) {
+            const entries = sqlRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+            if (entries.length === 0) return [];
+            const filterEntries = entries.map((e: any) => `DocEntry eq ${e}`).join(' or ');
+            const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
+            const list = fullDocsRes.data?.value || [];
+            return list.filter(isServiceOrder);
+          }
+        } catch (sqlErr: any) {
+          // Se a query ainda não estiver criada no SAP, registra automaticamente e repete
+          try {
+            await api.post('/sap/SQLQueries', {
+              SqlCode: 'GET_ORDERS_SERVICE_9',
+              SqlName: 'Get Sales Orders MainUsage 9',
+              SqlText: 'SELECT T0."DocEntry" FROM "RDR12" T0 WHERE T0."MainUsage" = 9 ORDER BY T0."DocEntry" DESC'
+            });
+            const retryRes = await api.get(`/sap/SQLQueries('GET_ORDERS_SERVICE_9')/List?$skip=${skip}&$top=${top}`);
+            if (retryRes.data?.value && Array.isArray(retryRes.data.value)) {
+              const entries = retryRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+              if (entries.length === 0) return [];
+              const filterEntries = entries.map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
+              const list = fullDocsRes.data?.value || [];
+              return list.filter(isServiceOrder);
+            }
+          } catch {
+            // Em caso de falha de SQL, segue para a consulta OData normal filtrada
+          }
+        }
+      }
+
       const url = buildODataQuery('/sap/Orders', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      const items = response.data.value || [];
+      const items = (response.data.value || []).filter(isServiceOrder);
 
       // Check if search yields WO matches in lines
       if (typeof options === 'object' && options?.search && items.length === 0) {
@@ -1952,9 +2005,9 @@ export const sapService = {
             const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
             if (entries.length > 0) {
               const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
-              const fullDocsRes = await api.get(`/sap/Orders?$filter=${filterEntries}&$orderby=DocEntry desc`);
+              const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
               if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
-                return fullDocsRes.data.value;
+                return fullDocsRes.data.value.filter(isServiceOrder);
               }
             }
           }
@@ -1975,9 +2028,9 @@ export const sapService = {
             const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
             if (entries.length > 0) {
               const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
-              const fullDocsRes = await api.get(`/sap/Orders?$filter=${filterEntries}&$orderby=DocEntry desc`);
+              const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
               if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
-                return fullDocsRes.data.value;
+                return fullDocsRes.data.value.filter(isServiceOrder);
               }
             }
           }
@@ -1990,7 +2043,7 @@ export const sapService = {
           if (numVal > 0 && numVal <= 2147483647) {
             try {
               const resNum = await api.get(`/sap/Orders?$filter=DocNum eq ${numVal} or DocEntry eq ${numVal}`);
-              if (resNum.data.value && resNum.data.value.length > 0) return resNum.data.value;
+              if (resNum.data.value && resNum.data.value.length > 0) return resNum.data.value.filter(isServiceOrder);
             } catch (e) {
               console.warn('Fallback DocNum search error:', e);
             }
@@ -1999,7 +2052,7 @@ export const sapService = {
         try {
           const safe = raw.replace(/'/g, "''").toUpperCase();
           const resText = await api.get(`/sap/Orders?$top=${options.top || 20}&$skip=${options.skip || 0}&$filter=contains(CardName, '${safe}') or contains(CardCode, '${safe}')`);
-          if (resText.data.value && resText.data.value.length > 0) return resText.data.value;
+          if (resText.data.value && resText.data.value.length > 0) return resText.data.value.filter(isServiceOrder);
         } catch (e) {
           console.warn('Fallback text search error:', e);
         }
@@ -2037,6 +2090,7 @@ export const sapService = {
           ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
           Quantity: Number(line.Quantity) || 1,
           UnitPrice: Number(line.Price ?? line.UnitPrice ?? 0),
+          Usage: line.Usage ? Number(line.Usage) : 9,
           CostingCode: line.CostingCode || 'BR',
           CostingCode2: line.CostingCode2 || 'MATRIZ',
           CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -2061,6 +2115,11 @@ export const sapService = {
         Comments: data.Comments || '',
         NumAtCard: data.NumAtCard || data.U_POCliente || '',
         BPL_IDAssignedToInvoice: 1,
+        MainUsage: 9,
+        TaxExtension: {
+          ...(data.TaxExtension || {}),
+          MainUsage: 9
+        },
         DocumentLines: sanitizedLines
       };
 
@@ -2212,6 +2271,7 @@ export const sapService = {
           U_nItem: hasTaxa ? null : ((uNItem !== null && uNItem !== undefined && uNItem !== '') ? String(uNItem) : undefined),
           U_ItemLoc: hasTaxa ? null : ((uItemLoc !== null && uItemLoc !== undefined && uItemLoc !== '') ? String(uItemLoc) : undefined),
           U_B1SYS_RevenueInd2: (line.U_B1SYS_RevenueInd2 && line.U_B1SYS_RevenueInd2 !== '') ? line.U_B1SYS_RevenueInd2 : '1',
+          Usage: 9,
           BPL_IDAssignedToInvoice: 1
         };
       });
@@ -2220,6 +2280,10 @@ export const sapService = {
         CardCode: fullQuote.CardCode,
         DocDueDate: fullQuote.DocDueDate ? fullQuote.DocDueDate.split('T')[0] : new Date().toISOString().split('T')[0],
         BPL_IDAssignedToInvoice: 1,
+        MainUsage: 9,
+        TaxExtension: {
+          MainUsage: 9
+        },
         U_B1SYS_RevenueInd2: fullQuote.U_B1SYS_RevenueInd2 || '1',
         Comments: fullQuote.Comments || quotationData?.Comments || undefined,
         NumAtCard: fullQuote.NumAtCard || quotationData?.NumAtCard || fullQuote.U_POCliente || quotationData?.U_POCliente || undefined,
