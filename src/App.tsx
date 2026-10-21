@@ -752,6 +752,7 @@ export default function App() {
   const [selectedOrderEntry, setSelectedOrderEntry] = useState<number | null>(null);
   const [selectedRequestEntry, setSelectedRequestEntry] = useState<number | null>(null);
   const [selectedQuotationEntry, setSelectedQuotationEntry] = useState<number | null>(null);
+  const [selectedSalesOrderEntry, setSelectedSalesOrderEntry] = useState<number | null>(null);
   const [selectedDownPaymentEntry, setSelectedDownPaymentEntry] = useState<number | null>(null);
   const [selectedApprovalCode, setSelectedApprovalCode] = useState<number | null>(null);
   const [isMeasurementsModalOpen, setIsMeasurementsModalOpen] = useState(false);
@@ -1261,6 +1262,7 @@ export default function App() {
     setSelectedOrderEntry(null);
     setSelectedRequestEntry(null);
     setSelectedQuotationEntry(null);
+    setSelectedSalesOrderEntry(null);
     setSelectedDownPaymentEntry(null);
     setSelectedApprovalCode(null);
 
@@ -1288,6 +1290,7 @@ export default function App() {
       setSelectedQuotationEntry(docEntry);
       setCurrentView('quotations');
     } else if (type === 'sales-order') {
+      setSelectedSalesOrderEntry(docEntry);
       setCurrentView('sales-orders');
     } else if (type === 'down-payment') {
       setSelectedDownPaymentEntry(docEntry);
@@ -2279,12 +2282,18 @@ export default function App() {
                 onClearSelection={() => setSelectedQuotationEntry(null)}
                 onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
                 userEmail={userProfile?.email || activeAuthUser?.email || ''}
+                onNavigateToSalesOrder={(docEntry) => {
+                  setSelectedSalesOrderEntry(docEntry);
+                  setCurrentView('sales-orders');
+                }}
               />
             )}
             {currentView === 'sales-orders' && (
               <SalesOrdersView 
                 key="sales-orders" 
                 userEmail={userProfile?.email || activeAuthUser?.email || ''} 
+                initialDocEntry={selectedSalesOrderEntry}
+                onClearSelection={() => setSelectedSalesOrderEntry(null)}
               />
             )}
             {currentView === 'calibration' && (
@@ -6026,13 +6035,15 @@ function QuotationsView({
   initialDocEntry,
   onClearSelection,
   onOpenMeasurements,
-  userEmail = ""
+  userEmail = "",
+  onNavigateToSalesOrder
 }: {
   key?: string;
   initialDocEntry?: number | null;
   onClearSelection?: () => void;
   onOpenMeasurements?: () => void;
   userEmail?: string;
+  onNavigateToSalesOrder?: (docEntry: number) => void;
 } = {}) {
   const [quotations, setQuotations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -7615,12 +7626,28 @@ function QuotationsView({
         onClose={() => setIsPrintModalOpen(false)}
         order={orderForPrint}
         userEmail={userEmail}
+        onEdit={(order) => {
+          setIsPrintModalOpen(false);
+          const entry = order?.DocEntry || orderForPrint?.DocEntry;
+          if (entry && onNavigateToSalesOrder) {
+            onNavigateToSalesOrder(Number(entry));
+          }
+        }}
       />
     </motion.div>
   );
 }
 
-function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string }) {
+function SalesOrdersView({ 
+  userEmail = "",
+  initialDocEntry,
+  onClearSelection
+}: { 
+  userEmail?: string; 
+  initialDocEntry?: number | null;
+  onClearSelection?: () => void;
+  key?: string; 
+}) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -7872,6 +7899,28 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
       toast.error('Erro ao carregar detalhes do pedido de venda.');
     }
   };
+
+  // Effect to auto-open if initialDocEntry is passed
+  useEffect(() => {
+    if (initialDocEntry) {
+      const openTarget = async () => {
+        try {
+          const order = await sapService.getOrder(initialDocEntry);
+          if (order) {
+            handleEdit(order);
+          }
+        } catch {
+          const matched = orders.find(o => o.DocEntry === initialDocEntry || o.DocNum === initialDocEntry);
+          if (matched) {
+            handleEdit(matched);
+          }
+        } finally {
+          if (onClearSelection) onClearSelection();
+        }
+      };
+      openTarget();
+    }
+  }, [initialDocEntry]);
 
   const handleSaveOrder = async () => {
     if (!selectedOrder) return;
@@ -9152,6 +9201,10 @@ function SalesOrdersView({ userEmail = "" }: { userEmail?: string; key?: string 
         onClose={() => setIsPrintModalOpen(false)}
         order={orderForPrint}
         userEmail={userEmail}
+        onEdit={(order) => {
+          setIsPrintModalOpen(false);
+          handleEdit(order);
+        }}
       />
     </motion.div>
   );

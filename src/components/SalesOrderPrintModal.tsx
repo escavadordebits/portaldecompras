@@ -23,7 +23,8 @@ import {
   LogOut,
   ShieldCheck,
   Copy,
-  Globe
+  Globe,
+  Edit
 } from 'lucide-react';
 import { 
   Dialog, 
@@ -60,9 +61,10 @@ interface SalesOrderPrintModalProps {
   onClose: () => void;
   order: any;
   userEmail?: string;
+  onEdit?: (order: any) => void;
 }
 
-export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: SalesOrderPrintModalProps) {
+export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit }: SalesOrderPrintModalProps) {
   const [activeTab, setActiveTab] = useState<string>('all');
   const [zoom, setZoom] = useState<number>(100);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1474,33 +1476,27 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
               </div>
 
               {/* Page Selector Tabs */}
-              <div className="hidden md:flex bg-white/10 p-0.5 rounded border border-white/15 text-xs font-bold">
-                {previewPages.length === 1 ? (
-                  <span className="px-3 py-1 text-evo-teal font-black">
-                    {layoutLang === 'en' ? 'Single Page Layout' : 'Layout Unificado (Página Única)'}
-                  </span>
-                ) : (
-                  <>
+              {previewPages.length > 1 && (
+                <div className="hidden md:flex bg-white/10 p-0.5 rounded border border-white/15 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('all')}
+                    className={`px-3 py-1 rounded transition-colors ${activeTab === 'all' ? 'bg-evo-teal text-evo-dark font-black' : 'text-white/70 hover:text-white'}`}
+                  >
+                    {layoutLang === 'en' ? `All Pages (${previewPages.length})` : `Todas as Páginas (${previewPages.length})`}
+                  </button>
+                  {previewPages.map((p) => (
                     <button
+                      key={p.pageNumber}
                       type="button"
-                      onClick={() => setActiveTab('all')}
-                      className={`px-3 py-1 rounded transition-colors ${activeTab === 'all' ? 'bg-evo-teal text-evo-dark font-black' : 'text-white/70 hover:text-white'}`}
+                      onClick={() => setActiveTab(`page${p.pageNumber}`)}
+                      className={`px-3 py-1 rounded transition-colors ${activeTab === `page${p.pageNumber}` ? 'bg-evo-teal text-evo-dark font-black' : 'text-white/70 hover:text-white'}`}
                     >
-                      {layoutLang === 'en' ? `All Pages (${previewPages.length})` : `Todas as Páginas (${previewPages.length})`}
+                      {layoutLang === 'en' ? `Page ${p.pageNumber}` : `Pág. ${p.pageNumber}`}
                     </button>
-                    {previewPages.map((p) => (
-                      <button
-                        key={p.pageNumber}
-                        type="button"
-                        onClick={() => setActiveTab(`page${p.pageNumber}`)}
-                        className={`px-3 py-1 rounded transition-colors ${activeTab === `page${p.pageNumber}` ? 'bg-evo-teal text-evo-dark font-black' : 'text-white/70 hover:text-white'}`}
-                      >
-                        {layoutLang === 'en' ? `Page ${p.pageNumber}` : `Pág. ${p.pageNumber}`}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
 
               {/* Zoom Controls */}
               <div className="flex items-center bg-white/10 rounded border border-white/15 px-1 py-0.5">
@@ -1569,6 +1565,22 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail }: Sale
                 <Mail className="w-4 h-4" />
                 <span className="hidden sm:inline">{layoutLang === 'en' ? 'Send by Email' : 'Enviar por E-mail'}</span>
               </Button>
+
+              {/* Edit Sales Order Button */}
+              {onEdit && (
+                <Button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onEdit(currentDoc);
+                  }}
+                  className="rounded-none bg-amber-500 hover:bg-amber-600 text-slate-900 text-xs font-black uppercase tracking-wider h-9 px-4 flex items-center gap-1.5 shadow-lg shadow-amber-500/20"
+                  title={layoutLang === 'en' ? 'Edit Sales Order' : 'Editar Pedido de Venda'}
+                >
+                  <Edit className="w-4 h-4" />
+                  <span className="hidden sm:inline">{layoutLang === 'en' ? 'Edit Order' : 'Editar Pedido'}</span>
+                </Button>
+              )}
 
               {/* Close Button */}
               <DialogClose render={<Button variant="ghost" className="text-white hover:bg-white/20 p-2 h-9 w-9 flex items-center justify-center rounded-none" />}>
