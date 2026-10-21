@@ -55,6 +55,7 @@ import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSect
 import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
 import { DocumentListFilterBar, DocumentFilters } from './components/DocumentListFilterBar';
 import { ConfirmCloseModal } from './components/ConfirmCloseModal';
+import { DraftInvoicePromptModal } from './components/DraftInvoicePromptModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
@@ -2277,6 +2278,7 @@ export default function App() {
                 initialDocEntry={selectedQuotationEntry}
                 onClearSelection={() => setSelectedQuotationEntry(null)}
                 onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
+                userEmail={userProfile?.email || activeAuthUser?.email || ''}
               />
             )}
             {currentView === 'sales-orders' && (
@@ -6023,12 +6025,14 @@ function CostsView() {
 function QuotationsView({
   initialDocEntry,
   onClearSelection,
-  onOpenMeasurements
+  onOpenMeasurements,
+  userEmail = ""
 }: {
   key?: string;
   initialDocEntry?: number | null;
   onClearSelection?: () => void;
   onOpenMeasurements?: () => void;
+  userEmail?: string;
 } = {}) {
   const [quotations, setQuotations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -6037,6 +6041,12 @@ function QuotationsView({
   const [isOrderLoading, setIsOrderLoading] = useState(false);
   const [showConfirmClose, setShowConfirmClose] = useState(false);
   const isSavingQuoteRef = useRef(false);
+
+  // Print Layout Modal (Draft Invoice) & Confirmation Prompt
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [orderForPrint, setOrderForPrint] = useState<any>(null);
+  const [isDraftInvoicePromptOpen, setIsDraftInvoicePromptOpen] = useState(false);
+  const [createdOrderData, setCreatedOrderData] = useState<any>(null);
   const [filters, setFilters] = useState<DocumentFilters>({
     docNum: '',
     wo: '',
@@ -6335,7 +6345,7 @@ function QuotationsView({
       if (savedQuote && savedQuote.DocEntry) {
         try {
           toast.info('Iniciando geração automática do Pedido de Venda...');
-          await sapService.createOrderFromQuotation({
+          const createdOrder = await sapService.createOrderFromQuotation({
             ...savedQuote,
             U_Projeto: proj,
             CostingCode4: proj,
@@ -6344,6 +6354,26 @@ function QuotationsView({
             DocumentLines: preparedLines
           });
           toast.success('Pedido de Venda criado e Cotação encerrada com sucesso!');
+
+          let orderToPrompt = createdOrder;
+          if (!orderToPrompt?.DocEntry && savedQuote?.DocEntry) {
+            try {
+              const recentOrders = await sapService.getOrders({ top: 5 });
+              const match = (recentOrders || []).find((o: any) => 
+                (o.DocumentLines || []).some((l: any) => Number(l.BaseEntry) === Number(savedQuote.DocEntry) && Number(l.BaseType) === 23)
+              );
+              if (match) {
+                orderToPrompt = match;
+              }
+            } catch (findErr) {
+              console.warn('Não foi possível localizar o pedido pelo BaseEntry:', findErr);
+            }
+          }
+
+          if (orderToPrompt) {
+            setCreatedOrderData(orderToPrompt);
+            setIsDraftInvoicePromptOpen(true);
+          }
         } catch (orderErr: any) {
           console.warn('Erro na conversão automática para Pedido de Venda:', orderErr);
           const errDetail = orderErr?.response?.data?.error?.message?.value || orderErr?.message || '';
@@ -6369,7 +6399,7 @@ function QuotationsView({
     try {
       const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
       const financialProj = resolveSapFinancialProject(proj);
-      await sapService.createOrderFromQuotation({
+      const createdOrder = await sapService.createOrderFromQuotation({
         ...selectedQuote,
         U_Projeto: proj !== 'BASE' ? proj : undefined,
         CostingCode4: proj,
@@ -6379,6 +6409,26 @@ function QuotationsView({
       toast.success('Pedido de Venda criado com sucesso! Cotação encerrada.');
       fetchQuotations();
       setIsModalOpen(false);
+
+      let orderToPrompt = createdOrder;
+      if (!orderToPrompt?.DocEntry && selectedQuote?.DocEntry) {
+        try {
+          const recentOrders = await sapService.getOrders({ top: 5 });
+          const match = (recentOrders || []).find((o: any) => 
+            (o.DocumentLines || []).some((l: any) => Number(l.BaseEntry) === Number(selectedQuote.DocEntry) && Number(l.BaseType) === 23)
+          );
+          if (match) {
+            orderToPrompt = match;
+          }
+        } catch (findErr) {
+          console.warn('Não foi possível localizar o pedido pelo BaseEntry:', findErr);
+        }
+      }
+
+      if (orderToPrompt) {
+        setCreatedOrderData(orderToPrompt);
+        setIsDraftInvoicePromptOpen(true);
+      }
     } catch (error: any) {
       const errDetail = error?.response?.data?.error?.message?.value || error?.message || '';
       toast.error(`Erro ao gerar pedido: ${errDetail}`);
@@ -7543,6 +7593,28 @@ function QuotationsView({
           }
           setIsRentalCostModalOpen(false);
         }}
+      />
+
+      {/* Draft Invoice Confirmation Prompt */}
+      <DraftInvoicePromptModal
+        isOpen={isDraftInvoicePromptOpen}
+        order={createdOrderData}
+        onConfirm={() => {
+          setIsDraftInvoicePromptOpen(false);
+          setOrderForPrint(createdOrderData);
+          setIsPrintModalOpen(true);
+        }}
+        onCancel={() => {
+          setIsDraftInvoicePromptOpen(false);
+        }}
+      />
+
+      {/* Sales Order Print Layout Modal */}
+      <SalesOrderPrintModal 
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        order={orderForPrint}
+        userEmail={userEmail}
       />
     </motion.div>
   );
