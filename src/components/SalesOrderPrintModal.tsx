@@ -33,6 +33,7 @@ import {
   DialogTitle, 
   DialogClose 
 } from '@/components/ui/dialog';
+import { QUALITECH_LOGO_PNG } from '../assets/qualitechLogoBase64';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -124,12 +125,32 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
     const loadDetails = async () => {
       setIsLoading(true);
       try {
-        let currentOrderData = order;
+        let currentOrderData = { ...order };
         if (order.DocEntry) {
           try {
             const fetched = await sapService.getOrder(order.DocEntry);
             if (fetched && isMounted) {
-              currentOrderData = fetched;
+              const fetchedLines = Array.isArray(fetched.DocumentLines) ? fetched.DocumentLines : [];
+              const orderLines = Array.isArray(order.DocumentLines) ? order.DocumentLines : [];
+              const mergedLines = (fetchedLines.length > 0 ? fetchedLines : orderLines).map((fl: any, idx: number) => {
+                const ol = orderLines[idx] || orderLines.find((l: any) => l.LineNum === fl.LineNum || l.ItemCode === fl.ItemCode);
+                return {
+                  ...fl,
+                  U_nItem: ol?.U_nItem ?? fl.U_nItem ?? ol?.U_nITEM ?? fl.U_nITEM,
+                  U_nITEM: ol?.U_nITEM ?? fl.U_nITEM ?? ol?.U_nItem ?? fl.U_nItem,
+                  U_ItemLoc: ol?.U_ItemLoc ?? fl.U_ItemLoc ?? ol?.U_ITEMLOC ?? fl.U_ITEMLOC,
+                  U_ITEMLOC: ol?.U_ITEMLOC ?? fl.U_ITEMLOC ?? ol?.U_ItemLoc ?? fl.U_ItemLoc,
+                  U_Colaborador: ol?.U_Colaborador || fl.U_Colaborador || '',
+                  _persCost: ol?._persCost || fl._persCost,
+                  _personnelCost: ol?._personnelCost || fl._personnelCost,
+                  _rentalCost: ol?._rentalCost || fl._rentalCost,
+                  _rentCost: ol?._rentCost || fl._rentCost
+                };
+              });
+              currentOrderData = {
+                ...fetched,
+                DocumentLines: mergedLines.length > 0 ? mergedLines : orderLines
+              };
             }
           } catch (e) {
             console.warn('Usando dados em memória do pedido:', e);
@@ -142,21 +163,49 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
         const pCostMap: Record<string, any> = {};
         const rCostMap: Record<string, any> = {};
 
-        await Promise.all(rawLines.map(async (line: any) => {
-          const nItem = line.U_nItem ?? line.U_nITEM;
-          const itemLoc = line.U_ItemLoc ?? line.U_ITEMLOC;
-          if (nItem !== null && nItem !== undefined && String(nItem).trim() !== '') {
+        // Pre-fill from in-memory lines & local personnel cost cache
+        rawLines.forEach((line: any, idx: number) => {
+          const nItem = String(line.U_nItem ?? line.U_nITEM ?? line.U_NItem ?? line.U_NITEM ?? '').trim();
+          const cachedPers = nItem ? sapService.getCachedPersonnelCost(nItem) : null;
+          const pcData = line._persCost || line._personnelCost || cachedPers;
+          if (pcData) {
+            if (nItem) pCostMap[nItem] = pcData;
+            pCostMap[`line_${idx}`] = pcData;
+            if (line.LineNum !== undefined) pCostMap[`lineNum_${line.LineNum}`] = pcData;
+          }
+
+          const itemLoc = String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '').trim();
+          const rcData = line._rentalCost || line._rentCost;
+          if (rcData) {
+            if (itemLoc) rCostMap[itemLoc] = rcData;
+            rCostMap[`line_${idx}`] = rcData;
+            if (line.LineNum !== undefined) rCostMap[`lineNum_${line.LineNum}`] = rcData;
+          }
+        });
+
+        await Promise.all(rawLines.map(async (line: any, idx: number) => {
+          const nItem = String(line.U_nItem ?? line.U_nITEM ?? line.U_NItem ?? line.U_NITEM ?? '').trim();
+          const itemLoc = String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '').trim();
+          if (nItem) {
             try {
-              const pc = await sapService.getPersonnelCost(String(nItem));
-              if (pc) pCostMap[String(nItem)] = pc;
+              const pc = await sapService.getPersonnelCost(nItem);
+              if (pc) {
+                pCostMap[nItem] = { ...(pCostMap[nItem] || {}), ...pc };
+                pCostMap[`line_${idx}`] = { ...(pCostMap[`line_${idx}`] || {}), ...pc };
+                if (line.LineNum !== undefined) pCostMap[`lineNum_${line.LineNum}`] = { ...(pCostMap[`lineNum_${line.LineNum}`] || {}), ...pc };
+              }
             } catch (e) {
               console.warn(`Erro ao carregar custo pessoal #${nItem}:`, e);
             }
           }
-          if (itemLoc !== null && itemLoc !== undefined && String(itemLoc).trim() !== '') {
+          if (itemLoc) {
             try {
-              const rc = await sapService.getRentalCost(String(itemLoc));
-              if (rc) rCostMap[String(itemLoc)] = rc;
+              const rc = await sapService.getRentalCost(itemLoc);
+              if (rc) {
+                rCostMap[itemLoc] = { ...(rCostMap[itemLoc] || {}), ...rc };
+                rCostMap[`line_${idx}`] = { ...(rCostMap[`line_${idx}`] || {}), ...rc };
+                if (line.LineNum !== undefined) rCostMap[`lineNum_${line.LineNum}`] = { ...(rCostMap[`lineNum_${line.LineNum}`] || {}), ...rc };
+              }
             } catch (e) {
               console.warn(`Erro ao carregar custo locação #${itemLoc}:`, e);
             }
@@ -365,7 +414,13 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
           total: rentTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         });
       } else {
-        const custoPessoal = personalCosts[String(line.U_nItem ?? line.U_nITEM ?? '')] || (line as any)._persCost;
+        const nItemKey = String(line.U_nItem ?? line.U_nITEM ?? line.U_NItem ?? line.U_NITEM ?? '').trim();
+        const custoPessoal = (nItemKey ? personalCosts[nItemKey] : null)
+          || personalCosts[`line_${idx}`]
+          || (line.LineNum !== undefined ? personalCosts[`lineNum_${line.LineNum}`] : null)
+          || (line as any)._persCost
+          || (line as any)._personnelCost
+          || (nItemKey ? sapService.getCachedPersonnelCost(nItemKey) : null);
 
         const vlrNormalNum = (custoPessoal?.U_VlNormal !== undefined && Number(custoPessoal.U_VlNormal) > 0)
           ? Number(custoPessoal.U_VlNormal)
@@ -439,11 +494,28 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
           const rawPersStartDate = custoPessoal?.U_DtInicial || custoPessoal?.U_DataInicial || line.U_DataInicial || line.U_DtInicial;
           const rawPersEndDate = custoPessoal?.U_DtFinal || custoPessoal?.U_DataFinal || line.U_DataFinal || line.U_DtFinal;
 
+          const resolvedColaborador = (
+            custoPessoal?.U_Colaborador ||
+            custoPessoal?.U_COLABORADOR ||
+            custoPessoal?.U_NomeColaborador ||
+            custoPessoal?.U_Colaborador_Nome ||
+            custoPessoal?.Colaborador ||
+            custoPessoal?.colaborador ||
+            line.U_Colaborador ||
+            line.U_COLABORADOR ||
+            line.U_NomeColaborador ||
+            line.U_Colaborador_Nome ||
+            line.colaborador ||
+            (line as any)._persCost?.U_Colaborador ||
+            (line as any)._personnelCost?.U_Colaborador ||
+            ''
+          ).trim();
+
           services.push({
             inicio: formatDateDisplay(rawPersStartDate, idx === 0 ? '04/04/2026' : idx === 1 ? '07/12/2025' : '04/01/2026'),
             fim: formatDateDisplay(rawPersEndDate, idx === 0 ? '14/04/2026' : idx === 1 ? '14/12/2025' : '14/01/2026'),
             cargo: line.ItemDescription || line.ItemName || line.Dscription || custoPessoal?.Name || 'SERVICO - LOGISTICA',
-            colaborador: custoPessoal?.U_Colaborador || line.U_Colaborador || (idx === 2 ? 'Cleiton Ramos dos Santos' : 'Julio Scofano'),
+            colaborador: resolvedColaborador || '-',
             vlrNormal: vlrNormalNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
             taxaPct: hasTaxa ? `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : '-',
             standByRate: standByRateNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
@@ -662,28 +734,20 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
       docInstance.setTextColor(15, 23, 42);
       docInstance.text(docDateFormatted, 205, 36.5);
 
-      // Company Header (Left) - Qualitech Brand Logo
-      // Draw Qualitech Swirl Ribbon Icon
-      docInstance.setFillColor(8, 47, 73);
-      docInstance.roundedRect(14, 15, 7.5, 1.8, 0.8, 0.8, 'F');
-      docInstance.setFillColor(7, 89, 133);
-      docInstance.roundedRect(14.5, 12.8, 6.8, 1.6, 0.7, 0.7, 'F');
-      docInstance.setFillColor(3, 105, 161);
-      docInstance.roundedRect(15, 10.8, 5.8, 1.5, 0.6, 0.6, 'F');
-      docInstance.setFillColor(2, 132, 199);
-      docInstance.roundedRect(15.6, 9.0, 4.6, 1.4, 0.5, 0.5, 'F');
-      docInstance.setFillColor(14, 165, 233);
-      docInstance.roundedRect(16.3, 7.4, 3.2, 1.2, 0.4, 0.4, 'F');
-      docInstance.setFillColor(56, 189, 248);
-      docInstance.circle(17.9, 6.4, 0.9, 'F');
+      // Company Header (Left) - Official Qualitech Brand Logo (Attached Shell)
+      try {
+        docInstance.addImage(QUALITECH_LOGO_PNG, "PNG", 14, 6.5, 11, 11);
+      } catch (err) {
+        console.warn("Erro ao inserir logo no PDF:", err);
+      }
 
       // "Quali" (navy) and "tech" (bright blue)
-      docInstance.setFont('helvetica', 'bold');
+      docInstance.setFont("helvetica", "bold");
       docInstance.setFontSize(15);
       docInstance.setTextColor(12, 53, 89);
-      docInstance.text('Quali', 23, 15);
+      docInstance.text("Quali", 26.5, 15);
       docInstance.setTextColor(0, 136, 209);
-      docInstance.text('tech', 34.5, 15);
+      docInstance.text("tech", 38, 15);
 
       docInstance.setFont('helvetica', 'bold');
       docInstance.setFontSize(7.5);
@@ -1619,16 +1683,20 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
                           <div className="flex justify-between items-start pb-6 border-b border-slate-100">
                             {/* Left Company Header */}
                             <div className="space-y-1">
-                              <div className="flex items-center mb-2">
+                              <div className="flex items-center gap-2 mb-2">
                                 <img 
-                                  src="/qualitech-logo.svg" 
-                                  alt="Qualitech" 
-                                  className="h-10 w-auto object-contain" 
+                                  src="/qualitech-shell.png" 
+                                  alt="Qualitech Shell" 
+                                  className="h-9 w-9 object-contain" 
                                   onError={(e) => {
-                                    // Fallback if SVG fails to load
+                                    // Fallback if PNG fails to load
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
+                                <div className="flex items-baseline font-black tracking-tight text-2xl">
+                                  <span className="text-[#0C3559]">Quali</span>
+                                  <span className="text-[#0088D1]">tech</span>
+                                </div>
                               </div>
                               <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                                 {layoutLang === 'en' 
@@ -1746,15 +1814,19 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
                           <div className="flex justify-between items-start pb-4 border-b border-slate-200">
                             {/* Left Company Header */}
                             <div className="space-y-1">
-                              <div className="flex items-center mb-1">
+                              <div className="flex items-center gap-2 mb-1">
                                 <img 
-                                  src="/qualitech-logo.svg" 
-                                  alt="Qualitech" 
-                                  className="h-8 w-auto object-contain" 
+                                  src="/qualitech-shell.png" 
+                                  alt="Qualitech Shell" 
+                                  className="h-7 w-7 object-contain" 
                                   onError={(e) => {
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
+                                <div className="flex items-baseline font-black tracking-tight text-xl">
+                                  <span className="text-[#0C3559]">Quali</span>
+                                  <span className="text-[#0088D1]">tech</span>
+                                </div>
                               </div>
                               <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                                 {layoutLang === 'en' 

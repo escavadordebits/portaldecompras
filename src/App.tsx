@@ -6449,7 +6449,7 @@ function QuotationsView({
     }
   };
 
-  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number) => {
+  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number, measurementData?: any) => {
     setSelectedQuote((prev: any) => {
       if (!prev) return prev;
       const lines = [...(prev.DocumentLines || [])];
@@ -6468,9 +6468,12 @@ function QuotationsView({
         CommissionPercent: 0,
         U_nItem: code,
         U_nITEM: code,
+        U_Colaborador: measurementData?.U_Colaborador || line.U_Colaborador || '',
         linePersonnelCost: newPersonnelCost,
         Price: combinedTotal > 0 ? newUnitPrice : line.Price,
-        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price),
+        _persCost: measurementData,
+        _personnelCost: measurementData
       };
       return { ...prev, DocumentLines: lines };
     });
@@ -7579,9 +7582,9 @@ function QuotationsView({
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedQuote?.DocumentLines?.[activeLineIndex] ? (selectedQuote.DocumentLines[activeLineIndex].U_nItem || selectedQuote.DocumentLines[activeLineIndex].U_nITEM) : null}
-        onSaved={(code, calculatedTotal) => {
+        onSaved={(code, calculatedTotal, measurementData) => {
           if (activeLineIndex !== null) {
-            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal);
+            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal, measurementData);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -8009,7 +8012,7 @@ function SalesOrdersView({
     }
   };
 
-  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number) => {
+  const handleSavePersonnelMeasurement = (lineIdx: number, code: string, personnelTotal: number, measurementData?: any) => {
     setSelectedOrder((prev: any) => {
       if (!prev) return prev;
       const lines = [...(prev.DocumentLines || [])];
@@ -8028,9 +8031,12 @@ function SalesOrdersView({
         CommissionPercent: 0,
         U_nItem: code,
         U_nITEM: code,
+        U_Colaborador: measurementData?.U_Colaborador || line.U_Colaborador || '',
         linePersonnelCost: newPersonnelCost,
         Price: combinedTotal > 0 ? newUnitPrice : line.Price,
-        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price)
+        UnitPrice: combinedTotal > 0 ? newUnitPrice : (line.UnitPrice ?? line.Price),
+        _persCost: measurementData,
+        _personnelCost: measurementData
       };
       return { ...prev, DocumentLines: lines };
     });
@@ -9168,9 +9174,9 @@ function SalesOrdersView({
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
         existingCode={activeLineIndex !== null && selectedOrder?.DocumentLines?.[activeLineIndex] ? (selectedOrder.DocumentLines[activeLineIndex].U_nItem || selectedOrder.DocumentLines[activeLineIndex].U_nITEM) : null}
-        onSaved={(code, calculatedTotal) => {
+        onSaved={(code, calculatedTotal, measurementData) => {
           if (activeLineIndex !== null) {
-            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal);
+            handleSavePersonnelMeasurement(activeLineIndex, code, calculatedTotal, measurementData);
           }
           setIsPersCostModalOpen(false);
         }}
@@ -9369,7 +9375,7 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
 function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, existingCode }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onSaved: (code: string, calculatedTotal: number) => void,
+  onSaved: (code: string, calculatedTotal: number, measurementData?: any) => void,
   docEntry?: number,
   lineIndex: number | null,
   existingCode?: string | number | null
@@ -9592,7 +9598,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         await sapService.updatePersonnelCost(cleanCode, payload);
         toast.success(`Receita Pessoa #${cleanCode} atualizada com sucesso no SAP!`);
         isSavedRef.current = true;
-        onSaved(cleanCode, currentBreakdown.totalGeral);
+        onSaved(cleanCode, currentBreakdown.totalGeral, { ...payload, Code: cleanCode, Name: cleanCode });
       } else {
         // Cria novo registro com código sequencial em @CUSTOSPESSOAL
         const newCode = await sapService.getNextPersonnelCostCode();
@@ -9622,7 +9628,7 @@ function PersonnelCostModal({ isOpen, onClose, onSaved, docEntry, lineIndex, exi
         await sapService.createPersonnelCost(payload);
         toast.success(`Receita Pessoa #${newCode} criada e vinculada com sucesso!`);
         isSavedRef.current = true;
-        onSaved(newCode, currentBreakdown.totalGeral);
+        onSaved(newCode, currentBreakdown.totalGeral, { ...payload, Code: newCode, Name: newCode });
       }
     } catch (error: any) {
       console.error('Falha ao salvar receita pessoal:', error.response?.data || error);

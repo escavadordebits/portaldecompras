@@ -1,54 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 100" width="100%" height="100%" fill="none">
-  <defs>
-    <linearGradient id="ql-grad-top" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38BDF8" />
-      <stop offset="100%" stop-color="#0284C7" />
-    </linearGradient>
-    <linearGradient id="ql-grad-mid1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0EA5E9" />
-      <stop offset="100%" stop-color="#0369A1" />
-    </linearGradient>
-    <linearGradient id="ql-grad-mid2" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0284C7" />
-      <stop offset="100%" stop-color="#075985" />
-    </linearGradient>
-    <linearGradient id="ql-grad-mid3" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0369A1" />
-      <stop offset="100%" stop-color="#0C4A6E" />
-    </linearGradient>
-    <linearGradient id="ql-grad-base" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#075985" />
-      <stop offset="100%" stop-color="#082F49" />
-    </linearGradient>
-  </defs>
-
-  <!-- Shell / Swirl Emblem -->
-  <g id="qualitech-shell" transform="translate(10, 4)">
-    <!-- Layer 1: Top tip -->
-    <path d="M 46 8 C 47 4, 48 3, 50 3 C 52 3, 53 4, 54 8 C 55 12, 53 15, 50 16 C 47 15, 45 12, 46 8 Z" fill="url(#ql-grad-top)" />
-    
-    <!-- Layer 2: Upper swirl curve -->
-    <path d="M 40 19 C 45 17, 55 17, 60 19 C 62 20, 61 24, 57 25 C 50 26, 42 26, 38 24 C 36 22, 37 20, 40 19 Z" fill="url(#ql-grad-top)" />
-    
-    <!-- Layer 3: Middle-upper rib -->
-    <path d="M 33 29 C 42 26, 61 26, 68 29 C 71 30, 70 35, 64 36 C 53 38, 40 38, 30 35 C 28 33, 29 30, 33 29 Z" fill="url(#ql-grad-mid1)" />
-    
-    <!-- Layer 4: Middle rib -->
-    <path d="M 26 41 C 38 37, 67 37, 76 41 C 80 43, 78 48, 70 49 C 55 52, 38 52, 22 48 C 19 46, 21 43, 26 41 Z" fill="url(#ql-grad-mid2)" />
-
-    <!-- Layer 5: Lower rib -->
-    <path d="M 18 55 C 34 50, 74 50, 84 55 C 89 57, 86 63, 76 65 C 57 68, 35 68, 14 63 C 10 61, 12 57, 18 55 Z" fill="url(#ql-grad-mid3)" />
-
-    <!-- Layer 6: Main Base Wave / Swirl -->
-    <path d="M 12 71 C 28 66, 78 66, 90 71 C 94 73, 91 79, 81 81 C 58 86, 30 85, 10 79 C 7 77, 8 73, 12 71 Z" fill="url(#ql-grad-base)" />
-
-    <!-- Layer 7: Sweeping bottom fin tail -->
-    <path d="M 14 83 C 25 81, 48 81, 62 84 C 65 85, 64 88, 59 89 C 42 92, 25 92, 10 88 C 6 86, 9 84, 14 83 Z" fill="#082F49" />
-  </g>
+  <!-- Official Qualitech Shell Image Mark -->
+  <image href="/qualitech-shell.png" x="8" y="4" width="92" height="92" preserveAspectRatio="xMidYMid meet" />
 
   <!-- Brand Typography: Qualitech -->
   <!-- "Quali" in deep navy, "tech" in vibrant blue -->
-  <text x="115" y="70" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="52" font-weight="900" letter-spacing="-1.5">
+  <text x="112" y="68" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="52" font-weight="900" letter-spacing="-1.5">
     <tspan fill="#0C3559">Quali</tspan><tspan fill="#0088D1">tech</tspan>
   </text>
 </svg>

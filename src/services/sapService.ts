@@ -11,6 +11,38 @@ const api = axios.create({
 let _cachedCustomers: any[] | null = null;
 let _cachedCustomersPromise: Promise<any[]> | null = null;
 
+// In-memory & local cache for personnel costs (@CUSTOSPESSOAL)
+const _personnelCostsCache: Record<string, any> = {};
+
+export const getCachedPersonnelCost = (cleanCode: string): any => {
+  if (!cleanCode) return null;
+  const key = String(cleanCode).trim().replace(/['"]/g, '');
+  if (_personnelCostsCache[key]) return _personnelCostsCache[key];
+  try {
+    const raw = localStorage.getItem('qualitech_cached_pers_costs_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed[key]) {
+        _personnelCostsCache[key] = parsed[key];
+        return parsed[key];
+      }
+    }
+  } catch {}
+  return null;
+};
+
+export const setCachedPersonnelCost = (cleanCode: string, data: any): void => {
+  if (!cleanCode || !data) return;
+  const key = String(cleanCode).trim().replace(/['"]/g, '');
+  _personnelCostsCache[key] = { ...(_personnelCostsCache[key] || {}), ...data, Code: key };
+  try {
+    const raw = localStorage.getItem('qualitech_cached_pers_costs_v1');
+    const existing = raw ? JSON.parse(raw) : {};
+    existing[key] = _personnelCostsCache[key];
+    localStorage.setItem('qualitech_cached_pers_costs_v1', JSON.stringify(existing));
+  } catch {}
+};
+
 // Helper to normalize SAP Company database name
 export const normalizeSapCompany = (comp?: string): string => {
   if (!comp) return 'SBO_QUALITECH';
@@ -1497,22 +1529,59 @@ export const sapService = {
     }
   },
 
+  getCachedPersonnelCost,
+  setCachedPersonnelCost,
+
   getPersonnelCost: async (code: string | number) => {
-    const cleanCode = String(code).trim();
+    const cleanCode = String(code).trim().replace(/['"]/g, '');
+    if (!cleanCode) return null;
+    const cached = getCachedPersonnelCost(cleanCode);
     try {
       const response = await api.get(`/sap/CustosPessoal('${cleanCode}')`);
-      return response.data;
+      if (response.data) {
+        setCachedPersonnelCost(cleanCode, response.data);
+        return { ...(cached || {}), ...response.data };
+      }
     } catch (error) {
       try {
-        const response2 = await api.get(`/sap/CustosPessoal?$filter=Code eq '${cleanCode}'`);
+        const filterStr = /^\d+$/.test(cleanCode)
+          ? `Code eq '${cleanCode}' or DocEntry eq ${cleanCode}`
+          : `Code eq '${cleanCode}'`;
+        const response2 = await api.get(`/sap/CustosPessoal?$filter=${encodeURIComponent(filterStr)}`);
         if (response2.data.value && response2.data.value.length > 0) {
-          return response2.data.value[0];
+          const item = response2.data.value[0];
+          setCachedPersonnelCost(cleanCode, item);
+          return { ...(cached || {}), ...item };
         }
       } catch (err2) {
         // continue
       }
+      try {
+        const response3 = await api.get(`/sap/U_CustosPessoal('${cleanCode}')`);
+        if (response3.data) {
+          setCachedPersonnelCost(cleanCode, response3.data);
+          return { ...(cached || {}), ...response3.data };
+        }
+      } catch (err3) {
+        // continue
+      }
+      try {
+        const filterStr = /^\d+$/.test(cleanCode)
+          ? `Code eq '${cleanCode}' or DocEntry eq ${cleanCode}`
+          : `Code eq '${cleanCode}'`;
+        const response4 = await api.get(`/sap/U_CustosPessoal?$filter=${encodeURIComponent(filterStr)}`);
+        if (response4.data.value && response4.data.value.length > 0) {
+          const item = response4.data.value[0];
+          setCachedPersonnelCost(cleanCode, item);
+          return { ...(cached || {}), ...item };
+        }
+      } catch (err4) {
+        // continue
+      }
+      if (cached) return cached;
       return handleApiError(error, 'getPersonnelCost');
     }
+    return cached;
   },
 
   getNextPersonnelCostCode: async (): Promise<string> => {
@@ -1645,12 +1714,21 @@ export const sapService = {
 
   createPersonnelCost: async (data: any) => {
     const cleaned = sapService.sanitizePersonnelCostPayload(data);
+    if (data.Code) {
+      setCachedPersonnelCost(String(data.Code).trim(), { ...data, ...cleaned });
+    }
     try {
       const response = await api.post('/sap/CustosPessoal', cleaned);
+      if (response.data?.Code) {
+        setCachedPersonnelCost(String(response.data.Code).trim(), response.data);
+      }
       return response.data;
     } catch (error) {
       try {
         const response2 = await api.post('/sap/U_CustosPessoal', cleaned);
+        if (response2.data?.Code) {
+          setCachedPersonnelCost(String(response2.data.Code).trim(), response2.data);
+        }
         return response2.data;
       } catch (err2) {
         return handleApiError(error, 'createPersonnelCost');
@@ -1661,11 +1739,17 @@ export const sapService = {
   updatePersonnelCost: async (code: string | number, data: any) => {
     const cleanCode = String(code).trim().replace(/['"]/g, '');
     const cleaned = sapService.sanitizePersonnelCostPayload(data);
+    setCachedPersonnelCost(cleanCode, { ...data, ...cleaned, Code: cleanCode });
     try {
       const response = await api.patch(`/sap/CustosPessoal('${cleanCode}')`, cleaned);
       return response.data;
     } catch (error) {
-      return handleApiError(error, 'updatePersonnelCost');
+      try {
+        const response2 = await api.patch(`/sap/U_CustosPessoal('${cleanCode}')`, cleaned);
+        return response2.data;
+      } catch (err2) {
+        return handleApiError(error, 'updatePersonnelCost');
+      }
     }
   },
 
