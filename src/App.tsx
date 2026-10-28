@@ -53,6 +53,7 @@ import { BidComparativeView } from './components/BidComparativeView';
 import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal';
 import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSection';
 import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
+import { PurchaseOrderPrintModal } from './components/PurchaseOrderPrintModal';
 import { DocumentListFilterBar, DocumentFilters } from './components/DocumentListFilterBar';
 import { ConfirmCloseModal } from './components/ConfirmCloseModal';
 import { DraftInvoicePromptModal } from './components/DraftInvoicePromptModal';
@@ -2185,6 +2186,7 @@ export default function App() {
               <CreateOrderView 
                 key="create" 
                 userEmail={sapUser?.email}
+                allowAttachments={true}
               />
             )}
             {currentView === 'list-orders' && (
@@ -3279,18 +3281,20 @@ function CreateOrderView({
       const orderData: any = {
         CardCode: selectedSupplier?.CardCode || '',
         DocDueDate: docDueDate,
-        DocumentLines: orderItems.map(i => ({
-          ItemCode: i.ItemCode,
-          Quantity: i.Quantity,
-          Price: i.Price,
-          CostingCode: i.CostingCode,
-          CostingCode2: i.CostingCode2,
-          CostingCode3: i.CostingCode3,
-          CostingCode4: i.CostingCode4,
-          CostingCode5: i.CostingCode5,
-          ProjectCode: i.ProjectCode,
-          Usage: i.Usage ? parseInt(i.Usage) : undefined
-        }))
+        DocumentLines: orderItems.map(i => {
+          const lineProject = i.CostingCode4 || i.ProjectCode || 'BASE';
+          return {
+            ItemCode: i.ItemCode,
+            Quantity: i.Quantity,
+            Price: i.Price,
+            CostingCode: i.CostingCode || 'BR',
+            CostingCode2: i.CostingCode2 || 'MATRIZ',
+            CostingCode3: i.CostingCode3 || 'OPER_OFF',
+            CostingCode4: lineProject,
+            CostingCode5: i.CostingCode5 || undefined,
+            Usage: i.Usage ? parseInt(i.Usage) : undefined
+          };
+        })
       };
 
       if (attachmentEntry) {
@@ -3561,19 +3565,32 @@ function CreateOrderView({
                                 ))}
 
                                   {/* SAP Project Section */}
+                                   {/* Projeto (Centro de Custo - Dim 4 / OcrCode4) */}
                                   <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
                                     <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Projeto SAP</Label>
-                                      <div className="text-[9px] font-bold text-evo-dark/30">PROJ</div>
+                                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Projeto (Dim 4 / Centro de Custo)</Label>
+                                      <div className="text-[9px] font-bold text-evo-dark/30">DIM 4 / PROJ</div>
                                     </div>
                                     <Select 
-                                      value={item.ProjectCode || 'none'} 
+                                      value={item.CostingCode4 || item.ProjectCode || 'none'} 
                                       onValueChange={(val) => {
-                                        setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, ProjectCode: val === 'none' ? undefined : val } : it));
+                                        const projVal = val === 'none' ? undefined : val;
+                                        setOrderItems(orderItems.map((it, i) => i === idx ? { 
+                                          ...it, 
+                                          CostingCode4: projVal,
+                                          ProjectCode: projVal 
+                                        } : it));
                                       }}
                                     >
                                       <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                        <SelectValue placeholder="Selecionar Projeto" />
+                                        <SelectValue placeholder="Selecionar Projeto / WO">
+                                          {(() => {
+                                            const currentCode = item.CostingCode4 || item.ProjectCode;
+                                            if (!currentCode || currentCode === 'none') return 'Selecionar Projeto / WO';
+                                            const matchProj = projects.find((p: any) => p.Code === currentCode);
+                                            return matchProj ? `${matchProj.Code} - ${matchProj.Name}` : currentCode;
+                                          })()}
+                                        </SelectValue>
                                       </SelectTrigger>
                                       <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
                                         <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
@@ -3599,13 +3616,19 @@ function CreateOrderView({
                                       }}
                                     >
                                       <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                        <SelectValue placeholder="Utilização" />
+                                        <SelectValue placeholder="Selecionar Utilização">
+                                          {(() => {
+                                            if (!item.Usage || item.Usage === 'none') return 'Selecionar Utilização';
+                                            const matchUsage = usages.find((u: any) => u.ID?.toString() === item.Usage?.toString());
+                                            return matchUsage ? matchUsage.Usage : `Utilização ${item.Usage}`;
+                                          })()}
+                                        </SelectValue>
                                       </SelectTrigger>
                                       <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
                                         <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
                                         {usages.map((u: any) => (
                                           <SelectItem key={u.ID} value={u.ID.toString()} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
-                                            <span className="text-evo-teal font-black mr-2">{u.ID}</span> {u.Usage}
+                                            <span className="text-evo-teal font-black mr-2">[{u.ID}]</span> {u.Usage}
                                           </SelectItem>
                                         ))}
                                       </SelectContent>
@@ -3934,6 +3957,13 @@ function ListOrdersView({
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [supplierEmail, setSupplierEmail] = useState('');
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [orderForPrint, setOrderForPrint] = useState<any>(null);
+
+  const handleOpenPrintModal = (orderToPrint: any) => {
+    setOrderForPrint(orderToPrint);
+    setIsPrintModalOpen(true);
+  };
 
   const handleSendEmail = (to: string, cc: string, subject: string, body: string) => {
     const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -4066,7 +4096,27 @@ function ListOrdersView({
       if (!docPo.includes(term)) return false;
     }
 
-    // 5. Cliente / Entidade
+    // 5. CNPJ Filter
+    if (appliedFilters.clientCnpj && appliedFilters.clientCnpj.trim()) {
+      const cleanFilter = appliedFilters.clientCnpj.replace(/\D/g, '');
+      const orderCnpj = (
+        order.TaxExtension?.TaxId0 ||
+        order.TaxExtension?.TaxId4 ||
+        order.FederalTaxID ||
+        order.TaxIdNum ||
+        order.CNPJ ||
+        order.U_CNPJ ||
+        order.U_B1SYS_BpSenCNPJ ||
+        order.U_B1SYS_CNPJFromC ||
+        ''
+      );
+      const cleanOrderCnpj = String(orderCnpj).replace(/\D/g, '');
+      if (cleanFilter && !cleanOrderCnpj.includes(cleanFilter) && !String(orderCnpj).toLowerCase().includes(appliedFilters.clientCnpj.trim().toLowerCase())) {
+        return false;
+      }
+    }
+
+    // 6. Cliente / Entidade
     if (appliedFilters.clientCode.trim() || appliedFilters.clientName.trim()) {
       const codeTerm = appliedFilters.clientCode.trim().toLowerCase();
       const nameTerm = appliedFilters.clientName.trim();
@@ -4082,9 +4132,45 @@ function ListOrdersView({
     return true;
   });
 
+  const getOrderCnpj = (order: any) => {
+    const raw = (
+      order?.TaxExtension?.TaxId0 ||
+      order?.TaxExtension?.TaxId4 ||
+      order?.FederalTaxID ||
+      order?.TaxIdNum ||
+      order?.CNPJ ||
+      order?.U_CNPJ ||
+      order?.U_B1SYS_BpSenCNPJ ||
+      order?.U_B1SYS_CNPJFromC ||
+      ''
+    );
+    if (!raw || raw === '-') return '-';
+    const clean = String(raw).replace(/\D/g, '');
+    if (clean.length === 14) {
+      return clean.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    }
+    if (clean.length === 11) {
+      return clean.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+    }
+    return String(raw);
+  };
+
+  const getOrderPO = (order: any) => {
+    return (
+      order?.NumAtCard ||
+      order?.U_POCliente ||
+      order?.U_NumPO ||
+      order?.PoNum ||
+      order?.U_NumAtCard ||
+      order?.DocumentLines?.[0]?.PoNum ||
+      '-'
+    );
+  };
+
   const appliedFiltersSummary = useMemo(() => {
     const parts: string[] = [];
     if (appliedFilters.docNum) parts.push(`Nº: ${appliedFilters.docNum}`);
+    if (appliedFilters.clientCnpj) parts.push(`CNPJ: ${appliedFilters.clientCnpj}`);
     if (appliedFilters.wo) parts.push(`WO: ${appliedFilters.wo}`);
     if (appliedFilters.po) parts.push(`PO: ${appliedFilters.po}`);
     if (appliedFilters.clientCode || appliedFilters.clientName) {
@@ -4119,27 +4205,40 @@ function ListOrdersView({
             </h1>
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Protocolo Gerado via Service Layer</p>
           </div>
-          {title === "Cotações de Compra" && selectedOrder && (
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => {
-                  const url = `${window.location.origin}${window.location.pathname}?portal=quotation&id=${selectedOrder.DocEntry}`;
-                  navigator.clipboard.writeText(url);
-                  toast.success('Link do portal copiado para o fornecedor!');
-                }}
-                className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
-              >
-                <Paperclip className="w-3 h-3" /> Copiar Link Portal
-              </Button>
+          {selectedOrder && (
+            <div className="flex items-center gap-2 ml-auto">
+              {title === "Cotações de Compra" && (
+                <>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => {
+                      const url = `${window.location.origin}${window.location.pathname}?portal=quotation&id=${selectedOrder.DocEntry}`;
+                      navigator.clipboard.writeText(url);
+                      toast.success('Link do portal copiado para o fornecedor!');
+                    }}
+                    className="rounded-none border-evo-dark text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+                  >
+                    <Paperclip className="w-3 h-3" /> Copiar Link Portal
+                  </Button>
+                  <Button 
+                    variant="default" 
+                    size="sm" 
+                    onClick={() => setIsEmailModalOpen(true)}
+                    className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+                  >
+                    <LogOut className="w-3 h-3 rotate-180" /> Enviar por E-mail
+                  </Button>
+                </>
+              )}
               <Button 
                 variant="default" 
                 size="sm" 
-                onClick={() => setIsEmailModalOpen(true)}
-                className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+                onClick={() => handleOpenPrintModal(selectedOrder)}
+                className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-sm"
+                title="Visualizar Layout em PDF"
               >
-                <LogOut className="w-3 h-3 rotate-180" /> Enviar por E-mail
+                <Printer className="w-3.5 h-3.5" /> Layout Impressão (PDF)
               </Button>
             </div>
           )}
@@ -4214,18 +4313,22 @@ function ListOrdersView({
                 </CardContent>
               </Card>
 
-              {selectedOrder?.AttachmentEntry && (
-                <div className="bg-white p-4 border border-evo-bg shadow-sm flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Paperclip className="w-5 h-5 text-evo-teal" />
-                    <span className="text-[10px] font-black uppercase tracking-widest text-evo-dark">Documentos Anexos</span>
-                  </div>
-                  <Badge variant="outline" className="rounded-none text-[9px] border-evo-bg font-bold">VINCULADO</Badge>
-                </div>
-              )}
+              {/* Document Attachments Section in Order Detail */}
+              <DocumentAttachmentsSection 
+                documentType="purchase-order"
+                docId={selectedOrder?.DocEntry || 'draft'}
+              />
             </div>
           </div>
         )}
+
+        {/* Purchase Order Print Layout Modal in Detail View */}
+        <PurchaseOrderPrintModal 
+          isOpen={isPrintModalOpen}
+          onClose={() => setIsPrintModalOpen(false)}
+          order={orderForPrint || selectedOrder}
+          userEmail={userEmail}
+        />
       </motion.div>
     );
   }
@@ -4263,80 +4366,143 @@ function ListOrdersView({
       />
 
       <Card className="evo-card border-none overflow-hidden">
-        <Table>
-          <TableHeader className="bg-evo-dark">
-            <TableRow className="border-none hover:bg-transparent">
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Nº Documento</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">WO (Projeto)</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">PO / Ref</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Data Emissão</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Entidade SAP</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Valor Consolidado</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Situação</TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6 text-right px-8"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={8} className="text-center py-20">
-                  <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-dark/20 animate-pulse">Estabelecendo conexão com Service Layer...</p>
-                </TableCell>
+        <div className="overflow-x-auto">
+          <Table className="min-w-full">
+            <TableHeader className="bg-evo-dark">
+              <TableRow className="border-none hover:bg-transparent">
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[110px]">Nº Documento</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[260px]">Nome do Fornecedor</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[170px]">CNPJ</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[110px]">Data do Documento</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[130px]">Valor Total</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[120px]">Filial</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[140px]">Centro de Custos</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[180px]">Condição / Forma PG</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[105px]">WO</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[115px]">PO</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 text-right whitespace-nowrap w-[95px]">Ações</TableHead>
               </TableRow>
-            ) : filteredOrders.map((order) => (
-              <TableRow 
-                key={order.DocEntry} 
-                className="border-evo-bg transition-colors hover:bg-evo-teal/5 group cursor-pointer"
-                onClick={() => onViewDetails(order.DocEntry)}
-              >
-                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{order.DocNum || order.DocEntry}</TableCell>
-                <TableCell className="px-6 py-5">
-                  <span className="inline-flex items-center gap-1 font-black text-[10px] text-evo-teal bg-evo-teal/10 px-2 py-0.5 border border-evo-teal/20 uppercase tracking-tight">
-                    {getDocumentWO(order)}
-                  </span>
-                </TableCell>
-                <TableCell className="px-6 py-5 font-black text-[10px] text-evo-dark uppercase">
-                  {order.NumAtCard || order.U_POCliente || order.U_NumAtCard || '-'}
-                </TableCell>
-                <TableCell className="px-6 py-5 text-[10px] font-bold uppercase text-evo-dark/60 tracking-wider">
-                  {order.DocDate ? new Date(order.DocDate).toLocaleDateString('pt-BR') : '-'}
-                </TableCell>
-                <TableCell className="px-6 py-5">
-                  <p className="text-[10px] font-black uppercase tracking-tight text-evo-dark leading-tight group-hover:text-evo-teal transition-colors">{order.CardName || order.RequesterName || '-'}</p>
-                  <p className="text-[9px] font-bold text-evo-dark/30 tracking-[0.2em]">{order.CardCode || ''}</p>
-                </TableCell>
-                <TableCell className="px-6 py-5 font-black text-sm text-evo-dark tracking-tighter">
-                  R$ {order.DocTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
-                </TableCell>
-                <TableCell className="px-6 py-5">
-                  <Badge className={`rounded-none text-[9px] uppercase font-bold px-2 py-0.5 border-none ${order.DocumentStatus === 'bost_Open' || order.DocumentStatus === 'O' ? 'bg-evo-teal text-white' : 'bg-evo-dark text-white opacity-60'}`}>
-                    {order.DocumentStatus === 'bost_Open' || order.DocumentStatus === 'O' ? 'Aberto' : 'Encerrado'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="px-8 py-5 text-right">
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="h-9 w-9 text-evo-dark opacity-20 group-hover:opacity-100 group-hover:text-evo-teal group-hover:bg-evo-teal/10 transition-all rounded-none"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onViewDetails(order.DocEntry);
-                    }}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="text-center py-20">
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-dark/20 animate-pulse">Estabelecendo conexão com Service Layer...</p>
+                  </TableCell>
+                </TableRow>
+              ) : filteredOrders.map((order) => {
+                const orderCnpjFormatted = getOrderCnpj(order);
+                const orderPoValue = getOrderPO(order);
+                const orderWoValue = getDocumentWO(order) || order.CostingCode4 || order.DocumentLines?.[0]?.CostingCode4 || 'BASE';
+
+                return (
+                  <TableRow 
+                    key={order.DocEntry} 
+                    className="border-evo-bg transition-colors hover:bg-evo-teal/5 group cursor-pointer"
+                    onClick={() => onViewDetails(order.DocEntry)}
                   >
-                    <ChevronRight className="w-5 h-5" />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!isLoading && filteredOrders.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
-                  Nenhum registro localizado sob os critérios informados.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+                    <TableCell className="px-4 py-3.5 font-black text-xs text-evo-dark whitespace-nowrap w-[110px]">
+                      #{order.DocNum || order.DocEntry}
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-normal min-w-[260px] max-w-[340px]">
+                      <p className="text-xs font-black uppercase tracking-tight text-evo-dark leading-snug group-hover:text-evo-teal transition-colors whitespace-normal break-words">
+                        {order.CardName || order.RequesterName || '-'}
+                      </p>
+                      <p className="text-[9px] font-bold text-evo-dark/40 tracking-wider mt-0.5">
+                        {order.CardCode || ''}
+                      </p>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 font-mono text-[11px] font-bold text-slate-700 whitespace-nowrap min-w-[170px]">
+                      <span className="px-2 py-1 bg-slate-100 border border-slate-200 text-slate-800 rounded-none inline-block">
+                        {orderCnpjFormatted}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 text-xs font-bold text-slate-700 whitespace-nowrap w-[105px]">
+                      {order.DocDate ? new Date(order.DocDate).toLocaleDateString('pt-BR') : '-'}
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 font-black text-sm text-evo-dark tracking-tight whitespace-nowrap w-[125px]">
+                      R$ {order.DocTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 text-xs font-bold text-slate-700 whitespace-nowrap w-[115px]">
+                      <Badge variant="outline" className="rounded-none border-slate-300 font-bold text-[10px] uppercase px-2 py-0.5 bg-slate-50">
+                        {order.BPLName || (order.BPL_IDAssignedToInvoice ? `Filial ${order.BPL_IDAssignedToInvoice}` : (order.BPLID ? `Filial ${order.BPLID}` : 'Matriz'))}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[140px]">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Depto:</span>
+                          <span className="text-[10px] font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 border border-slate-200">
+                            {order.CostingCode || order.DocumentLines?.[0]?.CostingCode || 'QC'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-black uppercase tracking-wider text-evo-teal/70">Proj:</span>
+                          <span className="text-[10px] font-black text-evo-teal bg-evo-teal/10 px-1.5 py-0.5 border border-evo-teal/20 uppercase">
+                            {orderWoValue}
+                          </span>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[180px]">
+                      <p className="text-[11px] font-bold text-slate-800 leading-tight">
+                        {order.PaymentGroupCode || order.GroupNumber ? `Cond: ${order.PaymentGroupCode || order.GroupNumber}` : '--'}
+                      </p>
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-tight mt-0.5 truncate max-w-[170px]" title={order.PaymentMethod || order.PeyMethod || order.U_FormaPG || 'P-TRF-ITA-43410'}>
+                        {order.PaymentMethod || order.PeyMethod || order.U_FormaPG || 'P-TRF-ITA-43410'}
+                      </p>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[105px]">
+                      <span className="text-[10px] font-black text-evo-teal bg-evo-teal/10 px-2 py-1 border border-evo-teal/20 uppercase font-mono">
+                        {orderWoValue}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[115px]">
+                      <span className="text-xs font-mono font-bold text-slate-700">
+                        {orderPoValue}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 text-right whitespace-nowrap w-[95px]">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-9 w-9 text-evo-teal hover:bg-evo-teal hover:text-white transition-all rounded-none border border-evo-bg"
+                          title="Visualizar Layout em PDF"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenPrintModal(order);
+                          }}
+                        >
+                          <Printer className="w-4 h-4" />
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-9 w-9 text-evo-dark opacity-40 group-hover:opacity-100 group-hover:text-evo-teal group-hover:bg-evo-teal/10 transition-all rounded-none"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewDetails(order.DocEntry);
+                          }}
+                          title="Ver Detalhes"
+                        >
+                          <ChevronRight className="w-5 h-5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!isLoading && filteredOrders.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={11} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
+                    Nenhum registro localizado sob os critérios informados.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
 
         {/* Pagination bar */}
         <div className="p-4 bg-white border-t border-evo-bg flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -4391,6 +4557,13 @@ function ListOrdersView({
           </div>
         </div>
       </Card>
+      {/* Purchase Order Print Layout Modal in List View */}
+      <PurchaseOrderPrintModal 
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        order={orderForPrint}
+        userEmail={userEmail}
+      />
     </motion.div>
   );
 }

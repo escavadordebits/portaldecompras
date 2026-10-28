@@ -4,7 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import { app } from './serverApp';
 import { config } from './config';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -21,13 +21,22 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  function listenWithFallback(port: number) {
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${port}`);
+    });
 
-  server.on('error', (err: any) => {
-    console.error('Server error:', err);
-  });
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`Port ${port} in use, trying ${port + 1}...`);
+        listenWithFallback(port + 1);
+      } else {
+        console.error('Server error:', err);
+      }
+    });
+  }
+
+  listenWithFallback(PORT);
 }
 
 startServer().catch((err) => {

@@ -60,13 +60,13 @@ export function DocumentListFilterBar({
     }
   }, [partnerType]);
 
-  // Validation state: WO requires Cliente
+  // Validation state: WO requires Cliente only for sales orders (customer)
   const isWoFilled = Boolean(filters.wo && filters.wo.trim() !== '');
   const isClientFilled = Boolean(
     (filters.clientCode && filters.clientCode.trim() !== '') ||
     (filters.clientName && filters.clientName.trim() !== '')
   );
-  const isClientMissingForWo = isWoFilled && !isClientFilled;
+  const isClientMissingForWo = partnerType === 'customer' && isWoFilled && !isClientFilled;
 
   const handleFieldChange = (field: keyof DocumentFilters, value: string) => {
     onChangeFilters({
@@ -138,7 +138,7 @@ export function DocumentListFilterBar({
     );
 
     // Mandatory rule: WO requires Cliente
-    if (isWoFilled && !isClientNowFilled) {
+    if (isWoFilled && !isClientNowFilled && partnerType === 'customer') {
       toast.error('O preenchimento do Cliente é obrigatório quando a WO é informada.');
       setIsClientModalOpen(true);
       return;
@@ -152,14 +152,15 @@ export function DocumentListFilterBar({
     filters.wo.trim() ||
     filters.po.trim() ||
     filters.clientCode.trim() ||
-    filters.clientName.trim()
+    filters.clientName.trim() ||
+    filters.clientCnpj.trim()
   );
 
   return (
     <div className="flex flex-col gap-4 bg-white p-6 border border-evo-bg shadow-sm">
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* 4 Discrete Filter Fields Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 5 Discrete Filter Fields Grid with well-aligned inputs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
           {/* Field 1: Document Number */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
@@ -185,72 +186,13 @@ export function DocumentListFilterBar({
             </div>
           </div>
 
-          {/* Field 2: WO (Work Order / Projeto) */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center">
-              <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
-                <FolderKanban className="w-3.5 h-3.5 text-evo-teal" />
-                WO (Projeto)
-              </label>
-              {isWoFilled && (
-                <span className="text-[9px] font-black uppercase text-amber-600 bg-amber-50 px-1.5 py-0.5 border border-amber-200">
-                  Exige Cliente
-                </span>
-              )}
-            </div>
-            <div className="relative">
-              <Input
-                value={filters.wo}
-                onChange={(e) => handleFieldChange('wo', e.target.value)}
-                placeholder="Ex: 2040..."
-                className={`rounded-none h-11 text-xs font-bold uppercase tracking-wider ${
-                  isClientMissingForWo ? 'border-amber-400 bg-amber-50/20' : 'border-evo-bg focus:border-evo-teal'
-                }`}
-              />
-              {filters.wo && (
-                <button
-                  type="button"
-                  onClick={() => handleFieldChange('wo', '')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Field 3: PO (PO Cliente / Ref) */}
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
-              <Tag className="w-3.5 h-3.5 text-evo-teal" />
-              PO Cliente / Ref
-            </label>
-            <div className="relative">
-              <Input
-                value={filters.po}
-                onChange={(e) => handleFieldChange('po', e.target.value)}
-                placeholder="Ex: PO-4500..."
-                className="rounded-none border-evo-bg h-11 text-xs font-bold uppercase tracking-wider focus:border-evo-teal"
-              />
-              {filters.po && (
-                <button
-                  type="button"
-                  onClick={() => handleFieldChange('po', '')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Field 4: Cliente (Interactive + Modal Selection) */}
+          {/* Field 2: Cliente / Fornecedor (Interactive + Modal Selection) */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
                 <Building2 className="w-3.5 h-3.5 text-evo-teal" />
                 {clientLabel}
-                {isWoFilled && <span className="text-rose-500 font-black">*</span>}
+                {isWoFilled && partnerType === 'customer' && <span className="text-rose-500 font-black">*</span>}
               </label>
               {isClientMissingForWo && (
                 <span className="text-[9px] font-black uppercase text-rose-600 flex items-center gap-1 animate-pulse">
@@ -266,21 +208,15 @@ export function DocumentListFilterBar({
                 className={`relative flex items-center justify-between h-11 px-3 border cursor-pointer group bg-slate-50 transition-all ${
                   isClientMissingForWo ? 'border-rose-400 bg-rose-50/20' : 'border-evo-bg hover:border-evo-teal'
                 }`}
-                title="Clique para alterar o cliente"
+                title="Clique para alterar"
               >
-                <div className="flex items-center gap-2 overflow-hidden mr-6">
-                  <span className="font-mono text-[11px] font-black text-evo-teal bg-evo-teal/10 px-1.5 py-0.5 border border-evo-teal/20 shrink-0">
+                <div className="flex items-center gap-1.5 overflow-hidden mr-5">
+                  <span className="font-mono text-[10px] font-black text-evo-teal bg-evo-teal/10 px-1 py-0.5 border border-evo-teal/20 shrink-0">
                     {filters.clientCode}
                   </span>
                   <span className="font-black text-xs text-evo-dark uppercase truncate">
-                    {filters.clientName || 'Cliente Selecionado'}
+                    {filters.clientName || 'Selecionado'}
                   </span>
-                  {filters.clientCnpj && (
-                    <span className="hidden xl:inline-flex items-center gap-1 text-[9px] font-mono font-bold text-slate-500 bg-slate-200/60 px-1.5 py-0.5 shrink-0">
-                      <ShieldCheck className="w-2.5 h-2.5 text-evo-teal" />
-                      {formatTaxId(filters.clientCnpj)}
-                    </span>
-                  )}
                 </div>
                 <button
                   type="button"
@@ -289,7 +225,7 @@ export function DocumentListFilterBar({
                     handleClearClient();
                   }}
                   className="text-evo-dark/30 hover:text-rose-600 p-1"
-                  title="Remover cliente"
+                  title="Remover"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -306,11 +242,10 @@ export function DocumentListFilterBar({
                     }
                   }}
                   onBlur={() => {
-                    // Small delay to allow clicking suggestion
                     setTimeout(() => setShowSuggestions(false), 200);
                   }}
-                  placeholder="Nome do cliente (ex: ForSea) ou clique na lupa..."
-                  className={`rounded-none h-11 text-xs font-bold uppercase tracking-wider pr-20 ${
+                  placeholder="Nome ou Razão Social..."
+                  className={`rounded-none h-11 text-xs font-bold uppercase tracking-wider pr-16 ${
                     isClientMissingForWo 
                       ? 'border-rose-400 bg-rose-50/20 placeholder:text-rose-400' 
                       : 'border-evo-bg focus:border-evo-teal'
@@ -322,11 +257,10 @@ export function DocumentListFilterBar({
                     setShowSuggestions(false);
                     setIsClientModalOpen(true);
                   }}
-                  className="absolute right-0 top-0 h-11 rounded-none px-3 bg-evo-dark/5 hover:bg-evo-teal hover:text-evo-dark text-evo-dark border-l border-evo-bg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-none"
+                  className="absolute right-0 top-0 h-11 rounded-none px-2.5 bg-evo-dark/5 hover:bg-evo-teal hover:text-evo-dark text-evo-dark border-l border-evo-bg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-none"
                   title="Abrir modal para selecionar Código, Razão Social e CNPJ"
                 >
                   <Search className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Buscar</span>
                 </Button>
 
                 {/* Suggestions dropdown */}
@@ -358,7 +292,92 @@ export function DocumentListFilterBar({
               </div>
             )}
           </div>
+
+          {/* Field 3: CNPJ (Direct input and search) */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-evo-teal" />
+              CNPJ
+            </label>
+            <div className="relative">
+              <Input
+                value={filters.clientCnpj}
+                onChange={(e) => handleFieldChange('clientCnpj', e.target.value)}
+                placeholder="00.000.000/0000-00"
+                className="rounded-none border-evo-bg h-11 text-xs font-bold font-mono tracking-wider focus:border-evo-teal"
+              />
+              {filters.clientCnpj && (
+                <button
+                  type="button"
+                  onClick={() => handleFieldChange('clientCnpj', '')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Field 4: WO (Work Order / Projeto) */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
+                <FolderKanban className="w-3.5 h-3.5 text-evo-teal" />
+                WO (Projeto)
+              </label>
+              {isWoFilled && partnerType === 'customer' && (
+                <span className="text-[9px] font-black uppercase text-amber-600 bg-amber-50 px-1.5 py-0.5 border border-amber-200">
+                  Exige Cliente
+                </span>
+              )}
+            </div>
+            <div className="relative">
+              <Input
+                value={filters.wo}
+                onChange={(e) => handleFieldChange('wo', e.target.value)}
+                placeholder="Ex: 2040 ou BASE..."
+                className={`rounded-none h-11 text-xs font-bold uppercase tracking-wider ${
+                  isClientMissingForWo ? 'border-amber-400 bg-amber-50/20' : 'border-evo-bg focus:border-evo-teal'
+                }`}
+              />
+              {filters.wo && (
+                <button
+                  type="button"
+                  onClick={() => handleFieldChange('wo', '')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Field 5: PO (PO Cliente / Pedido Ref) */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-evo-teal" />
+              PO (Ref / Pedido)
+            </label>
+            <div className="relative">
+              <Input
+                value={filters.po}
+                onChange={(e) => handleFieldChange('po', e.target.value)}
+                placeholder="Ex: PO-4500..."
+                className="rounded-none border-evo-bg h-11 text-xs font-bold uppercase tracking-wider focus:border-evo-teal"
+              />
+              {filters.po && (
+                <button
+                  type="button"
+                  onClick={() => handleFieldChange('po', '')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
+
 
         {/* Action Row */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-2 border-t border-evo-bg/60">

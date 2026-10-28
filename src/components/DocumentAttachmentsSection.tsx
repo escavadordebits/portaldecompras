@@ -21,14 +21,16 @@ export interface DocumentAttachmentsState {
   emailAprovacao?: StoredAttachment | null;
 }
 
+export type DocumentAttachmentType = 'quotation' | 'order' | 'purchase-order' | string;
+
 interface DocumentAttachmentsSectionProps {
-  documentType: 'quotation' | 'order';
+  documentType: DocumentAttachmentType;
   docId?: string | number | null;
   onAttachmentsChange?: (attachments: DocumentAttachmentsState) => void;
   readOnly?: boolean;
 }
 
-export function loadStoredAttachments(documentType: 'quotation' | 'order', docId?: string | number | null): StoredAttachment[] {
+export function loadStoredAttachments(documentType: DocumentAttachmentType, docId?: string | number | null): StoredAttachment[] {
   try {
     const currentKey = `sap_attachments_${documentType}_${docId || 'draft'}`;
     const saved = localStorage.getItem(currentKey);

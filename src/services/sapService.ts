@@ -415,23 +415,34 @@ export const sapService = {
   createPurchaseOrder: async (data: any) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const formattedData = {
+      const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const formattedData: any = {
         ...data,
-        DocDate: today,
-        TaxDate: today,
-        DocumentLines: data.DocumentLines.map((line: any) => ({
-          ItemCode: line.ItemCode,
-          Quantity: line.Quantity,
-          UnitPrice: line.Price || 0,
-          CostingCode: line.CostingCode,
-          CostingCode2: line.CostingCode2,
-          CostingCode3: line.CostingCode3,
-          CostingCode4: line.CostingCode4,
-          CostingCode5: line.CostingCode5,
-          ProjectCode: line.ProjectCode,
-          Usage: line.Usage
-        }))
+        DocDate: data.DocDate || today,
+        TaxDate: data.TaxDate || today,
+        DocumentLines: (data.DocumentLines || []).map((line: any) => {
+          const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          return {
+            ItemCode: line.ItemCode,
+            Quantity: line.Quantity,
+            UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            CostingCode: line.CostingCode || 'BR',
+            CostingCode2: line.CostingCode2 || 'MATRIZ',
+            CostingCode3: line.CostingCode3 || 'OPER_OFF',
+            CostingCode4: lineProject,
+            CostingCode5: line.CostingCode5 || undefined,
+            Usage: line.Usage ? parseInt(line.Usage) : undefined
+          };
+        })
       };
+
+      // Strip Project/ProjectCode from header so SAP does not validate against OPRJ table
+      delete formattedData.Project;
+      delete formattedData.ProjectCode;
+      if (headerProject) {
+        formattedData.U_Projeto = headerProject;
+      }
+
       const response = await api.post('/sap/PurchaseOrders', formattedData, {
         headers: {
           'B1S-EnableApprovalWorkflow': 'true'
@@ -446,26 +457,33 @@ export const sapService = {
   createPurchaseRequest: async (data: any, userEmail?: string) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const formattedData = {
+      const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const formattedData: any = {
         ...data,
-        DocDate: today,
-        TaxDate: today,
+        DocDate: data.DocDate || today,
+        TaxDate: data.TaxDate || today,
         ReqDate: data.DocDueDate || today,
         RequesterEmail: userEmail,
-        DocumentLines: data.DocumentLines.map((line: any) => ({
-          ItemCode: line.ItemCode,
-          Quantity: line.Quantity,
-          UnitPrice: line.Price || 0,
-          RequiredDate: data.DocDueDate || today,
-          CostingCode: line.CostingCode,
-          CostingCode2: line.CostingCode2,
-          CostingCode3: line.CostingCode3,
-          CostingCode4: line.CostingCode4,
-          CostingCode5: line.CostingCode5,
-          ProjectCode: line.ProjectCode,
-          Usage: line.Usage
-        }))
+        DocumentLines: (data.DocumentLines || []).map((line: any) => {
+          const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          return {
+            ItemCode: line.ItemCode,
+            Quantity: line.Quantity,
+            UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            RequiredDate: line.RequiredDate || data.DocDueDate || today,
+            CostingCode: line.CostingCode || 'BR',
+            CostingCode2: line.CostingCode2 || 'MATRIZ',
+            CostingCode3: line.CostingCode3 || 'OPER_OFF',
+            CostingCode4: lineProject,
+            CostingCode5: line.CostingCode5 || undefined,
+            Usage: line.Usage ? parseInt(line.Usage) : undefined
+          };
+        })
       };
+      delete formattedData.Project;
+      delete formattedData.ProjectCode;
+      if (headerProject) formattedData.U_Projeto = headerProject;
+
       const response = await api.post('/sap/PurchaseRequests', formattedData, {
         headers: {
           'B1S-EnableApprovalWorkflow': 'true'
@@ -499,25 +517,32 @@ export const sapService = {
   createPurchaseQuotation: async (data: any) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const formattedData = {
+      const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const formattedData: any = {
         ...data,
-        DocDate: today,
-        TaxDate: today,
+        DocDate: data.DocDate || today,
+        TaxDate: data.TaxDate || today,
         ReqDate: data.DocDueDate || today,
-        DocumentLines: data.DocumentLines.map((line: any) => ({
-          ItemCode: line.ItemCode,
-          Quantity: line.Quantity,
-          UnitPrice: line.Price || 0,
-          RequiredDate: data.DocDueDate || today,
-          CostingCode: line.CostingCode,
-          CostingCode2: line.CostingCode2,
-          CostingCode3: line.CostingCode3,
-          CostingCode4: line.CostingCode4,
-          CostingCode5: line.CostingCode5,
-          ProjectCode: line.ProjectCode,
-          Usage: line.Usage
-        }))
+        DocumentLines: (data.DocumentLines || []).map((line: any) => {
+          const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          return {
+            ItemCode: line.ItemCode,
+            Quantity: line.Quantity,
+            UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            RequiredDate: line.RequiredDate || data.DocDueDate || today,
+            CostingCode: line.CostingCode || 'BR',
+            CostingCode2: line.CostingCode2 || 'MATRIZ',
+            CostingCode3: line.CostingCode3 || 'OPER_OFF',
+            CostingCode4: lineProject,
+            CostingCode5: line.CostingCode5 || undefined,
+            Usage: line.Usage ? parseInt(line.Usage) : undefined
+          };
+        })
       };
+      delete formattedData.Project;
+      delete formattedData.ProjectCode;
+      if (headerProject) formattedData.U_Projeto = headerProject;
+
       const response = await api.post('/sap/PurchaseQuotations', formattedData, {
         headers: {
           'B1S-EnableApprovalWorkflow': 'true'
@@ -532,25 +557,32 @@ export const sapService = {
   createPurchaseDownPayment: async (data: any) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const formattedData = {
+      const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const formattedData: any = {
         ...data,
-        DocDate: today,
-        TaxDate: today,
+        DocDate: data.DocDate || today,
+        TaxDate: data.TaxDate || today,
         DocType: 'dDocument_Items',
         DownPaymentType: 'dptInvoice',
-        DocumentLines: data.DocumentLines.map((line: any) => ({
-          ItemCode: line.ItemCode,
-          Quantity: line.Quantity,
-          UnitPrice: line.Price || 0,
-          CostingCode: line.CostingCode,
-          CostingCode2: line.CostingCode2,
-          CostingCode3: line.CostingCode3,
-          CostingCode4: line.CostingCode4,
-          CostingCode5: line.CostingCode5,
-          ProjectCode: line.ProjectCode,
-          Usage: line.Usage
-        }))
+        DocumentLines: (data.DocumentLines || []).map((line: any) => {
+          const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          return {
+            ItemCode: line.ItemCode,
+            Quantity: line.Quantity,
+            UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            CostingCode: line.CostingCode || 'BR',
+            CostingCode2: line.CostingCode2 || 'MATRIZ',
+            CostingCode3: line.CostingCode3 || 'OPER_OFF',
+            CostingCode4: lineProject,
+            CostingCode5: line.CostingCode5 || undefined,
+            Usage: line.Usage ? parseInt(line.Usage) : undefined
+          };
+        })
       };
+      delete formattedData.Project;
+      delete formattedData.ProjectCode;
+      if (headerProject) formattedData.U_Projeto = headerProject;
+
       const response = await api.post('/sap/PurchaseDownPayments', formattedData, {
         headers: {
           'B1S-EnableApprovalWorkflow': 'true'
