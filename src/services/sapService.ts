@@ -163,10 +163,12 @@ export function buildODataQuery(
     const raw = search.trim();
     // Check if input contains a valid 32-bit positive integer (for DocNum/DocEntry)
     // Matches pure numbers like "1029" or strings like "#1029", "PV 1029"
-    const numMatch = raw.match(/^\D*(\d+)\D*$/);
+    // Does not treat Business Partner codes like "C000028" or "F000123" as document numbers
+    const isCardCode = /^[CcFf]\d+$/i.test(raw);
+    const numMatch = !isCardCode ? raw.match(/^\D*(\d+)\D*$/) : null;
     const numVal = numMatch ? parseInt(numMatch[1], 10) : NaN;
     // SAP 32-bit signed int max is 2147483647
-    const hasValidDocNum = !isNaN(numVal) && numVal > 0 && numVal <= 2147483647;
+    const hasValidDocNum = !isCardCode && !isNaN(numVal) && numVal > 0 && numVal <= 2147483647;
 
     const safeSearch = raw.replace(/'/g, "''");
     const upper = safeSearch.toUpperCase();
@@ -177,6 +179,10 @@ export function buildODataQuery(
     if (hasValidDocNum) {
       clauses.push(`DocNum eq ${numVal}`);
       clauses.push(`DocEntry eq ${numVal}`);
+    }
+
+    if (isCardCode) {
+      clauses.push(`CardCode eq '${upper}'`);
     }
 
     // SAP HANA contains() is strictly case-sensitive.
@@ -290,6 +296,21 @@ export const isServiceOrder = (order: any): boolean => {
   const usage = order.TaxExtension?.MainUsage ?? order.MainUsage ?? order.mainusage ?? (order.DocumentLines && order.DocumentLines.length > 0 ? order.DocumentLines[0]?.Usage : undefined);
   return Number(usage) === 9;
 };
+
+export function calculateUDataPgtoFromPymntGroup(pymntGroup?: string | number | null, baseDateStr?: string): string {
+  const base = baseDateStr ? new Date(`${String(baseDateStr).split('T')[0]}T12:00:00`) : new Date();
+  const safeBase = isNaN(base.getTime()) ? new Date() : base;
+  const rawStr = String(pymntGroup ?? '').trim();
+  const match = rawStr.match(/\d+/);
+  const parsedDays = match ? parseInt(match[0], 10) : 0;
+  const daysToAdd = !isNaN(parsedDays) && parsedDays > 0 ? parsedDays - 1 : 0;
+  const target = new Date(safeBase);
+  target.setDate(target.getDate() + daysToAdd);
+  const yyyy = target.getFullYear();
+  const mm = String(target.getMonth() + 1).padStart(2, '0');
+  const dd = String(target.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 export const sapService = {
   isServiceOrder,
@@ -412,18 +433,48 @@ export const sapService = {
     }
   },
 
-  createPurchaseOrder: async (data: any) => {
+  createPurchaseOrder: async (data: any, userEmail?: string) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const rawHeaderUsage = data.MainUsage ?? data.TaxExtension?.MainUsage ?? data.Usage ?? (data.DocumentLines || []).find((l: any) => l.Usage)?.Usage;
+      const headerUsage = rawHeaderUsage ? parseInt(String(rawHeaderUsage), 10) : undefined;
+      const paymentGroupCode = data.PaymentGroupCode !== undefined && data.PaymentGroupCode !== null && data.PaymentGroupCode !== ''
+        ? parseInt(String(data.PaymentGroupCode), 10)
+        : undefined;
+      let uDataPgto = data.U_DataPgto || data.U_dataPgto;
+      if (!uDataPgto) {
+        if (paymentGroupCode !== undefined && !isNaN(paymentGroupCode) && paymentGroupCode !== -1) {
+          try {
+            const ptRes = await api.get(`/sap/PaymentTermsTypes(${paymentGroupCode})`);
+            const pymntGroup = ptRes.data?.PaymentTermsGroupName ?? ptRes.data?.PymntGroup ?? ptRes.data?.U_DiasPC;
+            uDataPgto = calculateUDataPgtoFromPymntGroup(pymntGroup, data.DocDate || today);
+          } catch {
+            uDataPgto = data.DocDate || today;
+          }
+        } else {
+          uDataPgto = data.DocDate || today;
+        }
+      }
       const formattedData: any = {
         ...data,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
+        U_DataPgto: uDataPgto,
+        ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
+        ...(headerUsage ? {
+          MainUsage: headerUsage,
+          TaxExtension: {
+            ...(data.TaxExtension || {}),
+            MainUsage: headerUsage
+          }
+        } : {}),
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
           return {
             ItemCode: line.ItemCode,
+            ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             CostingCode: line.CostingCode || 'BR',
@@ -431,22 +482,42 @@ export const sapService = {
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: line.Usage ? parseInt(line.Usage) : undefined
+            Usage: lineUsage || undefined
           };
         })
       };
 
-      // Strip Project/ProjectCode from header so SAP does not validate against OPRJ table
       delete formattedData.Project;
       delete formattedData.ProjectCode;
       if (headerProject) {
         formattedData.U_Projeto = headerProject;
       }
 
-      const response = await api.post('/sap/PurchaseOrders', formattedData, {
-        headers: {
-          'B1S-EnableApprovalWorkflow': 'true'
+      // Save as Draft in SAP and register for line-by-line approval
+      try {
+        const draftRes = await api.post('/approvals/create-draft', {
+          docObjectCode: 'oPurchaseOrders',
+          objectType: '22',
+          payload: formattedData,
+          userEmail: userEmail || data.RequesterEmail,
+          userName: data.RequesterName
+        });
+        if (draftRes.data && draftRes.data.draftDocEntry) {
+          return {
+            ...draftRes.data.sapDraft,
+            DocEntry: draftRes.data.draftDocEntry,
+            DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            _isDraft: true,
+            _portalApproval: draftRes.data.approvalRecord
+          };
         }
+      } catch (draftErr: any) {
+        console.warn('Draft endpoint error, falling back to direct /sap/Drafts:', draftErr?.message);
+      }
+
+      const response = await api.post('/sap/Drafts', {
+        ...formattedData,
+        DocObjectCode: 'oPurchaseOrders'
       });
       return response.data;
     } catch (error) {
@@ -456,18 +527,48 @@ export const sapService = {
 
   createPurchaseRequest: async (data: any, userEmail?: string) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const rawHeaderUsage = data.MainUsage ?? data.TaxExtension?.MainUsage ?? data.Usage ?? (data.DocumentLines || []).find((l: any) => l.Usage)?.Usage;
+      const headerUsage = rawHeaderUsage ? parseInt(String(rawHeaderUsage), 10) : undefined;
+      const paymentGroupCode = data.PaymentGroupCode !== undefined && data.PaymentGroupCode !== null && data.PaymentGroupCode !== ''
+        ? parseInt(String(data.PaymentGroupCode), 10)
+        : undefined;
+      let uDataPgto = data.U_DataPgto || data.U_dataPgto;
+      if (!uDataPgto) {
+        if (paymentGroupCode !== undefined && !isNaN(paymentGroupCode) && paymentGroupCode !== -1) {
+          try {
+            const ptRes = await api.get(`/sap/PaymentTermsTypes(${paymentGroupCode})`);
+            const pymntGroup = ptRes.data?.PaymentTermsGroupName ?? ptRes.data?.PymntGroup ?? ptRes.data?.U_DiasPC;
+            uDataPgto = calculateUDataPgtoFromPymntGroup(pymntGroup, data.DocDate || today);
+          } catch {
+            uDataPgto = data.DocDate || today;
+          }
+        } else {
+          uDataPgto = data.DocDate || today;
+        }
+      }
       const formattedData: any = {
         ...data,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
         ReqDate: data.DocDueDate || today,
         RequesterEmail: userEmail,
+        U_DataPgto: uDataPgto,
+        ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
+        ...(headerUsage ? {
+          MainUsage: headerUsage,
+          TaxExtension: {
+            ...(data.TaxExtension || {}),
+            MainUsage: headerUsage
+          }
+        } : {}),
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
           return {
             ItemCode: line.ItemCode,
+            ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             RequiredDate: line.RequiredDate || data.DocDueDate || today,
@@ -476,7 +577,7 @@ export const sapService = {
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: line.Usage ? parseInt(line.Usage) : undefined
+            Usage: lineUsage || undefined
           };
         })
       };
@@ -484,10 +585,31 @@ export const sapService = {
       delete formattedData.ProjectCode;
       if (headerProject) formattedData.U_Projeto = headerProject;
 
-      const response = await api.post('/sap/PurchaseRequests', formattedData, {
-        headers: {
-          'B1S-EnableApprovalWorkflow': 'true'
+      // Save as Draft in SAP and register for line-by-line approval
+      try {
+        const draftRes = await api.post('/approvals/create-draft', {
+          docObjectCode: 'oPurchaseRequests',
+          objectType: '1470000113',
+          payload: formattedData,
+          userEmail,
+          userName: data.RequesterName
+        });
+        if (draftRes.data && draftRes.data.draftDocEntry) {
+          return {
+            ...draftRes.data.sapDraft,
+            DocEntry: draftRes.data.draftDocEntry,
+            DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            _isDraft: true,
+            _portalApproval: draftRes.data.approvalRecord
+          };
         }
+      } catch (draftErr: any) {
+        console.warn('Draft endpoint error, falling back to direct /sap/Drafts:', draftErr?.message);
+      }
+
+      const response = await api.post('/sap/Drafts', {
+        ...formattedData,
+        DocObjectCode: 'oPurchaseRequests'
       });
       return response.data;
     } catch (error) {
@@ -516,17 +638,47 @@ export const sapService = {
 
   createPurchaseQuotation: async (data: any) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const rawHeaderUsage = data.MainUsage ?? data.TaxExtension?.MainUsage ?? data.Usage ?? (data.DocumentLines || []).find((l: any) => l.Usage)?.Usage;
+      const headerUsage = rawHeaderUsage ? parseInt(String(rawHeaderUsage), 10) : undefined;
+      const paymentGroupCode = data.PaymentGroupCode !== undefined && data.PaymentGroupCode !== null && data.PaymentGroupCode !== ''
+        ? parseInt(String(data.PaymentGroupCode), 10)
+        : undefined;
+      let uDataPgto = data.U_DataPgto || data.U_dataPgto;
+      if (!uDataPgto) {
+        if (paymentGroupCode !== undefined && !isNaN(paymentGroupCode) && paymentGroupCode !== -1) {
+          try {
+            const ptRes = await api.get(`/sap/PaymentTermsTypes(${paymentGroupCode})`);
+            const pymntGroup = ptRes.data?.PaymentTermsGroupName ?? ptRes.data?.PymntGroup ?? ptRes.data?.U_DiasPC;
+            uDataPgto = calculateUDataPgtoFromPymntGroup(pymntGroup, data.DocDate || today);
+          } catch {
+            uDataPgto = data.DocDate || today;
+          }
+        } else {
+          uDataPgto = data.DocDate || today;
+        }
+      }
       const formattedData: any = {
         ...data,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
         ReqDate: data.DocDueDate || today,
+        U_DataPgto: uDataPgto,
+        ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
+        ...(headerUsage ? {
+          MainUsage: headerUsage,
+          TaxExtension: {
+            ...(data.TaxExtension || {}),
+            MainUsage: headerUsage
+          }
+        } : {}),
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
           return {
             ItemCode: line.ItemCode,
+            ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             RequiredDate: line.RequiredDate || data.DocDueDate || today,
@@ -535,7 +687,7 @@ export const sapService = {
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: line.Usage ? parseInt(line.Usage) : undefined
+            Usage: lineUsage || undefined
           };
         })
       };
@@ -556,18 +708,48 @@ export const sapService = {
 
   createPurchaseDownPayment: async (data: any) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
+      const rawHeaderUsage = data.MainUsage ?? data.TaxExtension?.MainUsage ?? data.Usage ?? (data.DocumentLines || []).find((l: any) => l.Usage)?.Usage;
+      const headerUsage = rawHeaderUsage ? parseInt(String(rawHeaderUsage), 10) : undefined;
+      const paymentGroupCode = data.PaymentGroupCode !== undefined && data.PaymentGroupCode !== null && data.PaymentGroupCode !== ''
+        ? parseInt(String(data.PaymentGroupCode), 10)
+        : undefined;
+      let uDataPgto = data.U_DataPgto || data.U_dataPgto;
+      if (!uDataPgto) {
+        if (paymentGroupCode !== undefined && !isNaN(paymentGroupCode) && paymentGroupCode !== -1) {
+          try {
+            const ptRes = await api.get(`/sap/PaymentTermsTypes(${paymentGroupCode})`);
+            const pymntGroup = ptRes.data?.PaymentTermsGroupName ?? ptRes.data?.PymntGroup ?? ptRes.data?.U_DiasPC;
+            uDataPgto = calculateUDataPgtoFromPymntGroup(pymntGroup, data.DocDate || today);
+          } catch {
+            uDataPgto = data.DocDate || today;
+          }
+        } else {
+          uDataPgto = data.DocDate || today;
+        }
+      }
       const formattedData: any = {
         ...data,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
         DocType: 'dDocument_Items',
         DownPaymentType: 'dptInvoice',
+        U_DataPgto: uDataPgto,
+        ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
+        ...(headerUsage ? {
+          MainUsage: headerUsage,
+          TaxExtension: {
+            ...(data.TaxExtension || {}),
+            MainUsage: headerUsage
+          }
+        } : {}),
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
+          const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
           return {
             ItemCode: line.ItemCode,
+            ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             CostingCode: line.CostingCode || 'BR',
@@ -575,7 +757,7 @@ export const sapService = {
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: line.Usage ? parseInt(line.Usage) : undefined
+            Usage: lineUsage || undefined
           };
         })
       };
@@ -583,10 +765,29 @@ export const sapService = {
       delete formattedData.ProjectCode;
       if (headerProject) formattedData.U_Projeto = headerProject;
 
-      const response = await api.post('/sap/PurchaseDownPayments', formattedData, {
-        headers: {
-          'B1S-EnableApprovalWorkflow': 'true'
+      // Save as Draft in SAP and register for line-by-line approval
+      try {
+        const draftRes = await api.post('/approvals/create-draft', {
+          docObjectCode: 'oPurchaseDownPayments',
+          objectType: '204',
+          payload: formattedData
+        });
+        if (draftRes.data && draftRes.data.draftDocEntry) {
+          return {
+            ...draftRes.data.sapDraft,
+            DocEntry: draftRes.data.draftDocEntry,
+            DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            _isDraft: true,
+            _portalApproval: draftRes.data.approvalRecord
+          };
         }
+      } catch (draftErr: any) {
+        console.warn('Draft endpoint error, falling back to direct /sap/Drafts:', draftErr?.message);
+      }
+
+      const response = await api.post('/sap/Drafts', {
+        ...formattedData,
+        DocObjectCode: 'oPurchaseDownPayments'
       });
       return response.data;
     } catch (error) {
@@ -620,8 +821,8 @@ export const sapService = {
 
   getBusinessPartners: async (name?: string) => {
     try {
-      // Include BPFiscalTaxIDCollection and EmailAddress
-      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,EmailAddress,BPFiscalTaxIDCollection&$top=50";
+      // Include BPFiscalTaxIDCollection, EmailAddress, and PayTermsGrpCode
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,EmailAddress,PayTermsGrpCode,BPFiscalTaxIDCollection&$top=50";
       let filter = "(CardType eq 'cSupplier' or CardType eq 'S')";
       if (name) {
         filter += ` and (contains(CardName, '${name}') or contains(CardCode, '${name}'))`;
@@ -1295,6 +1496,63 @@ export const sapService = {
     }
   },
 
+  getBuyers: async () => {
+    try {
+      const allBuyers: any[] = [];
+      const seenCodes = new Set<number>();
+      for (let skip = 0; skip < 100; skip += 20) {
+        const response = await api.get(`/sap/SalesPersons?$skip=${skip}&$top=20&$select=SalesEmployeeCode,SalesEmployeeName,Active`);
+        const list = response.data?.value || [];
+        if (list.length === 0) break;
+        for (const item of list) {
+          const code = Number(item.SalesEmployeeCode);
+          if (!isNaN(code) && !seenCodes.has(code) && (item.Active === 'tYES' || item.Active === 'Y' || !item.Active)) {
+            seenCodes.add(code);
+            allBuyers.push({
+              SalesEmployeeCode: code,
+              SalesEmployeeName: item.SalesEmployeeName || String(code)
+            });
+          }
+        }
+        if (list.length < 20) break;
+      }
+      return allBuyers;
+    } catch (error) {
+      console.error('Erro ao buscar compradores (OSLP):', error);
+      return [];
+    }
+  },
+
+  getPaymentTerms: async () => {
+    try {
+      const allTerms: any[] = [];
+      const seenGroups = new Set<number>();
+      for (let skip = 0; skip < 120; skip += 20) {
+        const response = await api.get(`/sap/PaymentTermsTypes?$skip=${skip}&$top=20`);
+        const list = response.data?.value || [];
+        if (list.length === 0) break;
+        for (const item of list) {
+          const grpNum = Number(item.GroupNumber ?? item.GroupNum);
+          if (!isNaN(grpNum) && !seenGroups.has(grpNum)) {
+            seenGroups.add(grpNum);
+            allTerms.push({
+              GroupNumber: grpNum,
+              GroupNum: grpNum,
+              PaymentTermsGroupName: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
+              PymntGroup: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
+              U_DiasPC: item.U_DiasPC
+            });
+          }
+        }
+        if (list.length < 20) break;
+      }
+      return allTerms;
+    } catch (error) {
+      console.error('Erro ao buscar condições de pagamento (OCTG):', error);
+      return [];
+    }
+  },
+
   getUsages: async () => {
     try {
       // 1. Try NotaFiscalUsage first as requested
@@ -1398,16 +1656,31 @@ export const sapService = {
   // Quality Control Module (QLT_QLDADE)
   getQualityRecords: async () => {
     try {
-      const response = await api.get('/sap/U_QLT_QLDADE?$top=50');
-      return response.data.value || [];
+      const response = await api.get('/sap/PurchaseDeliveryNotes?$select=DocEntry,DocNum,DocDate,DocTotal,CardCode,CardName,U_IPF,U_Atendimento,U_Prazo,U_Quantidade,U_Documentacao,U_Qualidade,U_Status,U_Aviso_IPF&$orderby=DocDate desc,DocEntry desc&$top=50');
+      return response.data?.value || [];
     } catch (error) {
       try {
-        const response2 = await api.get('/sap/QLT_QLDADE?$top=50');
-        return response2.data.value || [];
+        const response2 = await api.get('/sap/U_QLT_QLDADE?$top=50');
+        return response2.data?.value || [];
       } catch (err2) {
         console.warn('Quality records endpoint not found in SAP, returning empty list');
         return [];
       }
+    }
+  },
+
+  getSupplierReceipts: async (cardCode?: string) => {
+    try {
+      let url = `/sap/PurchaseDeliveryNotes?$select=DocEntry,DocNum,DocDate,DocTotal,CardCode,CardName,DocumentLines&$orderby=DocDate desc,DocEntry desc&$top=20`;
+      if (cardCode && cardCode.trim()) {
+        const safeCode = cardCode.trim().replace(/'/g, "''");
+        url = `/sap/PurchaseDeliveryNotes?$select=DocEntry,DocNum,DocDate,DocTotal,CardCode,CardName,DocumentLines&$filter=CardCode eq '${safeCode}'&$orderby=DocDate desc,DocEntry desc&$top=20`;
+      }
+      const response = await api.get(url);
+      return response.data?.value || [];
+    } catch (error) {
+      console.warn('Erro ao buscar recebimentos do fornecedor:', error);
+      return [];
     }
   },
 
@@ -1425,6 +1698,24 @@ export const sapService = {
       U_Aviso_IPF: ipf < 10 ? 'Fornecedor Crítico' : 'Desempenho Adequado'
     };
 
+    if (data.DocEntry) {
+      try {
+        const patchRes = await api.patch(`/sap/PurchaseDeliveryNotes(${data.DocEntry})`, {
+          U_Atendimento: formattedData.U_Atendimento,
+          U_Prazo: formattedData.U_Prazo,
+          U_Quantidade: formattedData.U_Quantidade,
+          U_Documentacao: formattedData.U_Documentacao,
+          U_Qualidade: formattedData.U_Qualidade,
+          U_IPF: formattedData.U_IPF,
+          U_Aviso_IPF: formattedData.U_Aviso_IPF,
+          U_Status: formattedData.U_Status
+        });
+        return patchRes.data || { success: true, ...formattedData };
+      } catch (patchErr) {
+        console.warn('Could not patch PurchaseDeliveryNotes with evaluation:', patchErr);
+      }
+    }
+
     try {
       const response = await api.post('/sap/U_QLT_QLDADE', formattedData);
       return response.data;
@@ -1433,7 +1724,7 @@ export const sapService = {
         const response2 = await api.post('/sap/QLT_QLDADE', formattedData);
         return response2.data;
       } catch (err2) {
-        return handleApiError(error, 'createQualityRecord');
+        return { success: true, localOnly: true, ...formattedData };
       }
     }
   },
@@ -2417,6 +2708,52 @@ export const sapService = {
       return response.data;
     } catch (error) {
       return handleApiError(error, 'createOrderFromQuotation');
+    }
+  },
+
+  // Unified Approval Center Services
+  getApprovalsCatalog: async () => {
+    try {
+      const response = await api.get('/approvals/catalog');
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'getApprovalsCatalog');
+    }
+  },
+
+  getUnifiedApprovals: async () => {
+    try {
+      const response = await api.get('/approvals/unified');
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'getUnifiedApprovals');
+    }
+  },
+
+  getApprovalDraftDetail: async (draftEntry: number) => {
+    try {
+      const response = await api.get(`/approvals/draft-detail/${draftEntry}`);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'getApprovalDraftDetail');
+    }
+  },
+
+  decideUnifiedApproval: async (payload: {
+    draftDocEntry: number;
+    decision: 'ardApproved' | 'ardNotApproved';
+    remarks?: string;
+    approverName?: string;
+    approverEmail?: string;
+    lineNum?: number;
+    stageCode?: number;
+    approveAllLines?: boolean;
+  }) => {
+    try {
+      const response = await api.post('/approvals/decide', payload);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'decideUnifiedApproval');
     }
   }
 };

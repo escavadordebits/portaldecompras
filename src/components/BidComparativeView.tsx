@@ -89,8 +89,22 @@ export function BidComparativeView({
 }) {
   const [activeReqDocEntry, setActiveReqDocEntry] = useState<string>('');
   const [purchaseRequests, setPurchaseRequests] = useState<any[]>([]);
+  const [purchaseQuotations, setPurchaseQuotations] = useState<any[]>([]);
+  const [activeQuotationDocEntry, setActiveQuotationDocEntry] = useState<string>('');
   const [isLoadingReqs, setIsLoadingReqs] = useState<boolean>(false);
   const [isGeneratingSAPPO, setIsGeneratingSAPPO] = useState<boolean>(false);
+
+  // Critério automático (Padrão de Prazo e Preço) e Seleção de Itens / Fornecedor Manual
+  const [autoCriterion, setAutoCriterion] = useState<'price_and_deadline' | 'lowest_price' | 'fastest_deadline'>('price_and_deadline');
+  const [selectedItemsForPO, setSelectedItemsForPO] = useState<Record<string, boolean>>({
+    'item-1': true,
+    'item-2': true,
+    'item-3': true,
+    'item-4': false
+  });
+  const [manualSupplierByItem, setManualSupplierByItem] = useState<Record<string, string>>({});
+  const [isManualSelectionMode, setIsManualSelectionMode] = useState<boolean>(false);
+  const matrixSectionRef = useRef<HTMLDivElement>(null);
   
   // Modals
   const [isExportSupplierModalOpen, setIsExportSupplierModalOpen] = useState(false);
@@ -165,12 +179,117 @@ export function BidComparativeView({
   const loadSAPRequests = async () => {
     setIsLoadingReqs(true);
     try {
-      const data = await sapService.getPurchaseRequests({ top: 30 });
-      setPurchaseRequests(Array.isArray(data) ? data : []);
+      const [reqsData, quotsData] = await Promise.all([
+        sapService.getPurchaseRequests({ top: 30 }).catch(() => []),
+        sapService.getPurchaseQuotations({ top: 30 }).catch(() => [])
+      ]);
+      setPurchaseRequests(Array.isArray(reqsData) ? reqsData : []);
+      setPurchaseQuotations(Array.isArray(quotsData) ? quotsData : []);
     } catch (e) {
-      console.warn('Erro ao carregar solicitações do SAP:', e);
+      console.warn('Erro ao carregar documentos do SAP:', e);
     } finally {
       setIsLoadingReqs(false);
+    }
+  };
+
+  const handleImportFromSAPQuotation = async (docEntry: number) => {
+    try {
+      toast.loading('Importando Oferta de Compra do SAP...', { id: 'sap-quot' });
+      const quot = await sapService.getPurchaseQuotation(docEntry);
+      if (!quot) {
+        toast.error('Oferta de compra não encontrada.', { id: 'sap-quot' });
+        return;
+      }
+
+      const quotLines: any[] = quot.DocumentLines || [];
+      setBidData(prev => {
+        const updatedItems = [...prev.items];
+        const newSelectedMap: Record<string, boolean> = { ...selectedItemsForPO };
+
+        quotLines.forEach((l: any) => {
+          const code = l.ItemCode || '';
+          const desc = (l.ItemDescription || l.ItemName || l.Dscription || code || '').trim();
+          let existing = updatedItems.find(
+            it => (code && it.itemCode === code) || it.description.toLowerCase() === desc.toLowerCase()
+          );
+          if (!existing) {
+            const newId = `item-quot-${docEntry}-${l.LineNum ?? updatedItems.length}`;
+            existing = {
+              id: newId,
+              itemNum: updatedItems.length + 1,
+              itemCode: code,
+              description: desc || `Item ${updatedItems.length + 1}`,
+              unit: l.MeasureUnit || 'UN',
+              targetQuantity: Number(l.Quantity) || 1
+            };
+            updatedItems.push(existing);
+            newSelectedMap[newId] = true;
+          } else {
+            newSelectedMap[existing.id] = true;
+          }
+        });
+
+        setSelectedItemsForPO(newSelectedMap);
+
+        // Compute delivery days from ReqDate/DocDueDate vs DocDate
+        let defaultDeliveryDays = '10 DDL';
+        if (quot.DocDueDate && quot.DocDate) {
+          const diffMs = new Date(quot.DocDueDate).getTime() - new Date(quot.DocDate).getTime();
+          const diffDays = Math.max(1, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+          defaultDeliveryDays = `${diffDays} DDL`;
+        }
+
+        const supOfferItems: Record<string, SupplierOfferItem> = {};
+        updatedItems.forEach(it => {
+          const matchedLine = quotLines.find(
+            (l: any) => (l.ItemCode && it.itemCode === l.ItemCode) ||
+              String(l.ItemDescription || l.ItemName || '').trim().toLowerCase() === it.description.toLowerCase()
+          );
+          supOfferItems[it.id] = {
+            itemId: it.id,
+            quantity: matchedLine ? (Number(matchedLine.Quantity) || it.targetQuantity || 1) : 0,
+            icmsPct: 22,
+            unitPrice: matchedLine ? (Number(matchedLine.UnitPrice ?? matchedLine.Price) || 0) : 0,
+            difal: 0,
+            ipi: 0,
+            freightItem: 0,
+            deliveryDays: matchedLine ? defaultDeliveryDays : ''
+          };
+        });
+
+        const supName = `${quot.CardName || quot.CardCode || 'FORNECEDOR'} (Oferta #${quot.DocNum || quot.DocEntry})`;
+        const existingSupIdx = prev.suppliers.findIndex(s => s.cardCode && s.cardCode === quot.CardCode);
+
+        let nextSuppliers = [...prev.suppliers];
+        if (existingSupIdx >= 0) {
+          nextSuppliers[existingSupIdx] = {
+            ...nextSuppliers[existingSupIdx],
+            supplierName: supName,
+            cardCode: quot.CardCode,
+            items: { ...nextSuppliers[existingSupIdx].items, ...supOfferItems }
+          };
+        } else {
+          nextSuppliers.push({
+            id: `sup-quot-${quot.DocEntry}`,
+            supplierName: supName,
+            cardCode: quot.CardCode,
+            freightType: 'CIF',
+            freightTotal: 0,
+            paymentTerms: quot.PaymentGroupCode ? `Cond. ${quot.PaymentGroupCode}` : '30 DDL',
+            items: supOfferItems
+          });
+        }
+
+        return {
+          ...prev,
+          items: updatedItems,
+          suppliers: nextSuppliers
+        };
+      });
+
+      toast.success(`Oferta #${quot.DocNum || quot.DocEntry} (${quot.CardName || quot.CardCode}) adicionada ao comparativo!`, { id: 'sap-quot' });
+    } catch (error) {
+      toast.error('Erro ao importar Oferta de Compra do SAP.', { id: 'sap-quot' });
     }
   };
 
@@ -212,6 +331,13 @@ export function BidComparativeView({
           items: newItems
         };
       });
+
+      const newSelected: Record<string, boolean> = {};
+      importedItems.forEach(it => {
+        newSelected[it.id] = (it.targetQuantity || 0) > 0;
+      });
+      setSelectedItemsForPO(newSelected);
+      setManualSupplierByItem({});
 
       setBidData(prev => ({
         ...prev,
@@ -275,40 +401,242 @@ export function BidComparativeView({
     };
   };
 
-  // Identify Best Supplier per Item
+  // Helper to extract numeric days from strings like "10 DDL", "15 dias", etc.
+  const parseDeliveryDays = (deliveryStr?: string): number => {
+    if (!deliveryStr) return 9999;
+    const match = String(deliveryStr).match(/\d+/);
+    if (!match) return 9999;
+    const parsed = parseInt(match[0], 10);
+    return isNaN(parsed) || parsed <= 0 ? 9999 : parsed;
+  };
+
+  // Identify Best Supplier per Item according to Padrão de Prazo e Preço
   const getBestOfferForItem = (itemId: string) => {
     let bestSupId = '';
     let minCost = Infinity;
+    let minDays = Infinity;
+
+    const validOffers: { supId: string; costEff: number; days: number; deliveryDaysStr: string }[] = [];
 
     bidData.suppliers.forEach(sup => {
       const off = sup.items[itemId];
       if (off && off.quantity > 0 && off.unitPrice > 0) {
         const costEff = calculateItemCostEffective(off);
-        if (costEff < minCost) {
-          minCost = costEff;
-          bestSupId = sup.id;
+        const days = parseDeliveryDays(off.deliveryDays);
+        if (costEff < minCost) minCost = costEff;
+        if (days < minDays) minDays = days;
+        validOffers.push({
+          supId: sup.id,
+          costEff,
+          days,
+          deliveryDaysStr: off.deliveryDays || '-'
+        });
+      }
+    });
+
+    if (validOffers.length === 0) {
+      return { bestSupId: '', minCost: 0, bestCost: 0, bestDeliveryDays: '-' };
+    }
+
+    let bestEntry = validOffers[0];
+    let bestScore = Infinity;
+
+    validOffers.forEach(entry => {
+      let score = 0;
+      if (autoCriterion === 'lowest_price') {
+        // Primary: lowest price; tie-breaker: shortest delivery deadline
+        score = entry.costEff * 1000 + (entry.days === 9999 ? 999 : entry.days * 0.01);
+      } else if (autoCriterion === 'fastest_deadline') {
+        // Primary: shortest delivery deadline; tie-breaker: lowest price
+        score = entry.days * 100000 + entry.costEff;
+      } else {
+        // 'price_and_deadline' (Padrão Prazo e Preço: 75% Preço + 25% Prazo normalizados)
+        const normCost = minCost > 0 ? entry.costEff / minCost : 1;
+        const normDays = minDays > 0 && minDays < 9999 && entry.days < 9999 ? entry.days / minDays : 1.5;
+        score = (normCost * 0.75) + (normDays * 0.25);
+      }
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestEntry = entry;
+      } else if (Math.abs(score - bestScore) < 1e-6) {
+        if (entry.costEff < bestEntry.costEff || (entry.costEff === bestEntry.costEff && entry.days < bestEntry.days)) {
+          bestEntry = entry;
         }
       }
     });
 
-    return { bestSupId, minCost: minCost === Infinity ? 0 : minCost };
+    bestSupId = bestEntry.supId;
+    return {
+      bestSupId,
+      minCost: minCost === Infinity ? 0 : minCost,
+      bestCost: bestEntry.costEff,
+      bestDeliveryDays: bestEntry.deliveryDaysStr
+    };
   };
 
-  // Identify Global Winner
+  // Identify Global Winner according to Padrão de Prazo e Preço (considering selected items if any)
   const getGlobalWinnerSupplier = () => {
-    let winnerId = '';
-    let lowestTotal = Infinity;
+    const activeItemIds = bidData.items
+      .filter(it => selectedItemsForPO[it.id] !== false)
+      .map(it => it.id);
+    const targetItemIds = activeItemIds.length > 0 ? activeItemIds : bidData.items.map(it => it.id);
+
+    const candidates: {
+      sup: SupplierOffer;
+      totalEffective: number;
+      avgDays: number;
+      maxDays: number;
+      quotedCount: number;
+    }[] = [];
+
+    let minTotal = Infinity;
+    let minAvgDays = Infinity;
 
     bidData.suppliers.forEach(sup => {
-      const summary = calculateSupplierSummary(sup);
-      if (summary.totalEffective > 0 && summary.totalEffective < lowestTotal) {
-        lowestTotal = summary.totalEffective;
-        winnerId = sup.id;
+      let totalNFe = 0;
+      let totalDifal = 0;
+      let totalIpi = 0;
+      let daysSum = 0;
+      let maxDays = 0;
+      let quotedCount = 0;
+
+      targetItemIds.forEach(itemId => {
+        const off = sup.items[itemId];
+        if (off && off.quantity > 0 && off.unitPrice > 0) {
+          totalNFe += off.quantity * off.unitPrice;
+          totalDifal += (off.difal || 0);
+          totalIpi += (off.ipi || 0);
+          const d = parseDeliveryDays(off.deliveryDays);
+          if (d < 9999) {
+            daysSum += d;
+            if (d > maxDays) maxDays = d;
+          }
+          quotedCount++;
+        }
+      });
+
+      if (quotedCount > 0 && totalNFe > 0) {
+        const freightVal = sup.freightType === 'FOB' ? (sup.freightTotal || 0) : 0;
+        const totalEffective = totalNFe + totalDifal + totalIpi + freightVal;
+        const avgDays = maxDays > 0 ? daysSum / quotedCount : 9999;
+        if (totalEffective < minTotal) minTotal = totalEffective;
+        if (avgDays < minAvgDays) minAvgDays = avgDays;
+        candidates.push({ sup, totalEffective, avgDays, maxDays, quotedCount });
       }
     });
 
-    const winner = bidData.suppliers.find(s => s.id === winnerId);
-    return { winner, lowestTotal: lowestTotal === Infinity ? 0 : lowestTotal };
+    if (candidates.length === 0) {
+      return { winner: undefined, lowestTotal: 0, winnerAvgDays: 0, winnerMaxDays: 0 };
+    }
+
+    // Prefer suppliers that quoted the most selected items, then evaluate by criterion
+    const maxQuoted = Math.max(...candidates.map(c => c.quotedCount));
+    const topCandidates = candidates.filter(c => c.quotedCount === maxQuoted);
+
+    let best = topCandidates[0];
+    let bestScore = Infinity;
+
+    topCandidates.forEach(c => {
+      let score = 0;
+      if (autoCriterion === 'lowest_price') {
+        score = c.totalEffective * 1000 + (c.avgDays === 9999 ? 999 : c.avgDays * 0.01);
+      } else if (autoCriterion === 'fastest_deadline') {
+        score = c.avgDays * 100000 + c.totalEffective;
+      } else {
+        const normCost = minTotal > 0 ? c.totalEffective / minTotal : 1;
+        const normDays = minAvgDays > 0 && minAvgDays < 9999 && c.avgDays < 9999 ? c.avgDays / minAvgDays : 1.5;
+        score = (normCost * 0.75) + (normDays * 0.25);
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    });
+
+    return {
+      winner: best.sup,
+      lowestTotal: best.totalEffective,
+      winnerAvgDays: best.avgDays < 9999 ? Math.round(best.avgDays) : 0,
+      winnerMaxDays: best.maxDays
+    };
+  };
+
+  // Manual override helpers
+  const activeManualEntries = Object.entries(manualSupplierByItem).filter(
+    ([itemId, supId]) => Boolean(supId) && selectedItemsForPO[itemId] !== false && bidData.items.some(i => i.id === itemId)
+  );
+  const hasManualOverride = activeManualEntries.length > 0;
+
+  const handleToggleItemForPO = (itemId: string) => {
+    setSelectedItemsForPO(prev => ({
+      ...prev,
+      [itemId]: prev[itemId] === false ? true : false
+    }));
+  };
+
+  const handleSelectSingleItemToBuy = (itemId: string) => {
+    const onlyOne: Record<string, boolean> = {};
+    bidData.items.forEach(it => {
+      onlyOne[it.id] = it.id === itemId;
+    });
+    setSelectedItemsForPO(onlyOne);
+    setIsManualSelectionMode(true);
+    toast.info('Item isolado para compra! Marque o fornecedor desejado na linha do item ou confirme o pedido.');
+  };
+
+  const handleManualSelectSupplierForItem = (itemId: string, supplierId: string) => {
+    const item = bidData.items.find(i => i.id === itemId);
+    const sup = bidData.suppliers.find(s => s.id === supplierId);
+    const off = sup?.items[itemId];
+    if (!off || off.quantity <= 0 || off.unitPrice <= 0) {
+      toast.error('Este fornecedor não possui quantidade/preço cotado para este item.');
+      return;
+    }
+
+    setSelectedItemsForPO(prev => ({ ...prev, [itemId]: true }));
+    setManualSupplierByItem(prev => {
+      const next = { ...prev };
+      if (next[itemId] === supplierId) {
+        delete next[itemId];
+        toast.info(`Seleção manual removida para "${item?.description}".`);
+      } else {
+        next[itemId] = supplierId;
+        toast.success(`Fornecedor "${sup?.supplierName}" marcado manualmente para "${item?.description}" (Oferta automática ignorada).`);
+      }
+      return next;
+    });
+  };
+
+  const handleManualSelectSupplierForAllSelected = (supplierId: string) => {
+    const sup = bidData.suppliers.find(s => s.id === supplierId);
+    if (!sup) return;
+    const nextManual: Record<string, string> = { ...manualSupplierByItem };
+    const nextSelected: Record<string, boolean> = { ...selectedItemsForPO };
+    let count = 0;
+
+    bidData.items.forEach(it => {
+      const off = sup.items[it.id];
+      if (off && off.quantity > 0 && off.unitPrice > 0) {
+        nextManual[it.id] = supplierId;
+        nextSelected[it.id] = true;
+        count++;
+      }
+    });
+
+    if (count === 0) {
+      toast.error('Este fornecedor não possui itens cotados válidos.');
+      return;
+    }
+    setSelectedItemsForPO(nextSelected);
+    setManualSupplierByItem(nextManual);
+    toast.success(`${count} item(ns) marcados manualmente para ${sup.supplierName}. Oferta automática ignorada!`);
+  };
+
+  const handleClearManualSelection = () => {
+    setManualSupplierByItem({});
+    setIsManualSelectionMode(false);
+    toast.info('Seleção manual limpa. Modo automático (Prazo e Preço) restaurado.');
   };
 
   // --- Handlers for User Edits ---
@@ -384,6 +712,13 @@ export function BidComparativeView({
       toast.error('O BID deve ter ao menos 1 fornecedor para comparação.');
       return;
     }
+    setManualSupplierByItem(prev => {
+      const next = { ...prev };
+      Object.keys(next).forEach(k => {
+        if (next[k] === supplierId) delete next[k];
+      });
+      return next;
+    });
     setBidData(prev => ({
       ...prev,
       suppliers: prev.suppliers.filter(s => s.id !== supplierId)
@@ -401,6 +736,8 @@ export function BidComparativeView({
       unit: 'UN',
       targetQuantity: 1
     };
+
+    setSelectedItemsForPO(prev => ({ ...prev, [newItemId]: true }));
 
     setBidData(prev => {
       const updatedSuppliers = prev.suppliers.map(sup => ({
@@ -432,6 +769,16 @@ export function BidComparativeView({
       toast.error('O BID deve ter ao menos 1 item.');
       return;
     }
+    setSelectedItemsForPO(prev => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+    setManualSupplierByItem(prev => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
     setBidData(prev => ({
       ...prev,
       items: prev.items.filter(it => it.id !== itemId),
@@ -791,36 +1138,97 @@ export function BidComparativeView({
   };
 
   // --- APPROVE AND GENERATE SAP PURCHASE ORDER (PO) ---
-  const handleApproveWinnerAndCreateSAPPO = async (supplier: SupplierOffer) => {
-    const summary = calculateSupplierSummary(supplier);
-    if (summary.totalEffective <= 0) {
-      toast.error('Fornecedor não possui itens válidos cotados para gerar Pedido de Compra.');
+  // Supports both Automatic Mode (Prazo & Preço) and Manual Mode (ignoring automatic offer when manual supplier is marked)
+  const handleApproveWinnerAndCreateSAPPO = async (fallbackSupplier?: SupplierOffer) => {
+    const selectedItems = bidData.items.filter(it => selectedItemsForPO[it.id] !== false);
+    if (selectedItems.length === 0) {
+      toast.error('Selecione ao menos um item na coluna "Comprar" para gerar o Pedido de Compra.');
       return;
     }
 
-    setIsGeneratingSAPPO(true);
-    try {
-      const orderLines = bidData.items.map(it => {
-        const off = supplier.items[it.id];
-        if (!off || off.quantity <= 0 || off.unitPrice <= 0) return null;
-        return {
+    // Group lines by chosen supplier:
+    // If ANY item has a manual supplier marked (hasManualOverride), IGNORE the automatic suggested offer!
+    const ordersBySupplier: Record<string, { supplier: SupplierOffer; lines: any[]; itemNames: string[]; isManual: boolean }> = {};
+
+    if (hasManualOverride) {
+      // MODO MANUAL: Ignora a oferta sugerida no modo automático e usa exclusivamente os fornecedores marcados manualmente
+      selectedItems.forEach(it => {
+        const manualSupId = manualSupplierByItem[it.id];
+        if (!manualSupId) return; // Ignora sugestão automática
+        const sup = bidData.suppliers.find(s => s.id === manualSupId);
+        const off = sup?.items[it.id];
+        if (!sup || !off || off.quantity <= 0 || off.unitPrice <= 0) return;
+
+        if (!ordersBySupplier[sup.id]) {
+          ordersBySupplier[sup.id] = { supplier: sup, lines: [], itemNames: [], isManual: true };
+        }
+        ordersBySupplier[sup.id].lines.push({
           ItemCode: it.itemCode || 'ITEM_GEN',
           ItemDescription: it.description,
           Quantity: off.quantity,
           Price: off.unitPrice,
-          Usage: 1, // Uso e Consumo
+          Usage: 1
+        });
+        ordersBySupplier[sup.id].itemNames.push(it.description);
+      });
+
+      if (Object.keys(ordersBySupplier).length === 0) {
+        toast.error('Marque manualmente o fornecedor desejado para o(s) item(ns) selecionado(s) no painel comparativo.');
+        return;
+      }
+    } else {
+      // MODO AUTOMÁTICO (Padrão Prazo e Preço) para os itens selecionados
+      const targetSupplier = fallbackSupplier || globalWinner.winner;
+      if (!targetSupplier) {
+        toast.error('Nenhum fornecedor vencedor encontrado para os itens selecionados.');
+        return;
+      }
+
+      selectedItems.forEach(it => {
+        const off = targetSupplier.items[it.id];
+        if (!off || off.quantity <= 0 || off.unitPrice <= 0) return;
+        if (!ordersBySupplier[targetSupplier.id]) {
+          ordersBySupplier[targetSupplier.id] = { supplier: targetSupplier, lines: [], itemNames: [], isManual: false };
+        }
+        ordersBySupplier[targetSupplier.id].lines.push({
+          ItemCode: it.itemCode || 'ITEM_GEN',
+          ItemDescription: it.description,
+          Quantity: off.quantity,
+          Price: off.unitPrice,
+          Usage: 1
+        });
+        ordersBySupplier[targetSupplier.id].itemNames.push(it.description);
+      });
+
+      if (Object.keys(ordersBySupplier).length === 0) {
+        toast.error('O fornecedor sugerido não possui cotação válida para o(s) item(ns) selecionado(s). Marque manualmente outro fornecedor no painel.');
+        return;
+      }
+    }
+
+    setIsGeneratingSAPPO(true);
+    try {
+      const groups = Object.values(ordersBySupplier);
+      toast.loading(`Enviando ${groups.length} Pedido(s) de Compra ao SAP Business One...`, { id: 'create-po-bid' });
+
+      const createdDocs: string[] = [];
+      for (const grp of groups) {
+        const modeTag = grp.isManual
+          ? 'SELEÇÃO MANUAL (Oferta Automática Ignorada)'
+          : 'Vencedor Automático (Prazo e Preço)';
+        const poPayload = {
+          CardCode: grp.supplier.cardCode || 'F0001',
+          Comments: `Pedido gerado via BID Comparativo REQ #${bidData.reqNumber} [${modeTag}] - Fornecedor: ${grp.supplier.supplierName} (${grp.lines.length} item/ns)`,
+          DocumentLines: grp.lines
         };
-      }).filter(Boolean);
+        const createdPO = await sapService.createPurchaseOrder(poPayload);
+        createdDocs.push(`${grp.supplier.supplierName}: #${createdPO.DocNum || createdPO.DocEntry || 'Gerado'}`);
+        if (onGeneratePO) {
+          onGeneratePO(createdPO);
+        }
+      }
 
-      const poPayload = {
-        CardCode: supplier.cardCode || 'F0001',
-        Comments: `Pedido gerado via BID Comparativo REQ #${bidData.reqNumber} - Vencedor: ${supplier.supplierName}`,
-        DocumentLines: orderLines
-      };
-
-      toast.loading('Enviando Pedido de Compra ao SAP Business One...', { id: 'create-po-bid' });
-      const createdPO = await sapService.createPurchaseOrder(poPayload);
-      toast.success(`Pedido de Compra SAP criado com sucesso! Nº DocEntry: ${createdPO.DocEntry || createdPO.DocNum || 'Gerado'}`, { id: 'create-po-bid' });
+      toast.success(`Pedido(s) de Compra SAP criado(s) com sucesso! (${createdDocs.join(' | ')})`, { id: 'create-po-bid' });
     } catch (err: any) {
       console.error(err);
       toast.error(`Erro ao criar Pedido no SAP: ${err.message || 'Falha de comunicação'}`, { id: 'create-po-bid' });
@@ -853,8 +1261,8 @@ export function BidComparativeView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-          {/* Load from SAP Requisition */}
-          <div className="flex items-center gap-2">
+          {/* Load from SAP Requisition or SAP Purchase Quotation */}
+          <div className="flex flex-wrap items-center gap-2">
             <Select 
               value={activeReqDocEntry} 
               onValueChange={(val) => {
@@ -862,7 +1270,7 @@ export function BidComparativeView({
                 handleImportFromSAPReq(Number(val));
               }}
             >
-              <SelectTrigger className="h-10 text-xs font-bold w-48 rounded-none border-evo-bg">
+              <SelectTrigger className="h-10 text-xs font-bold w-44 rounded-none border-evo-bg">
                 <SelectValue placeholder="Importar REQ do SAP..." />
               </SelectTrigger>
               <SelectContent>
@@ -873,12 +1281,32 @@ export function BidComparativeView({
                 ))}
               </SelectContent>
             </Select>
+
+            <Select 
+              value={activeQuotationDocEntry} 
+              onValueChange={(val) => {
+                setActiveQuotationDocEntry(val);
+                handleImportFromSAPQuotation(Number(val));
+              }}
+            >
+              <SelectTrigger className="h-10 text-xs font-bold w-48 rounded-none border-evo-bg">
+                <SelectValue placeholder="Importar Oferta SAP..." />
+              </SelectTrigger>
+              <SelectContent>
+                {purchaseQuotations.map(q => (
+                  <SelectItem key={q.DocEntry} value={String(q.DocEntry)} className="text-xs">
+                    Oferta #{q.DocNum || q.DocEntry} - {q.CardName || q.CardCode || 'Fornecedor'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Button 
               variant="outline" 
               size="sm" 
               onClick={loadSAPRequests} 
               className="h-10 px-3 rounded-none border-evo-bg"
-              title="Recarregar Solicitações do SAP"
+              title="Recarregar Solicitações e Ofertas do SAP"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingReqs ? 'animate-spin' : ''}`} />
             </Button>
@@ -912,8 +1340,8 @@ export function BidComparativeView({
         </div>
       </div>
 
-      {/* Header Parameters (Data, Req, Requisitante, Finalidade) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 bg-white p-4 border border-evo-bg">
+      {/* Header Parameters (Data, Req, Requisitante, Finalidade, Padrão de Avaliação) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 bg-white p-4 border border-evo-bg">
         <div>
           <Label className="text-[10px] font-black uppercase text-evo-dark/50 tracking-wider">Empresa</Label>
           <Input 
@@ -963,102 +1391,367 @@ export function BidComparativeView({
             </SelectContent>
           </Select>
         </div>
+        <div>
+          <Label className="text-[10px] font-black uppercase text-emerald-700 tracking-wider">Padrão Oferta Ganhadora (Auto)</Label>
+          <Select 
+            value={autoCriterion} 
+            onValueChange={(val: 'price_and_deadline' | 'lowest_price' | 'fastest_deadline') => setAutoCriterion(val)}
+          >
+            <SelectTrigger className="h-9 font-bold text-xs rounded-none border-emerald-300 bg-emerald-50/40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="price_and_deadline">PADRÃO: PRAZO E PREÇO</SelectItem>
+              <SelectItem value="lowest_price">MENOR PREÇO (DESEMPATE PRAZO)</SelectItem>
+              <SelectItem value="fastest_deadline">MENOR PRAZO (DESEMPATE PREÇO)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      {/* Global Recommendation Card */}
-      {globalWinner.winner && (
-        <Card className="border-none rounded-none bg-gradient-to-r from-emerald-50 via-teal-50 to-white border-l-4 border-l-emerald-500 shadow-sm p-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center font-black shadow">
-                <Award className="w-6 h-6" />
+      {/* Global Recommendation Card + Manual Selection Control Panel */}
+      <div className="space-y-3">
+        {globalWinner.winner && (
+          <Card className={`border-none rounded-none shadow-sm p-4 transition-all ${
+            hasManualOverride
+              ? 'bg-slate-100 border-l-4 border-l-slate-400 opacity-85'
+              : 'bg-gradient-to-r from-emerald-50 via-teal-50 to-white border-l-4 border-l-emerald-500'
+          }`}>
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center font-black shadow ${
+                  hasManualOverride ? 'bg-slate-500' : 'bg-emerald-500'
+                }`}>
+                  <Award className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`text-xs font-black uppercase tracking-wider ${
+                      hasManualOverride ? 'text-slate-600 line-through' : 'text-emerald-800'
+                    }`}>
+                      Oferta Ganhadora Sugerida (Modo Automático • Prazo e Preço):
+                    </span>
+                    <Badge className={`${hasManualOverride ? 'bg-slate-500 line-through' : 'bg-emerald-600'} text-white font-black text-[10px] uppercase`}>
+                      {globalWinner.winner.supplierName}
+                    </Badge>
+                    {hasManualOverride && (
+                      <Badge className="bg-amber-600 text-white font-black text-[10px] uppercase">
+                        OFERTA AUTOMÁTICA IGNORADA (MODO MANUAL ATIVO)
+                      </Badge>
+                    )}
+                  </div>
+                  <div className={`text-sm font-black mt-0.5 ${hasManualOverride ? 'text-slate-500 line-through' : 'text-evo-dark'}`}>
+                    Valor Total Efetivo: R$ {globalWinner.lowestTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    {globalWinner.winnerMaxDays ? ` • Prazo: até ${globalWinner.winnerMaxDays} DDL` : ''}
+                    {` • Frete: ${globalWinner.winner.freightType} • Pagto: ${globalWinner.winner.paymentTerms}`}
+                  </div>
+                </div>
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase text-emerald-800 tracking-wider">Fornecedor Mais Vantajoso (Global):</span>
-                  <Badge className="bg-emerald-600 text-white font-black text-[10px] uppercase">
-                    {globalWinner.winner.supplierName}
-                  </Badge>
-                </div>
-                <div className="text-sm font-black text-evo-dark mt-0.5">
-                  Valor Total Efetivo: R$ {globalWinner.lowestTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} • Frete: {globalWinner.winner.freightType} • Pagto: {globalWinner.winner.paymentTerms}
-                </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsManualSelectionMode(prev => !prev);
+                    matrixSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }}
+                  className={`h-10 rounded-none font-bold text-xs uppercase tracking-wider flex items-center gap-2 ${
+                    isManualSelectionMode || hasManualOverride
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-900 hover:bg-indigo-100'
+                      : 'border-evo-dark text-evo-dark hover:bg-slate-100'
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  {isManualSelectionMode ? 'Ocultar Painel de Seleção Manual' : 'Escolher Fornecedor Manualmente no Painel'}
+                </Button>
+
+                {hasManualOverride && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleClearManualSelection}
+                    className="h-10 rounded-none border-rose-300 text-rose-700 hover:bg-rose-50 font-bold text-xs uppercase tracking-wider"
+                  >
+                    Voltar ao Modo Automático
+                  </Button>
+                )}
+
+                <Button 
+                  onClick={() => handleApproveWinnerAndCreateSAPPO(globalWinner.winner!)}
+                  disabled={isGeneratingSAPPO}
+                  className={`h-10 rounded-none text-white font-bold text-xs uppercase tracking-wider shadow-sm flex items-center gap-2 ${
+                    hasManualOverride
+                      ? 'bg-indigo-700 hover:bg-indigo-800'
+                      : 'bg-emerald-700 hover:bg-emerald-800'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  {hasManualOverride
+                    ? `Gerar Pedido Manual (${activeManualEntries.length} Item/ns)`
+                    : 'Gerar Pedido no SAP (PO)'}
+                </Button>
               </div>
             </div>
+          </Card>
+        )}
 
-            <Button 
-              onClick={() => handleApproveWinnerAndCreateSAPPO(globalWinner.winner!)}
-              disabled={isGeneratingSAPPO}
-              className="h-10 rounded-none bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs uppercase tracking-wider shadow-sm flex items-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Gerar Pedido no SAP (PO)
-            </Button>
-          </div>
-        </Card>
-      )}
+        {/* Inline Manual Supplier & Item Selection Panel (Same Comparative View) */}
+        {(isManualSelectionMode || hasManualOverride) && (
+          <Card className="border border-indigo-200 rounded-none bg-indigo-50/60 border-l-4 border-l-indigo-600 shadow-sm p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-200/80 pb-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-indigo-700 text-white text-[10px] font-black uppercase rounded-none">
+                      Seleção por Item e Fornecedor no Painel Comparativo
+                    </Badge>
+                    {hasManualOverride && (
+                      <span className="text-[11px] font-black uppercase text-amber-800 bg-amber-100 px-2 py-0.5 border border-amber-300">
+                        A cotação sugerida no modo automático está sendo ignorada!
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs font-semibold text-indigo-950/80 mt-1">
+                    Marque abaixo (ou diretamente nas células da tabela comparativa) quais itens deseja comprar e por qual fornecedor cada item deverá ser comprado.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {hasManualOverride && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleClearManualSelection}
+                      className="h-8 rounded-none text-[10px] font-black uppercase border-indigo-300 bg-white text-indigo-900"
+                    >
+                      Limpar Seleção Manual
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() => handleApproveWinnerAndCreateSAPPO(globalWinner.winner)}
+                    disabled={isGeneratingSAPPO}
+                    className="h-8 rounded-none bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-black uppercase px-4"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                    Confirmar e Gerar Pedido no SAP
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2">
+                {bidData.items.map(it => {
+                  const isItemChecked = selectedItemsForPO[it.id] !== false;
+                  const bestAuto = getBestOfferForItem(it.id);
+                  const manualSupId = manualSupplierByItem[it.id];
+
+                  return (
+                    <div
+                      key={it.id}
+                      className={`flex flex-col md:flex-row md:items-center justify-between gap-3 p-2.5 border transition-colors ${
+                        isItemChecked ? 'bg-white border-indigo-200' : 'bg-slate-100/70 border-slate-200 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-[240px]">
+                        <input
+                          type="checkbox"
+                          checked={isItemChecked}
+                          onChange={() => handleToggleItemForPO(it.id)}
+                          className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                        />
+                        <div>
+                          <div className="text-xs font-black uppercase text-evo-dark">
+                            #{it.itemNum} - {it.description}
+                          </div>
+                          <div className="text-[10px] font-bold text-evo-dark/60">
+                            {manualSupId ? (
+                              <span className="text-indigo-700 font-black">
+                                ✓ FORNECEDOR MANUAL: {bidData.suppliers.find(s => s.id === manualSupId)?.supplierName} (Oferta Automática Ignorada)
+                              </span>
+                            ) : hasManualOverride ? (
+                              <span className="text-amber-700 font-bold">
+                                Selecione manualmente um fornecedor para incluir este item no pedido manual
+                              </span>
+                            ) : bestAuto.bestSupId ? (
+                              <span className="text-emerald-700 font-bold">
+                                ★ Sugerido Automático (Prazo e Preço): {bidData.suppliers.find(s => s.id === bestAuto.bestSupId)?.supplierName} ({bestAuto.bestDeliveryDays})
+                              </span>
+                            ) : (
+                              <span>Sem oferta válida</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {bidData.suppliers.map(sup => {
+                          const off = sup.items[it.id];
+                          const isValid = Boolean(off && off.quantity > 0 && off.unitPrice > 0);
+                          const isManualChosen = manualSupId === sup.id;
+                          const isAutoChosen = !hasManualOverride && !manualSupId && bestAuto.bestSupId === sup.id && isValid;
+                          const totalEff = off ? calculateItemTotalEffective(off) : 0;
+
+                          return (
+                            <button
+                              key={sup.id}
+                              type="button"
+                              disabled={!isValid}
+                              onClick={() => handleManualSelectSupplierForItem(it.id, sup.id)}
+                              className={`px-2.5 py-1.5 text-[10px] font-black uppercase border transition-all flex items-center gap-1.5 ${
+                                !isValid
+                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                  : isManualChosen
+                                  ? 'bg-indigo-700 text-white border-indigo-800 shadow-sm ring-2 ring-indigo-300'
+                                  : isAutoChosen
+                                  ? 'bg-emerald-50 text-emerald-900 border-emerald-400 hover:bg-indigo-50'
+                                  : 'bg-white text-evo-dark border-evo-bg hover:border-indigo-500 hover:bg-indigo-50/40'
+                              }`}
+                              title={isValid ? `Marcar manualmente ${sup.supplierName} para fornecer este item` : 'Sem cotação válida'}
+                            >
+                              <span>{sup.supplierName}</span>
+                              {isValid && (
+                                <span className={`font-mono ${isManualChosen ? 'text-indigo-100' : 'text-evo-teal'}`}>
+                                  R$ {totalEff.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({off.deliveryDays || '-'})
+                                </span>
+                              )}
+                              {isManualChosen && <span className="bg-white text-indigo-800 px-1 text-[9px]">MANUAL ✓</span>}
+                              {!isManualChosen && bestAuto.bestSupId === sup.id && isValid && (
+                                <span className={`px-1 text-[9px] ${hasManualOverride ? 'line-through opacity-50 bg-slate-200 text-slate-600' : 'bg-emerald-200 text-emerald-900'}`}>
+                                  AUTO ★
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+        )}
+      </div>
 
       {/* Main Comparative Matrix (Side-by-Side Table) */}
-      <div className="bg-white border border-evo-bg overflow-x-auto shadow-sm">
+      <div ref={matrixSectionRef} className="bg-white border border-evo-bg overflow-x-auto shadow-sm">
         <Table className="w-full text-xs">
           {/* Header Row 1: Item specs vs Supplier Headers */}
           <TableHeader>
             <TableRow className="bg-evo-dark text-white hover:bg-evo-dark border-none">
-              <TableHead colSpan={4} className="text-white font-black uppercase tracking-widest text-center border-r border-white/20 py-3">
-                ESPECIFICAÇÃO DOS ITENS SOLICITADOS
+              <TableHead colSpan={5} className="text-white font-black uppercase tracking-widest text-center border-r border-white/20 py-3">
+                ESPECIFICAÇÃO E SELEÇÃO DOS ITENS SOLICITADOS
               </TableHead>
-              {bidData.suppliers.map((sup, idx) => (
-                <TableHead key={sup.id} colSpan={6} className={`text-white font-black uppercase tracking-widest text-center py-3 ${idx < bidData.suppliers.length - 1 ? 'border-r border-white/20' : ''} ${globalWinner.winner?.id === sup.id ? 'bg-emerald-900' : ''}`}>
-                  <div className="flex items-center justify-between px-3">
-                    <span className="truncate max-w-[200px]">{sup.supplierName}</span>
-                    <div className="flex items-center gap-1">
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        onClick={() => {
-                          setSelectedSupplierForModal(sup.id);
-                          setIsExportSupplierModalOpen(true);
-                        }}
-                        className="h-6 px-2 text-[10px] text-white hover:bg-white/20 rounded-none flex items-center gap-1"
-                        title="Exportar planilha para o fornecedor preencher"
-                      >
-                        <Download className="w-3 h-3" /> Enviar Excel
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        onClick={() => {
-                          setSelectedSupplierForModal(sup.id);
-                          setIsImportSupplierModalOpen(true);
-                        }}
-                        className="h-6 px-2 text-[10px] text-emerald-300 hover:bg-white/20 rounded-none flex items-center gap-1"
-                        title="Importar planilha preenchida do fornecedor"
-                      >
-                        <Upload className="w-3 h-3" /> Importar
-                      </Button>
-                      {bidData.suppliers.length > 1 && (
+              {bidData.suppliers.map((sup, idx) => {
+                const isAutoGlobalWinner = globalWinner.winner?.id === sup.id;
+                const hasManualItemsForSup = activeManualEntries.some(([, sId]) => sId === sup.id);
+
+                return (
+                  <TableHead
+                    key={sup.id}
+                    colSpan={6}
+                    className={`text-white font-black uppercase tracking-widest text-center py-3 ${
+                      idx < bidData.suppliers.length - 1 ? 'border-r border-white/20' : ''
+                    } ${
+                      hasManualItemsForSup
+                        ? 'bg-indigo-900'
+                        : !hasManualOverride && isAutoGlobalWinner
+                        ? 'bg-emerald-900'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate max-w-[180px]">{sup.supplierName}</span>
+                        {hasManualItemsForSup && (
+                          <Badge className="bg-indigo-500 text-white text-[9px] font-black uppercase rounded-none">
+                            ✓ SELECIONADO MANUAL
+                          </Badge>
+                        )}
+                        {isAutoGlobalWinner && (
+                          <Badge className={`text-[9px] font-black uppercase rounded-none ${
+                            hasManualOverride ? 'bg-slate-600 text-white/70 line-through' : 'bg-emerald-500 text-white'
+                          }`}>
+                            {hasManualOverride ? 'AUTO IGNORADO' : '★ VENCEDOR AUTO'}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleManualSelectSupplierForAllSelected(sup.id)}
+                          className="h-6 px-2 text-[10px] text-indigo-200 hover:bg-indigo-600 hover:text-white rounded-none border border-indigo-400/40 flex items-center gap-1"
+                          title="Marcar manualmente este fornecedor para todos os itens cotados"
+                        >
+                          <CheckCircle2 className="w-3 h-3" /> Comprar Tudo Deste
+                        </Button>
                         <Button 
                           size="sm" 
                           variant="ghost" 
-                          onClick={() => handleRemoveSupplier(sup.id)}
-                          className="h-6 w-6 p-0 text-rose-300 hover:bg-rose-900/50 rounded-none"
-                          title="Remover Fornecedor"
+                          onClick={() => {
+                            setSelectedSupplierForModal(sup.id);
+                            setIsExportSupplierModalOpen(true);
+                          }}
+                          className="h-6 px-2 text-[10px] text-white hover:bg-white/20 rounded-none flex items-center gap-1"
+                          title="Exportar planilha para o fornecedor preencher"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Download className="w-3 h-3" /> Enviar Excel
                         </Button>
-                      )}
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          onClick={() => {
+                            setSelectedSupplierForModal(sup.id);
+                            setIsImportSupplierModalOpen(true);
+                          }}
+                          className="h-6 px-2 text-[10px] text-emerald-300 hover:bg-white/20 rounded-none flex items-center gap-1"
+                          title="Importar planilha preenchida do fornecedor"
+                        >
+                          <Upload className="w-3 h-3" /> Importar
+                        </Button>
+                        {bidData.suppliers.length > 1 && (
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            onClick={() => handleRemoveSupplier(sup.id)}
+                            className="h-6 w-6 p-0 text-rose-300 hover:bg-rose-900/50 rounded-none"
+                            title="Remover Fornecedor"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </TableHead>
-              ))}
+                  </TableHead>
+                );
+              })}
             </TableRow>
 
             {/* Header Row 2: Columns */}
             <TableRow className="bg-evo-dark/90 text-white hover:bg-evo-dark/90 text-[10px] uppercase font-bold tracking-wider">
+              <TableHead className="text-white w-20 text-center">
+                <label className="flex items-center justify-center gap-1 cursor-pointer select-none" title="Selecionar todos os itens para compra">
+                  <input
+                    type="checkbox"
+                    checked={bidData.items.length > 0 && bidData.items.every(it => selectedItemsForPO[it.id] !== false)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      const next: Record<string, boolean> = {};
+                      bidData.items.forEach(it => {
+                        next[it.id] = checked;
+                      });
+                      setSelectedItemsForPO(next);
+                    }}
+                    className="w-3.5 h-3.5 accent-evo-teal cursor-pointer"
+                  />
+                  <span>Comprar</span>
+                </label>
+              </TableHead>
               <TableHead className="text-white w-10 text-center">#</TableHead>
               <TableHead className="text-white min-w-[240px]">Descrição do Item</TableHead>
               <TableHead className="text-white w-14 text-center">UN</TableHead>
-              <TableHead className="text-white w-16 text-center border-r border-white/20">Ações</TableHead>
+              <TableHead className="text-white w-24 text-center border-r border-white/20">Ações</TableHead>
 
               {bidData.suppliers.map((sup, idx) => (
                 <React.Fragment key={sup.id}>
@@ -1066,7 +1759,7 @@ export function BidComparativeView({
                   <TableHead className="text-white w-16 text-center bg-sky-950/60">% ICMS</TableHead>
                   <TableHead className="text-white min-w-[100px] text-right bg-sky-950/60">Valor Unit (R$)</TableHead>
                   <TableHead className="text-white min-w-[100px] text-right bg-teal-950/60">Custo PO (R$)</TableHead>
-                  <TableHead className="text-white min-w-[110px] text-right bg-emerald-950/80">Total Efetivo</TableHead>
+                  <TableHead className="text-white min-w-[145px] text-right bg-emerald-950/80">Total Efetivo / Escolha</TableHead>
                   <TableHead className={`text-white min-w-[90px] text-center bg-sky-950/60 ${idx < bidData.suppliers.length - 1 ? 'border-r border-white/20' : ''}`}>Prazo</TableHead>
                 </React.Fragment>
               ))}
@@ -1074,11 +1767,34 @@ export function BidComparativeView({
           </TableHeader>
 
           <TableBody>
-            {bidData.items.map((it, rowIdx) => {
+            {bidData.items.map((it) => {
               const bestOffer = getBestOfferForItem(it.id);
+              const isItemSelected = selectedItemsForPO[it.id] !== false;
+              const manualSupForItem = manualSupplierByItem[it.id];
 
               return (
-                <TableRow key={it.id} className="hover:bg-slate-50 border-b border-evo-bg transition-colors">
+                <TableRow
+                  key={it.id}
+                  className={`border-b border-evo-bg transition-colors ${
+                    isItemSelected ? 'hover:bg-slate-50' : 'bg-slate-100/60 opacity-60'
+                  }`}
+                >
+                  {/* Checkbox to select item for purchase */}
+                  <TableCell className="text-center">
+                    <div className="flex flex-col items-center justify-center gap-0.5">
+                      <input
+                        type="checkbox"
+                        checked={isItemSelected}
+                        onChange={() => handleToggleItemForPO(it.id)}
+                        className="w-4 h-4 accent-evo-teal cursor-pointer"
+                        title="Marcar item para compra"
+                      />
+                      <span className={`text-[8px] font-black uppercase ${isItemSelected ? 'text-evo-teal' : 'text-slate-400'}`}>
+                        {isItemSelected ? 'COMPRAR' : 'IGNORAR'}
+                      </span>
+                    </div>
+                  </TableCell>
+
                   {/* Item Description Columns */}
                   <TableCell className="font-black text-center text-evo-dark/50">{it.itemNum}</TableCell>
                   <TableCell>
@@ -1108,23 +1824,37 @@ export function BidComparativeView({
                     />
                   </TableCell>
                   <TableCell className="text-center border-r border-evo-bg">
-                    {bidData.items.length > 1 && (
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        onClick={() => handleRemoveItem(it.id)}
-                        className="h-7 w-7 p-0 text-rose-500 hover:bg-rose-50 rounded-none"
-                        title="Remover Item"
+                    <div className="flex items-center justify-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleSelectSingleItemToBuy(it.id)}
+                        className="h-7 px-1.5 text-[9px] font-black uppercase rounded-none border-evo-teal text-evo-teal hover:bg-evo-teal hover:text-white"
+                        title="Comprar apenas este item selecionado"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        Comprar Só Este
                       </Button>
-                    )}
+                      {bidData.items.length > 1 && (
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          onClick={() => handleRemoveItem(it.id)}
+                          className="h-7 w-7 p-0 text-rose-500 hover:bg-rose-50 rounded-none"
+                          title="Remover Item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
 
                   {/* Supplier Values Columns */}
                   {bidData.suppliers.map((sup, sIdx) => {
                     const off = sup.items[it.id] || { quantity: 0, icmsPct: 22, unitPrice: 0, difal: 0, ipi: 0, freightItem: 0, deliveryDays: '' };
-                    const isBest = bestOffer.bestSupId === sup.id && off.quantity > 0 && off.unitPrice > 0;
+                    const hasValidQuote = off.quantity > 0 && off.unitPrice > 0;
+                    const isBestAuto = bestOffer.bestSupId === sup.id && hasValidQuote;
+                    const isManualSelectedHere = manualSupForItem === sup.id && hasValidQuote;
+                    const isAutoIgnoredHere = isBestAuto && (Boolean(manualSupForItem && manualSupForItem !== sup.id) || (hasManualOverride && !isManualSelectedHere));
                     const costPO = calculateItemCostPO(off);
                     const totalEff = calculateItemTotalEffective(off);
 
@@ -1160,14 +1890,57 @@ export function BidComparativeView({
                         </TableCell>
 
                         {/* Custo Unitário PO */}
-                        <TableCell className={`p-2 text-right font-mono font-bold ${off.quantity > 0 && off.unitPrice > 0 ? 'text-sky-900 bg-sky-50/50' : 'text-evo-dark/30'}`}>
-                          {off.quantity > 0 && off.unitPrice > 0 ? `R$ ${costPO.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}` : '-'}
+                        <TableCell className={`p-2 text-right font-mono font-bold ${hasValidQuote ? 'text-sky-900 bg-sky-50/50' : 'text-evo-dark/30'}`}>
+                          {hasValidQuote ? `R$ ${costPO.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}` : '-'}
                         </TableCell>
 
-                        {/* Valor Total Efetivo (com destaque verde se for a melhor oferta) */}
-                        <TableCell className={`p-2 text-right font-mono font-black ${isBest ? 'bg-emerald-100 text-emerald-900' : off.quantity > 0 && off.unitPrice > 0 ? 'text-evo-dark bg-slate-50' : 'text-evo-dark/30'}`}>
-                          {off.quantity > 0 && off.unitPrice > 0 ? `R$ ${totalEff.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '-'}
-                          {isBest && <span className="ml-1 text-[9px] uppercase font-black text-emerald-700">★</span>}
+                        {/* Valor Total Efetivo + Botão de Seleção Manual de Fornecedor no Mesmo Painel */}
+                        <TableCell
+                          className={`p-1.5 text-right font-mono font-black transition-all ${
+                            isManualSelectedHere
+                              ? 'bg-indigo-100 text-indigo-950 ring-2 ring-inset ring-indigo-600'
+                              : isAutoIgnoredHere
+                              ? 'bg-slate-100 text-slate-400'
+                              : isBestAuto
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : hasValidQuote
+                              ? 'text-evo-dark bg-slate-50'
+                              : 'text-evo-dark/30'
+                          }`}
+                        >
+                          {hasValidQuote ? (
+                            <div className="flex flex-col items-end gap-1">
+                              <div className="flex items-center gap-1">
+                                <span className={isAutoIgnoredHere ? 'line-through opacity-60' : ''}>
+                                  R$ {totalEff.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </span>
+                                {isBestAuto && !isAutoIgnoredHere && (
+                                  <span className="text-[9px] uppercase font-black bg-emerald-700 text-white px-1 py-0.2" title="Oferta Ganhadora no Modo Automático (Prazo e Preço)">
+                                    ★ AUTO
+                                  </span>
+                                )}
+                                {isAutoIgnoredHere && (
+                                  <span className="text-[8px] uppercase font-black bg-slate-300 text-slate-600 px-1 line-through" title="Oferta sugerida no modo automático ignorada devido à seleção manual">
+                                    AUTO IGNORADO
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleManualSelectSupplierForItem(it.id, sup.id)}
+                                className={`text-[9px] font-sans font-black uppercase px-1.5 py-0.5 border transition-colors cursor-pointer ${
+                                  isManualSelectedHere
+                                    ? 'bg-indigo-700 text-white border-indigo-900'
+                                    : 'bg-white/90 text-indigo-900 border-indigo-300 hover:bg-indigo-600 hover:text-white'
+                                }`}
+                                title="Marcar manualmente que este item deverá ser comprado por este fornecedor (ignora a sugestão automática)"
+                              >
+                                {isManualSelectedHere ? '✓ FORNECEDOR MANUAL' : 'Comprar Deste'}
+                              </button>
+                            </div>
+                          ) : (
+                            '-'
+                          )}
                         </TableCell>
 
                         {/* Prazo de Entrega */}
@@ -1188,7 +1961,7 @@ export function BidComparativeView({
 
             {/* Add Item Action Row */}
             <TableRow className="bg-slate-50/70 border-b border-evo-bg">
-              <TableCell colSpan={4} className="py-2 px-4 border-r border-evo-bg">
+              <TableCell colSpan={5} className="py-2 px-4 border-r border-evo-bg">
                 <Button 
                   size="sm" 
                   variant="outline" 
@@ -1198,8 +1971,8 @@ export function BidComparativeView({
                   <Plus className="w-3.5 h-3.5" /> Adicionar Linha de Item
                 </Button>
               </TableCell>
-              <TableCell colSpan={bidData.suppliers.length * 6} className="py-2 text-[10px] uppercase font-bold text-evo-dark/40 px-4">
-                * As colunas destacadas em verde representam o menor custo efetivo unitário por item.
+              <TableCell colSpan={bidData.suppliers.length * 6} className="py-2 text-[10px] uppercase font-bold text-evo-dark/50 px-4">
+                * Verde (★ AUTO): oferta ganhadora pelo padrão de prazo e preço. Azul (✓ FORNECEDOR MANUAL): fornecedor marcado manualmente para compra (ignora a sugestão automática).
               </TableCell>
             </TableRow>
           </TableBody>
@@ -1208,7 +1981,7 @@ export function BidComparativeView({
           <tfoot>
             {/* TOTAL NF-E */}
             <TableRow className="bg-slate-100/70 border-t-2 border-evo-dark/20 text-xs font-bold">
-              <TableCell colSpan={4} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
+              <TableCell colSpan={5} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
                 TOTAL NF-E:
               </TableCell>
               {bidData.suppliers.map((sup, idx) => {
@@ -1223,7 +1996,7 @@ export function BidComparativeView({
 
             {/* TOTAL DIFAL */}
             <TableRow className="bg-slate-100/70 text-xs font-bold">
-              <TableCell colSpan={4} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
+              <TableCell colSpan={5} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
                 TOTAL DIFAL:
               </TableCell>
               {bidData.suppliers.map((sup, idx) => {
@@ -1238,16 +2011,28 @@ export function BidComparativeView({
 
             {/* TOTAL EFETIVO (Destaque Amarelo do Excel) */}
             <TableRow className="bg-amber-300 text-xs font-black text-slate-900 border-y-2 border-amber-400">
-              <TableCell colSpan={4} className="text-right uppercase tracking-widest px-4 border-r border-amber-400">
+              <TableCell colSpan={5} className="text-right uppercase tracking-widest px-4 border-r border-amber-400">
                 TOTAL EFETIVO:
               </TableCell>
               {bidData.suppliers.map((sup, idx) => {
                 const summary = calculateSupplierSummary(sup);
                 const isGlobalWinner = globalWinner.winner?.id === sup.id;
+                const hasManualItemsForSup = activeManualEntries.some(([, sId]) => sId === sup.id);
                 return (
-                  <TableCell key={sup.id} colSpan={6} className={`text-right font-mono text-sm px-4 py-3 ${idx < bidData.suppliers.length - 1 ? 'border-r border-amber-400' : ''} ${isGlobalWinner ? 'bg-amber-400' : ''}`}>
+                  <TableCell key={sup.id} colSpan={6} className={`text-right font-mono text-sm px-4 py-3 ${idx < bidData.suppliers.length - 1 ? 'border-r border-amber-400' : ''} ${hasManualItemsForSup ? 'bg-indigo-200' : !hasManualOverride && isGlobalWinner ? 'bg-amber-400' : ''}`}>
                     R$ {summary.totalEffective.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    {isGlobalWinner && <span className="ml-1 text-[10px] uppercase font-black bg-emerald-800 text-white px-1.5 py-0.5 rounded">VENCEDOR</span>}
+                    {hasManualItemsForSup && (
+                      <span className="ml-1 text-[10px] uppercase font-black bg-indigo-800 text-white px-1.5 py-0.5 rounded">
+                        ESCOLHIDO MANUAL
+                      </span>
+                    )}
+                    {isGlobalWinner && (
+                      <span className={`ml-1 text-[10px] uppercase font-black px-1.5 py-0.5 rounded ${
+                        hasManualOverride ? 'bg-slate-600 text-white/70 line-through' : 'bg-emerald-800 text-white'
+                      }`}>
+                        {hasManualOverride ? 'AUTO IGNORADO' : 'VENCEDOR AUTO'}
+                      </span>
+                    )}
                   </TableCell>
                 );
               })}
@@ -1255,7 +2040,7 @@ export function BidComparativeView({
 
             {/* TIPO DE FRETE & VALOR */}
             <TableRow className="bg-white text-xs font-bold">
-              <TableCell colSpan={4} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
+              <TableCell colSpan={5} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
                 TIPO DE FRETE / FRETE (R$):
               </TableCell>
               {bidData.suppliers.map((sup, idx) => (
@@ -1290,7 +2075,7 @@ export function BidComparativeView({
 
             {/* CONDIÇÃO DE PAGAMENTO */}
             <TableRow className="bg-white text-xs font-bold">
-              <TableCell colSpan={4} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
+              <TableCell colSpan={5} className="text-right uppercase font-black tracking-widest text-evo-dark px-4 border-r border-evo-bg">
                 CONDIÇÃO DE PAGAMENTO:
               </TableCell>
               {bidData.suppliers.map((sup, idx) => (
@@ -1309,7 +2094,7 @@ export function BidComparativeView({
 
             {/* VALOR TOTAL GERAL */}
             <TableRow className="bg-slate-900 text-white text-xs font-black">
-              <TableCell colSpan={4} className="text-right uppercase tracking-widest px-4 py-3 border-r border-white/20">
+              <TableCell colSpan={5} className="text-right uppercase tracking-widest px-4 py-3 border-r border-white/20">
                 VALOR TOTAL:
               </TableCell>
               {bidData.suppliers.map((sup, idx) => {
@@ -1329,10 +2114,14 @@ export function BidComparativeView({
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 border border-evo-bg">
         <div className="flex items-center gap-2 text-xs font-bold text-evo-dark/60">
           <Info className="w-4 h-4 text-sky-600" />
-          <span>Você pode editar os campos diretamente na grade ou exportar as planilhas para cada fornecedor responder.</span>
+          <span>
+            {hasManualOverride
+              ? 'Modo Manual Ativo: A oferta sugerida automaticamente será ignorada e o pedido será gerado apenas para o(s) fornecedor(es) marcado(s) manualmente.'
+              : 'Você pode selecionar itens específicos para compra e clicar em "Comprar Deste" na coluna do fornecedor para substituir a oferta sugerida automaticamente.'}
+          </span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button 
             onClick={handleExportFullBidExcel} 
             variant="outline"
@@ -1341,14 +2130,31 @@ export function BidComparativeView({
             <FileSpreadsheet className="w-4 h-4 mr-1.5 text-emerald-600" /> Baixar Planilha Geral
           </Button>
 
-          {globalWinner.winner && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setIsManualSelectionMode(prev => !prev);
+              matrixSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }}
+            className="h-10 text-xs font-bold uppercase rounded-none border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+          >
+            <Sparkles className="w-4 h-4 mr-1.5" />
+            Marcar Fornecedor Manual no Painel
+          </Button>
+
+          {(globalWinner.winner || hasManualOverride) && (
             <Button 
-              onClick={() => handleApproveWinnerAndCreateSAPPO(globalWinner.winner!)}
+              onClick={() => handleApproveWinnerAndCreateSAPPO(globalWinner.winner)}
               disabled={isGeneratingSAPPO}
-              className="h-10 text-xs font-bold uppercase rounded-none bg-emerald-600 hover:bg-emerald-700 text-white px-6 shadow-sm flex items-center gap-2"
+              className={`h-10 text-xs font-bold uppercase rounded-none text-white px-6 shadow-sm flex items-center gap-2 ${
+                hasManualOverride ? 'bg-indigo-700 hover:bg-indigo-800' : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
             >
               <CheckCircle2 className="w-4 h-4" />
-              Aprovar e Criar Pedido no SAP (PO)
+              {hasManualOverride
+                ? 'Aprovar Seleção Manual e Criar Pedido no SAP (PO)'
+                : 'Aprovar e Criar Pedido no SAP (PO)'}
             </Button>
           )}
         </div>

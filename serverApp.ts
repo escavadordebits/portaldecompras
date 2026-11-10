@@ -7,6 +7,18 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import FormData from 'form-data';
 import { config } from './config';
+import {
+  loadApprovalRulesCatalog,
+  buildPortalApprovalLines,
+  readPortalApprovalsStore,
+  writePortalApprovalsStore,
+  registerPortalDraftApproval,
+  acquireConversionLock,
+  releaseConversionLock,
+  isEmailAuthorizedForStage,
+  PortalApprovalRecord,
+  PortalApprovalLine
+} from './serverApprovalEngine';
 
 dotenv.config();
 
@@ -657,6 +669,555 @@ apiRouter.post('/sap/Attachments2', upload.array('files'), async (req, res) => {
   }
 });
 
+// Unified Approvals Center Endpoints
+
+// 1. Get Approval Rules Catalog (models, authors, approvers)
+apiRouter.get('/approvals/catalog', (req, res) => {
+  try {
+    const catalog = loadApprovalRulesCatalog();
+    res.json({
+      success: true,
+      models: catalog.modelsList,
+      authors: catalog.authorsList,
+      approvers: catalog.approversList
+    });
+  } catch (err: any) {
+    console.error('Error fetching approvals catalog:', err);
+    res.status(500).json({ error: 'Erro ao carregar catálogo de regras de aprovação', details: err.message });
+  }
+});
+
+// 2. Create Draft in SAP and register for line-by-line portal approval
+apiRouter.post('/approvals/create-draft', async (req, res) => {
+  const { docObjectCode, objectType = '22', payload, userEmail, userName } = req.body;
+  if (!payload || !docObjectCode) {
+    return res.status(400).json({ error: 'Parâmetros "payload" e "docObjectCode" são obrigatórios.' });
+  }
+
+  try {
+    // Authenticate with SAP
+    const auth = await doSapLogin(req, res);
+    const sapConfig = getSapConfig(req);
+
+    // Format Draft payload
+    const draftPayload = {
+      ...payload,
+      DocObjectCode: docObjectCode,
+      Comments: payload.Comments ? (payload.Comments.includes('[PORTAL DE COMPRAS]') ? payload.Comments : `[PORTAL DE COMPRAS] ${payload.Comments}`) : '[PORTAL DE COMPRAS]'
+    };
+
+    console.log(`Creating Draft in SAP (${docObjectCode})...`);
+    const sapResponse = await axios.post(`${sapConfig.baseUrl}/Drafts`, draftPayload, {
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      headers: {
+        'Cookie': auth.cookieHeader,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const draftData = sapResponse.data;
+    const draftDocEntry = Number(draftData.DocEntry);
+
+    // Register line-by-line approval record
+    const record = registerPortalDraftApproval({
+      draftDocEntry,
+      draftDocNum: draftData.DocNum || draftDocEntry,
+      objectType: String(objectType),
+      docObjectCode: String(docObjectCode),
+      authorEmail: userEmail || payload.RequesterEmail || '',
+      authorName: userName || payload.RequesterName || '',
+      headerData: { ...draftData, ...payload },
+      rawLines: Array.isArray(draftData.DocumentLines) && draftData.DocumentLines.length > 0 ? draftData.DocumentLines : payload.DocumentLines || [],
+      draftPayload
+    });
+
+    res.json({
+      success: true,
+      draftDocEntry,
+      draftDocNum: record.draftDocNum,
+      approvalRecord: record,
+      sapDraft: draftData
+    });
+  } catch (err: any) {
+    const errorData = err.response?.data;
+    const sapErrorMessage = errorData?.error?.message?.value || errorData?.error?.message || err.message;
+    console.error('Error creating SAP Draft:', sapErrorMessage, errorData);
+    res.status(err.response?.status || 500).json({
+      error: 'Erro ao criar esboço (Draft) no SAP.',
+      details: sapErrorMessage,
+      raw: errorData
+    });
+  }
+});
+
+// 3. Get Unified Approvals (combining SAP Desktop requests and Portal Draft requests)
+apiRouter.get('/approvals/unified', async (req, res) => {
+  try {
+    const catalog = loadApprovalRulesCatalog();
+    const portalRecords = readPortalApprovalsStore();
+
+    let sapRequests: any[] = [];
+    try {
+      const auth = await doSapLogin(req, res);
+      const sapConfig = getSapConfig(req);
+      const sapRes = await axios.get(
+        `${sapConfig.baseUrl}/ApprovalRequests?$orderby=Code desc&$top=100`,
+        {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: {
+            'Cookie': auth.cookieHeader,
+            'Accept': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+      sapRequests = Array.isArray(sapRes.data?.value) ? sapRes.data.value : [];
+    } catch (sapErr: any) {
+      console.warn('Could not fetch SAP ApprovalRequests (will return local portal records):', sapErr.message);
+    }
+
+    // Enrich SAP Desktop ApprovalRequests with metadata from catalog
+    const sapUnified = sapRequests.map((reqItem: any) => {
+      const templateId = Number(reqItem.ApprovalTemplatesID);
+      const matchedModel = catalog.modelsByCode.get(templateId);
+      const originatorId = Number(reqItem.OriginatorID);
+      const matchedAuthor = catalog.authorsById.get(originatorId);
+
+      // Check if this SAP request was generated from Portal
+      const isFromPortal = portalRecords.some(p => p.draftDocEntry === Number(reqItem.DraftEntry)) ||
+        String(reqItem.Remarks || '').includes('[PORTAL DE COMPRAS]');
+
+      // Map status: arsPending -> 'W', arsApproved -> 'Y', arsNotApproved -> 'N'
+      const statusMap: Record<string, 'W' | 'Y' | 'N'> = {
+        arsPending: 'W',
+        arsApproved: 'Y',
+        arsNotApproved: 'N'
+      };
+      const status = statusMap[reqItem.Status] || 'W';
+
+      return {
+        id: `SAP-${reqItem.Code}`,
+        code: reqItem.Code,
+        draftDocEntry: reqItem.DraftEntry,
+        draftDocNum: reqItem.DraftEntry,
+        objectType: String(reqItem.ObjectType || '22'),
+        docObjectCode: reqItem.ObjectType === '1470000113' ? 'oPurchaseRequests' : reqItem.ObjectType === '204' ? 'oPurchaseDownPayments' : 'oPurchaseOrders',
+        origin: isFromPortal ? 'PORTAL' : 'SAP_DESKTOP',
+        status,
+        creationDate: reqItem.CreationDate || '',
+        creationTime: reqItem.CreationTime || '',
+        authorId: originatorId,
+        authorCode: matchedAuthor?.code || String(originatorId),
+        authorName: matchedAuthor?.name || `Usuário SAP #${originatorId}`,
+        authorEmail: matchedAuthor?.email || '',
+        cardCode: '',
+        cardName: matchedModel?.name || `Modelo ${templateId}`,
+        docTotal: 0,
+        comments: reqItem.Remarks || '',
+        modelCode: templateId,
+        modelName: matchedModel?.name || `Modelo ${templateId}`,
+        modelDescription: matchedModel?.description || '',
+        lines: [], // will be loaded on demand or matched from portal record
+        sapApprovalRequestLines: reqItem.ApprovalRequestLines || []
+      };
+    });
+
+    // Merge: Portal records take precedence if matching draftDocEntry
+    const combinedMap = new Map<number, any>();
+    for (const p of portalRecords) {
+      combinedMap.set(p.draftDocEntry, p);
+    }
+    for (const s of sapUnified) {
+      if (s.draftDocEntry && combinedMap.has(s.draftDocEntry)) {
+        // Merge SAP approval code with portal record
+        const existing = combinedMap.get(s.draftDocEntry);
+        existing.sapCode = s.code;
+        if (s.status !== 'W' && existing.status === 'W') {
+          existing.status = s.status;
+        }
+      } else {
+        combinedMap.set(s.draftDocEntry || (s.code + 1000000), s);
+      }
+    }
+
+    const unifiedList = Array.from(combinedMap.values()).sort((a, b) => {
+      const dateA = new Date(a.creationDate || 0).getTime();
+      const dateB = new Date(b.creationDate || 0).getTime();
+      return dateB - dateA;
+    });
+
+    res.json({
+      success: true,
+      approvals: unifiedList,
+      catalog: {
+        models: catalog.modelsList,
+        authors: catalog.authorsList,
+        approvers: catalog.approversList
+      }
+    });
+  } catch (err: any) {
+    console.error('Error fetching unified approvals:', err);
+    res.status(500).json({ error: 'Erro ao buscar aprovações unificadas', details: err.message });
+  }
+});
+
+// 4. Get draft detail and line breakdown
+apiRouter.get('/approvals/draft-detail/:draftEntry', async (req, res) => {
+  const draftEntry = Number(req.params.draftEntry);
+  if (isNaN(draftEntry)) {
+    return res.status(400).json({ error: 'draftEntry inválido' });
+  }
+
+  try {
+    const store = readPortalApprovalsStore();
+    const existing = store.find(r => r.draftDocEntry === draftEntry);
+
+    // Fetch live draft from SAP
+    const auth = await doSapLogin(req, res);
+    const sapConfig = getSapConfig(req);
+    const draftRes = await axios.get(`${sapConfig.baseUrl}/Drafts(${draftEntry})`, {
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      headers: {
+        'Cookie': auth.cookieHeader,
+        'Accept': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    const draftData = draftRes.data;
+    if (existing) {
+      return res.json({
+        success: true,
+        approvalRecord: existing,
+        draftData
+      });
+    }
+
+    // If not already registered in portal store, register it dynamically
+    const objectType = draftData.DocObjectCode === 'oPurchaseRequests' ? '1470000113' : draftData.DocObjectCode === 'oPurchaseDownPayments' ? '204' : '22';
+    const record = registerPortalDraftApproval({
+      draftDocEntry: draftEntry,
+      draftDocNum: draftData.DocNum || draftEntry,
+      objectType,
+      docObjectCode: draftData.DocObjectCode || 'oPurchaseOrders',
+      authorEmail: draftData.RequesterEmail || '',
+      authorName: draftData.RequesterName || '',
+      headerData: draftData,
+      rawLines: draftData.DocumentLines || [],
+      draftPayload: draftData
+    });
+
+    res.json({
+      success: true,
+      approvalRecord: record,
+      draftData
+    });
+  } catch (err: any) {
+    console.error(`Error fetching Draft(${draftEntry}):`, err.message);
+    res.status(err.response?.status || 500).json({
+      error: `Erro ao buscar detalhes do Esboço ${draftEntry}`,
+      details: err.message
+    });
+  }
+});
+
+// 5. Submit Approval Decision (line-by-line or full, with automatic effective document conversion when fully approved)
+apiRouter.post('/approvals/decide', async (req, res) => {
+  const {
+    draftDocEntry,
+    decision, // 'ardApproved' | 'ardNotApproved'
+    remarks,
+    approverName = 'Aprovador Portal',
+    approverEmail = '',
+    lineNum,
+    stageCode,
+    approveAllLines = true
+  } = req.body;
+
+  const docEntry = Number(draftDocEntry);
+  if (isNaN(docEntry) || !['ardApproved', 'ardNotApproved'].includes(decision)) {
+    return res.status(400).json({ error: 'Parâmetros inválidos para decisão de aprovação.' });
+  }
+
+  const store = readPortalApprovalsStore();
+  const recordIndex = store.findIndex(r => r.draftDocEntry === docEntry);
+  let record = recordIndex !== -1 ? store[recordIndex] : null;
+
+  // If not yet in store, try to register from SAP Draft
+  if (!record) {
+    try {
+      const auth = await doSapLogin(req, res);
+      const sapConfig = getSapConfig(req);
+      const draftRes = await axios.get(`${sapConfig.baseUrl}/Drafts(${docEntry})`, {
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        headers: { 'Cookie': auth.cookieHeader, 'Accept': 'application/json' },
+        timeout: 15000
+      });
+      const draftData = draftRes.data;
+      const objectType = draftData.DocObjectCode === 'oPurchaseRequests' ? '1470000113' : draftData.DocObjectCode === 'oPurchaseDownPayments' ? '204' : '22';
+      record = registerPortalDraftApproval({
+        draftDocEntry: docEntry,
+        draftDocNum: draftData.DocNum || docEntry,
+        objectType,
+        docObjectCode: draftData.DocObjectCode || 'oPurchaseOrders',
+        authorEmail: draftData.RequesterEmail || '',
+        authorName: draftData.RequesterName || '',
+        headerData: draftData,
+        rawLines: draftData.DocumentLines || [],
+        draftPayload: draftData
+      });
+    } catch (e: any) {
+      return res.status(404).json({ error: `Rascunho/Esboço ${docEntry} não encontrado no sistema.` });
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const normalizedUserEmail = String(approverEmail || '').trim().toLowerCase();
+
+  if (!normalizedUserEmail) {
+    return res.status(403).json({
+      error: 'Bloqueio de Segurança: É obrigatório estar autenticado com e-mail válido para aprovar ou recusar uma etapa.'
+    });
+  }
+
+  // Validate if a specific line + stage was requested
+  if (lineNum !== undefined && lineNum !== null && stageCode !== undefined && stageCode !== null && !approveAllLines) {
+    const targetLine = record.lines.find(l => l.lineNum === Number(lineNum));
+    const targetStage = targetLine?.requiredApprovers.find(a => a.stageCode === Number(stageCode));
+    if (!targetLine || !targetStage) {
+      return res.status(404).json({ error: 'Linha ou etapa de aprovação não encontrada neste documento.' });
+    }
+    if (!isEmailAuthorizedForStage(normalizedUserEmail, targetStage.approverEmail)) {
+      return res.status(403).json({
+        error: `Bloqueio de Segurança: O usuário logado (${normalizedUserEmail}) não tem permissão para decidir a etapa "${targetStage.stageName}". Somente o aprovador titular (${targetStage.approverName} — ${targetStage.approverEmail}) pode aprovar ou recusar sua própria etapa.`
+      });
+    }
+  } else {
+    // Check if the logged-in user is the designated approver for at least one stage in this document
+    const hasAuthorizedStage = record.lines.some(l =>
+      l.requiredApprovers.some(a => isEmailAuthorizedForStage(normalizedUserEmail, a.approverEmail))
+    );
+    if (!hasAuthorizedStage) {
+      return res.status(403).json({
+        error: `Bloqueio de Segurança: O e-mail logado (${normalizedUserEmail}) não corresponde a nenhum aprovador das etapas deste documento.`
+      });
+    }
+  }
+
+  // If Rejected: only allow if user owns the targeted stage (or at least one stage in the document)
+  if (decision === 'ardNotApproved') {
+    record.status = 'N';
+    record.lines.forEach(l => {
+      l.requiredApprovers.forEach(a => {
+        const matchesTarget =
+          (lineNum === undefined || lineNum === null || l.lineNum === Number(lineNum) || approveAllLines) &&
+          (stageCode === undefined || stageCode === null || a.stageCode === Number(stageCode) || approveAllLines);
+        if (a.status === 'W' && matchesTarget && isEmailAuthorizedForStage(normalizedUserEmail, a.approverEmail)) {
+          a.status = 'N';
+          a.approvedBy = `${approverName} (${normalizedUserEmail})`;
+          a.approvedAt = nowIso;
+          a.remarks = remarks || 'Recusado pelo aprovador titular';
+        }
+      });
+    });
+
+    writePortalApprovalsStore(store);
+
+    // Cancel draft in SAP if possible
+    try {
+      const auth = await doSapLogin(req, res);
+      const sapConfig = getSapConfig(req);
+      await axios.post(`${sapConfig.baseUrl}/Drafts(${docEntry})/Cancel`, {}, {
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        headers: { 'Cookie': auth.cookieHeader },
+        timeout: 15000
+      });
+    } catch (cancelErr: any) {
+      console.warn(`Could not cancel Draft(${docEntry}) in SAP:`, cancelErr.message);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Etapa e documento recusados com sucesso pelo aprovador titular.',
+      approvalRecord: record
+    });
+  }
+
+  // Update approver status ONLY for stages where the logged-in user's email matches the stage's approverEmail
+  let stagesUpdatedCount = 0;
+  for (const line of record.lines) {
+    if (lineNum === undefined || lineNum === null || line.lineNum === Number(lineNum) || approveAllLines) {
+      for (const reqApp of line.requiredApprovers) {
+        if (stageCode === undefined || stageCode === null || reqApp.stageCode === Number(stageCode) || approveAllLines) {
+          if (isEmailAuthorizedForStage(normalizedUserEmail, reqApp.approverEmail)) {
+            if (reqApp.status !== 'Y') {
+              reqApp.status = 'Y';
+              reqApp.approvedBy = `${approverName} (${normalizedUserEmail})`;
+              reqApp.approvedAt = nowIso;
+              if (remarks) reqApp.remarks = remarks;
+              stagesUpdatedCount += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (stagesUpdatedCount === 0) {
+    return res.status(403).json({
+      error: `Nenhuma etapa pendente vinculada ao e-mail ${normalizedUserEmail} foi encontrada para aprovação.`
+    });
+  }
+
+  // Check if ALL approvers across ALL lines have approved
+  const allLinesApproved = record.lines.every(line =>
+    line.requiredApprovers.every(app => app.status === 'Y')
+  );
+
+  console.log(`Approval check for Draft ${docEntry}: allLinesApproved = ${allLinesApproved}`);
+
+  if (allLinesApproved) {
+    record.status = 'Y';
+
+    // Idempotency check: Ensure we do not convert twice
+    if (record.convertedDocEntry) {
+      console.log(`Draft ${docEntry} already converted to DocEntry ${record.convertedDocEntry}`);
+      writePortalApprovalsStore(store);
+      return res.json({
+        success: true,
+        message: `Documento já aprovado e efetivado anteriormente (DocEntry: ${record.convertedDocEntry}).`,
+        approvalRecord: record,
+        convertedDocEntry: record.convertedDocEntry,
+        convertedDocNum: record.convertedDocNum
+      });
+    }
+
+    const lockAcquired = acquireConversionLock(docEntry);
+    if (!lockAcquired) {
+      return res.status(409).json({
+        error: `Conversão do esboço ${docEntry} já está em andamento por outra requisição.`
+      });
+    }
+
+    try {
+      const auth = await doSapLogin(req, res);
+      const sapConfig = getSapConfig(req);
+
+      console.log(`[CONVERSION] Starting conversion of Draft(${docEntry}) to effective SAP document...`);
+
+      let convertedDocEntry: number | null = null;
+      let convertedDocNum: number | null = null;
+      let conversionMethod = 'DraftsService_SaveDraftToDocument';
+
+      // Method 1: DraftsService_SaveDraftToDocument
+      try {
+        const convertRes = await axios.post(
+          `${sapConfig.baseUrl}/DraftsService_SaveDraftToDocument`,
+          {
+            Document: {
+              DocEntry: docEntry
+            }
+          },
+          {
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            headers: {
+              'Cookie': auth.cookieHeader,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            timeout: 35000
+          }
+        );
+
+        if (convertRes.data) {
+          convertedDocEntry = Number(convertRes.data.DocEntry || convertRes.data.Document?.DocEntry || convertRes.data.DocNum);
+          convertedDocNum = Number(convertRes.data.DocNum || convertRes.data.Document?.DocNum || convertedDocEntry);
+          console.log(`[CONVERSION SUCCESS] Saved Draft ${docEntry} to effective document: DocEntry=${convertedDocEntry}, DocNum=${convertedDocNum}`);
+        }
+      } catch (saveDraftErr: any) {
+        console.warn(`[CONVERSION METHOD 1 FAILED] DraftsService_SaveDraftToDocument failed: ${saveDraftErr.message}. Trying Fallback Method 2...`);
+
+        // Fallback Method 2: Read Draft, POST to target collection (PurchaseOrders / PurchaseRequests / PurchaseDownPayments), and close Draft
+        conversionMethod = 'Draft_Clone_And_Post';
+        const draftGetRes = await axios.get(`${sapConfig.baseUrl}/Drafts(${docEntry})`, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: { 'Cookie': auth.cookieHeader, 'Accept': 'application/json' },
+          timeout: 20000
+        });
+
+        const draftObj = draftGetRes.data;
+        const targetEndpoint =
+          draftObj.DocObjectCode === 'oPurchaseRequests' ? 'PurchaseRequests' :
+          draftObj.DocObjectCode === 'oPurchaseDownPayments' ? 'PurchaseDownPayments' :
+          'PurchaseOrders';
+
+        // Sanitize object for creation
+        const finalDocPayload = { ...draftObj };
+        delete finalDocPayload.DocEntry;
+        delete finalDocPayload.DocNum;
+        delete finalDocPayload.DocObjectCode;
+        delete finalDocPayload.ApprovalTemplatesID;
+
+        const postDocRes = await axios.post(`${sapConfig.baseUrl}/${targetEndpoint}`, finalDocPayload, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: {
+            'Cookie': auth.cookieHeader,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          timeout: 35000
+        });
+
+        convertedDocEntry = Number(postDocRes.data?.DocEntry);
+        convertedDocNum = Number(postDocRes.data?.DocNum || convertedDocEntry);
+
+        // Close / cancel the original draft
+        try {
+          await axios.post(`${sapConfig.baseUrl}/Drafts(${docEntry})/Cancel`, {}, {
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            headers: { 'Cookie': auth.cookieHeader },
+            timeout: 10000
+          });
+        } catch {}
+      }
+
+      record.convertedDocEntry = convertedDocEntry;
+      record.convertedDocNum = convertedDocNum;
+      record.convertedAt = nowIso;
+      record.conversionMethod = conversionMethod;
+      writePortalApprovalsStore(store);
+
+      return res.json({
+        success: true,
+        message: `Todas as linhas aprovadas! Esboço ${docEntry} convertido com sucesso em documento definitivo.`,
+        convertedDocEntry,
+        convertedDocNum,
+        conversionMethod,
+        approvalRecord: record
+      });
+    } catch (convErr: any) {
+      console.error(`[CONVERSION ERROR] Failed to convert Draft ${docEntry}:`, convErr.message);
+      writePortalApprovalsStore(store);
+      return res.status(500).json({
+        error: `Aprovações registradas, porém ocorreu um erro ao efetivar o documento no SAP: ${convErr.message}`,
+        approvalRecord: record
+      });
+    } finally {
+      releaseConversionLock(docEntry);
+    }
+  }
+
+  // If partially approved (waiting for other lines or stages)
+  writePortalApprovalsStore(store);
+  return res.json({
+    success: true,
+    message: 'Aprovação da linha registrada. Aguardando demais aprovadores para efetivação no SAP.',
+    approvalRecord: record
+  });
+});
+
 // Proxy middleware for general SAP requests
 apiRouter.all('/sap/*', async (req, res) => {
   const rawRequestedCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
@@ -706,6 +1267,58 @@ apiRouter.all('/sap/*', async (req, res) => {
     delete body.U_HorasNob;
     delete body.U_HENor;
     delete body.U_HENob;
+  }
+
+  // Sanitize body for Purchase documents: ensure MainUsage in header (and TaxExtension) and replicate to lines if missing
+  if (
+    (endpoint.startsWith('PurchaseOrders') ||
+      endpoint.startsWith('PurchaseRequests') ||
+      endpoint.startsWith('PurchaseQuotations') ||
+      endpoint.startsWith('PurchaseDownPayments') ||
+      endpoint.startsWith('Drafts')) &&
+    body &&
+    typeof body === 'object'
+  ) {
+    body = { ...body };
+    delete body.Project;
+    delete body.ProjectCode;
+    if (!body.U_DataPgto && body.U_dataPgto) {
+      body.U_DataPgto = body.U_dataPgto;
+    }
+    delete body.U_dataPgto;
+    if (!body.U_DataPgto) {
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      body.U_DataPgto = body.DocDate ? String(body.DocDate).split('T')[0] : `${yyyy}-${mm}-${dd}`;
+    }
+    const rawMainUsage =
+      body.MainUsage ??
+      body.TaxExtension?.MainUsage ??
+      (Array.isArray(body.DocumentLines) ? body.DocumentLines.find((l: any) => l?.Usage !== undefined && l?.Usage !== null)?.Usage : undefined);
+    const parsedMainUsage = rawMainUsage !== undefined && rawMainUsage !== null ? Number(rawMainUsage) : undefined;
+    if (parsedMainUsage && !isNaN(parsedMainUsage)) {
+      body.MainUsage = parsedMainUsage;
+      if (!body.TaxExtension || typeof body.TaxExtension !== 'object') {
+        body.TaxExtension = {};
+      }
+      body.TaxExtension.MainUsage = parsedMainUsage;
+    }
+    if (Array.isArray(body.DocumentLines)) {
+      body.DocumentLines = body.DocumentLines.map((line: any) => {
+        if (!line) return line;
+        const copy = { ...line };
+        delete copy.ProjectCode;
+        if ((copy.Usage === undefined || copy.Usage === null) && parsedMainUsage && !isNaN(parsedMainUsage)) {
+          copy.Usage = parsedMainUsage;
+        }
+        if (!copy.CostingCode) copy.CostingCode = 'BR';
+        if (!copy.CostingCode2) copy.CostingCode2 = 'MATRIZ';
+        if (!copy.CostingCode3) copy.CostingCode3 = 'OPER_OFF';
+        return copy;
+      });
+    }
   }
 
   // Sanitize body for Orders and Quotations: leave financial Project/ProjectCode blank and ensure distribution rule defaults

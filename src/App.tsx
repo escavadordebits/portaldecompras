@@ -4,18 +4,18 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  LayoutDashboard, 
-  ShoppingCart, 
-  Search, 
-  Plus, 
-  LogOut, 
-  User, 
-  Package, 
-  Truck, 
+import {
+  LayoutDashboard,
+  ShoppingCart,
+  Search,
+  Plus,
+  LogOut,
+  User,
+  Package,
+  Truck,
   CheckCircle,
-  CheckCircle2, 
-  Clock, 
+  CheckCircle2,
+  Clock,
   AlertCircle,
   Menu,
   X,
@@ -47,7 +47,10 @@ import {
   FileSpreadsheet,
   Ruler,
   Layers,
-  Printer
+  Printer,
+  ChevronDown,
+  ChevronUp,
+  Building2
 } from 'lucide-react';
 import { BidComparativeView } from './components/BidComparativeView';
 import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal';
@@ -57,34 +60,36 @@ import { PurchaseOrderPrintModal } from './components/PurchaseOrderPrintModal';
 import { DocumentListFilterBar, DocumentFilters } from './components/DocumentListFilterBar';
 import { ConfirmCloseModal } from './components/ConfirmCloseModal';
 import { DraftInvoicePromptModal } from './components/DraftInvoicePromptModal';
+import { CustomerSelectionModal } from './components/CustomerSelectionModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db, signInWithGoogle } from './lib/firebase';
-import { 
-  collection, 
-  doc, 
-  getDoc, 
+import {
+  collection,
+  doc,
+  getDoc,
   getDocs,
   query,
   where,
   deleteDoc,
   updateDoc,
-  setDoc, 
+  setDoc,
   onSnapshot,
-  serverTimestamp 
+  serverTimestamp
 } from 'firebase/firestore';
-import { 
-  signInWithEmailAndPassword, 
+import {
+  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
-  signOut 
+  signOut
 } from 'firebase/auth';
-import { sapService, normalizeSapCompany, resolveSapFinancialProject, getDocumentWO } from './services/sapService';
+import { sapService, normalizeSapCompany, resolveSapFinancialProject, getDocumentWO, calculateUDataPgtoFromPymntGroup } from './services/sapService';
 import { matchPartnerQuery } from './utils/taxUtils';
 import { calculatePersonnelCost, calculateNormalDiarias, calculateDaysBetween, calculateRentalCost, parseDecimalInput } from './utils/costCalculations';
 import { DecimalInput } from './components/DecimalInput';
 import { SAP_CONFIG } from './config/sapConfig';
 import UserManagementView from './components/UserManagementView';
+import { ApprovalsCenterView } from './components/ApprovalsCenterView';
 import { APP_VERSION_TAG } from './config/version';
 import { Button } from '@/components/ui/button';
 
@@ -96,7 +101,7 @@ const Logo = ({ size = "md", className = "" }: { size?: "sm" | "md" | "lg" | "xl
     lg: "w-8 h-8",
     xl: "w-10 h-10"
   }[size];
-  
+
   const containerSize = {
     sm: "p-1",
     md: "p-1.5",
@@ -115,20 +120,20 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
   DialogDescription,
   DialogTrigger,
   DialogFooter,
@@ -136,17 +141,17 @@ import {
 } from '@/components/ui/dialog';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer, 
-  PieChart, 
-  Pie, 
-  Cell 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell
 } from 'recharts';
 
 type View = 'dashboard' | 'create-order' | 'list-orders' | 'create-request' | 'list-requests' | 'create-quotation' | 'list-quotations' | 'bid-map' | 'approvals' | 'create-down-payment' | 'list-down-payments' | 'quality' | 'maintenance' | 'costs' | 'calibration' | 'quotation-portal' | 'users' | 'sales-orders';
@@ -204,13 +209,13 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
   };
 
   if (isLoading) return <div className="flex items-center justify-center h-screen bg-evo-bg"><Loader2 className="animate-spin text-evo-teal w-12 h-12" /></div>;
-  
+
   if (!quotation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-evo-bg p-6">
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md w-full text-center space-y-6">
           <div className="bg-white p-2 rounded shadow-xl inline-block mb-4">
-             <Logo size="lg" />
+            <Logo size="lg" />
           </div>
           <h2 className="text-3xl font-black text-evo-dark uppercase tracking-tight">Proposta Recebida</h2>
           <p className="text-gray-500 font-medium">Sua proposta comercial foi registrada com segurança no nosso sistema. Entraremos em contato em breve.</p>
@@ -265,9 +270,9 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
                       </TableCell>
                       <TableCell className="text-center font-black text-xs text-evo-dark">{line.Quantity}</TableCell>
                       <TableCell>
-                        <Input 
-                          type="number" 
-                          value={line.UnitPrice} 
+                        <Input
+                          type="number"
+                          value={line.UnitPrice}
                           onChange={e => {
                             const newLines = [...lines];
                             newLines[idx].UnitPrice = parseFloat(e.target.value);
@@ -277,7 +282,7 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
                         />
                       </TableCell>
                       <TableCell>
-                        <Input 
+                        <Input
                           type="date"
                           value={line.RequiredDate}
                           onChange={e => {
@@ -315,7 +320,7 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-[10px] font-black uppercase tracking-widest text-white/60">Observações Gerais</Label>
-                  <textarea 
+                  <textarea
                     value={notes}
                     onChange={e => setNotes(e.target.value)}
                     className="w-full h-32 bg-white/5 border border-white/10 p-4 text-xs font-medium rounded-none focus:ring-1 focus:ring-evo-teal focus:outline-none transition-all placeholder:text-white/20"
@@ -338,8 +343,8 @@ function SupplierPortalView({ docEntry }: { docEntry: number }) {
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-evo-bg p-6 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
         <div className="max-w-7xl mx-auto flex justify-end">
-          <Button 
-            onClick={handleSubmit} 
+          <Button
+            onClick={handleSubmit}
             disabled={isSubmitting || lines.some(l => l.UnitPrice <= 0)}
             className="evo-button-primary h-14 px-16 group shadow-xl"
           >
@@ -568,7 +573,7 @@ export default function App() {
 
       const userRef = doc(db, 'users', user.uid);
       const userSnap = await getDoc(userRef);
-      
+
       let profileData: any;
 
       if (!userSnap.exists()) {
@@ -654,7 +659,7 @@ export default function App() {
         localStorage.removeItem('sap_portal_active_user');
         return;
       }
-      
+
       // Auto-heal legacy database name in profile if stored as SBO_QUALITECH or empty
       const normalizedCompany = normalizeSapCompany(profileData.sapCompany);
       if (profileData.sapCompany !== normalizedCompany) {
@@ -741,7 +746,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const portal = params.get('portal');
     const id = params.get('id');
-    
+
     if (portal === 'quotation' && id) {
       setPortalDocEntry(parseInt(id));
       setCurrentView('quotation-portal');
@@ -772,13 +777,13 @@ export default function App() {
   // SAP Config State
   const [sapConfig, setSapConfig] = useState<SAPConfig>(() => {
     const saved = localStorage.getItem('sap_portal_config');
-    let config = saved ? JSON.parse(saved) : { 
-      url: 'https://piqualithse.b1cloud.com.br:50000/b1s/v1', 
-      user: 'B1i', 
+    let config = saved ? JSON.parse(saved) : {
+      url: 'https://piqualithse.b1cloud.com.br:50000/b1s/v1',
+      user: 'B1i',
       password: '1234',
       modules: {}
     };
-    
+
     // Ensure default system credentials if empty
     if (!config.user) config.user = 'B1i';
     if (!config.password) config.password = '1234';
@@ -798,13 +803,13 @@ export default function App() {
 
     // Ensure modules object exists
     if (!config.modules) config.modules = {};
-    
+
     // Merge: keep user choices but ensure new keys (like approvals) are true by default
     const mergedModules = { ...defaultModules };
     Object.keys(config.modules).forEach(key => {
       mergedModules[key] = config.modules[key];
     });
-    
+
     config.modules = mergedModules;
     return config;
   });
@@ -840,7 +845,7 @@ export default function App() {
   const activeModules = useMemo(() => {
     const isSuperAdmin = userProfile?.role === 'admin';
     const userMods = userProfile?.modules || {};
-    
+
     // For admin, default all modules to true unless explicitly disabled
     if (isSuperAdmin) {
       return {
@@ -1093,7 +1098,7 @@ export default function App() {
           const excludedSnap = await getDoc(doc(db, 'excluded_users', docKey));
           if (excludedSnap.exists()) {
             toast.error('Acesso revogado: Este usuário foi excluído da plataforma pelo administrador.');
-            try { await signOut(auth); } catch {}
+            try { await signOut(auth); } catch { }
             setIsLoading(false);
             return;
           }
@@ -1134,7 +1139,7 @@ export default function App() {
       // Se o usuário NÃO existe na base da plataforma e NÃO for bootstrap admin: ACESSO TOTALMENTE NEGADO!
       // Mesmo que o usuário esteja cadastrado no SAP, ele não pode acessar a plataforma se foi excluído ou não está registrado
       if (!userRecord && !isAdminEmail) {
-        try { await signOut(auth); } catch {}
+        try { await signOut(auth); } catch { }
         toast.error('Acesso não autorizado: Usuário não cadastrado na plataforma ou acesso revogado pelo administrador.');
         setIsLoading(false);
         return;
@@ -1142,14 +1147,14 @@ export default function App() {
 
       // 2. Verificar status do usuário na plataforma
       if (userRecord && userRecord.status === 'blocked' && !isAdminEmail) {
-        try { await signOut(auth); } catch {}
+        try { await signOut(auth); } catch { }
         toast.error('Acesso bloqueado: Seu usuário está desativado pelo administrador.');
         setIsLoading(false);
         return;
       }
 
       if (userRecord && userRecord.status === 'pending' && !isAdminEmail) {
-        try { await signOut(auth); } catch {}
+        try { await signOut(auth); } catch { }
         toast.error('Acesso pendente: Seu cadastro ainda aguarda aprovação do administrador.');
         setIsLoading(false);
         return;
@@ -1175,7 +1180,7 @@ export default function App() {
         if (authErr.code === 'auth/user-not-found') {
           try {
             await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
-          } catch {}
+          } catch { }
         }
       }
 
@@ -1632,13 +1637,13 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-evo-bg p-4 relative overflow-hidden font-sans">
         {/* Background Accent */}
         <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
-        
+
         {/* Version in bottom left corner */}
         <div className="absolute bottom-4 left-4 z-20 text-[10px] font-mono font-bold text-evo-dark/40 tracking-wider">
           {APP_VERSION_TAG}
         </div>
-        
-        <motion.div 
+
+        <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           className="w-full max-w-md relative z-10"
@@ -1665,10 +1670,10 @@ export default function App() {
               <form onSubmit={handleLogin} className="space-y-5">
                 <div className="space-y-1.5">
                   <Label htmlFor="email" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">E-mail Corporativo</Label>
-                  <Input 
-                    id="email" 
-                    type="email" 
-                    placeholder="usuario@empresa.com" 
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="usuario@empresa.com"
                     className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
@@ -1688,19 +1693,19 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  <Input 
-                    id="pass" 
+                  <Input
+                    id="pass"
                     type="password"
-                    placeholder="••••••••" 
+                    placeholder="••••••••"
                     className="h-12 border-evo-bg bg-evo-bg/50 focus:bg-white transition-all text-sm rounded-none"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     required
                   />
                 </div>
-                <Button 
-                  type="submit" 
-                  className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs transition-all shadow-lg rounded-none" 
+                <Button
+                  type="submit"
+                  className="w-full h-12 bg-evo-teal hover:bg-evo-teal-dark text-white font-bold uppercase tracking-widest text-xs transition-all shadow-lg rounded-none"
                   disabled={isLoading}
                 >
                   {isLoading ? 'Processando...' : isRegistering ? 'Registrar Agora' : 'Acessar Sistema'}
@@ -1711,7 +1716,7 @@ export default function App() {
                   <div className="relative flex justify-center text-[8px] uppercase font-black"><span className="bg-white px-3 text-evo-dark/20 tracking-widest">Ou continue com</span></div>
                 </div>
 
-                <Button 
+                <Button
                   type="button"
                   variant="outline"
                   onClick={() => {
@@ -1734,7 +1739,7 @@ export default function App() {
                 </Button>
 
                 <p className="text-center">
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setIsRegistering(!isRegistering)}
                     className="text-[10px] font-bold uppercase tracking-widest text-evo-teal hover:underline"
@@ -1784,7 +1789,7 @@ export default function App() {
               </div>
             </div>
 
-            <button 
+            <button
               type="button"
               onClick={handleLogout}
               className="bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded shadow-md border border-red-500/50 flex items-center gap-1.5 transition-all cursor-pointer"
@@ -1798,8 +1803,8 @@ export default function App() {
 
         <div className="flex-1 flex items-center justify-center p-4 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-1/2 h-full bg-evo-dark skew-x-[-15deg] translate-x-1/3 hidden lg:block" />
-          
-          <motion.div 
+
+          <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="w-full max-w-md relative z-10 my-8"
@@ -1843,10 +1848,10 @@ export default function App() {
       {/* Evo Style Header */}
       <header className="w-full bg-[#1b2a4e] text-white flex items-center justify-between px-3 sm:px-6 sticky top-0 z-50 shadow-md h-16 shrink-0 border-b border-white/10">
         <div className="flex items-center gap-2 lg:gap-4 min-w-0 overflow-hidden">
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="lg:hidden text-white hover:bg-white/10 shrink-0" 
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden text-white hover:bg-white/10 shrink-0"
             onClick={() => setSidebarOpen(!sidebarOpen)}
             title="Menu de Navegação"
           >
@@ -1867,14 +1872,14 @@ export default function App() {
           </div>
 
           <nav className="hidden xl:flex items-center gap-1 overflow-x-auto no-scrollbar whitespace-nowrap ml-2">
-            <button 
+            <button
               onClick={() => setCurrentView('dashboard')}
               className={`evo-nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
             >
               Dashboard
             </button>
             {activeModules.procurement && (
-              <button 
+              <button
                 onClick={() => setCurrentView('create-order')}
                 className={`evo-nav-link ${(currentView === 'create-order' || currentView === 'create-request' || currentView === 'create-quotation' || currentView === 'create-down-payment') ? 'active' : ''}`}
               >
@@ -1882,7 +1887,7 @@ export default function App() {
               </button>
             )}
             {activeModules.procurement && (
-              <button 
+              <button
                 onClick={() => setCurrentView('list-orders')}
                 className={`evo-nav-link ${(currentView === 'list-orders' || currentView === 'list-requests' || currentView === 'list-quotations' || currentView === 'list-down-payments') ? 'active' : ''}`}
               >
@@ -1890,7 +1895,7 @@ export default function App() {
               </button>
             )}
             {activeModules.approvals && (
-              <button 
+              <button
                 onClick={() => setCurrentView('approvals')}
                 className={`evo-nav-link ${currentView === 'approvals' ? 'active' : ''}`}
               >
@@ -1898,7 +1903,7 @@ export default function App() {
               </button>
             )}
             {activeModules.negotiations && (
-              <button 
+              <button
                 onClick={() => setCurrentView('list-quotations')}
                 className={`evo-nav-link ${currentView === 'list-quotations' ? 'active' : ''}`}
               >
@@ -1906,7 +1911,7 @@ export default function App() {
               </button>
             )}
             {activeModules.quotations && (
-              <button 
+              <button
                 onClick={() => setCurrentView('quotations')}
                 className={`evo-nav-link ${currentView === 'quotations' ? 'active' : ''}`}
               >
@@ -1914,7 +1919,7 @@ export default function App() {
               </button>
             )}
             {activeModules.salesOrders && (
-              <button 
+              <button
                 onClick={() => setCurrentView('sales-orders')}
                 className={`evo-nav-link ${currentView === 'sales-orders' ? 'active' : ''}`}
               >
@@ -1922,7 +1927,7 @@ export default function App() {
               </button>
             )}
             {activeModules.quality && (
-              <button 
+              <button
                 onClick={() => setCurrentView('quality')}
                 className={`evo-nav-link ${currentView === 'quality' ? 'active' : ''}`}
               >
@@ -1930,7 +1935,7 @@ export default function App() {
               </button>
             )}
             {activeModules.maintenance && (
-              <button 
+              <button
                 onClick={() => setCurrentView('maintenance')}
                 className={`evo-nav-link ${currentView === 'maintenance' ? 'active' : ''}`}
               >
@@ -1938,7 +1943,7 @@ export default function App() {
               </button>
             )}
             {activeModules.calibration && (
-              <button 
+              <button
                 onClick={() => setCurrentView('calibration')}
                 className={`evo-nav-link ${currentView === 'calibration' ? 'active' : ''}`}
               >
@@ -1946,7 +1951,7 @@ export default function App() {
               </button>
             )}
             {activeModules.costs && (
-              <button 
+              <button
                 onClick={() => setCurrentView('costs')}
                 className={`evo-nav-link ${currentView === 'costs' ? 'active' : ''}`}
               >
@@ -1954,7 +1959,7 @@ export default function App() {
               </button>
             )}
             {(activeModules.costs || activeModules.quotations || activeModules.salesOrders) && (
-              <button 
+              <button
                 onClick={() => setIsMeasurementsModalOpen(true)}
                 className="evo-nav-link text-evo-teal font-black flex items-center gap-1.5"
               >
@@ -1963,7 +1968,7 @@ export default function App() {
               </button>
             )}
             {userProfile?.role === 'admin' && (
-              <button 
+              <button
                 onClick={() => setCurrentView('users')}
                 className={`evo-nav-link ${currentView === 'users' ? 'active' : ''}`}
               >
@@ -1972,7 +1977,7 @@ export default function App() {
             )}
           </nav>
         </div>
-        
+
         {/* User Profile + Red Logout Button in Extreme Top Right Corner */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {/* User Profile */}
@@ -2009,7 +2014,7 @@ export default function App() {
           </div>
 
           {/* Settings Button */}
-          <button 
+          <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
             className="bg-white/10 hover:bg-white/20 text-white p-2 rounded border border-white/15 transition-all cursor-pointer shrink-0"
@@ -2019,7 +2024,7 @@ export default function App() {
           </button>
 
           {/* Prominent Red Logout Button on Corner */}
-          <button 
+          <button
             type="button"
             onClick={handleLogout}
             className="bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded shadow-md border border-red-500/50 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
@@ -2041,11 +2046,11 @@ export default function App() {
           {/* Top of Sidebar: Visão Geral + Campo de Pesquisa de Menus */}
           <div className="pt-4 pb-2 border-b border-white/5 shrink-0">
             {(!normalizedSearch || isDashboardMatch) && (
-              <SidebarItem 
-                icon={<LayoutDashboard />} 
-                label="Visão Geral" 
+              <SidebarItem
+                icon={<LayoutDashboard />}
+                label="Visão Geral"
                 badge={normalizedSearch ? "Principal" : undefined}
-                active={currentView === 'dashboard'} 
+                active={currentView === 'dashboard'}
                 expanded={sidebarOpen}
                 onClick={() => {
                   setCurrentView('dashboard');
@@ -2150,7 +2155,7 @@ export default function App() {
               ))
             )}
           </nav>
-          
+
           <div className="p-3 border-t border-white/10 space-y-2">
             <button
               onClick={handleLogout}
@@ -2175,98 +2180,98 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <AnimatePresence mode="wait">
             {currentView === 'dashboard' && (
-              <DashboardView 
-                key="dashboard" 
-                onViewDetails={handleViewDetails} 
+              <DashboardView
+                key="dashboard"
+                onViewDetails={handleViewDetails}
                 activeModules={activeModules}
                 onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
               />
             )}
             {currentView === 'create-order' && (
-              <CreateOrderView 
-                key="create" 
+              <CreateOrderView
+                key="create"
                 userEmail={sapUser?.email}
                 allowAttachments={true}
               />
             )}
             {currentView === 'list-orders' && (
-              <ListOrdersView 
-                key="list" 
-                selectedDocEntry={selectedOrderEntry} 
+              <ListOrdersView
+                key="list"
+                selectedDocEntry={selectedOrderEntry}
                 onBack={() => setSelectedOrderEntry(null)}
                 onViewDetails={handleViewDetails}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-request' && (
-              <CreateOrderView 
-                key="create-request" 
-                title="Nova Solicitação de Compra" 
-                onSubmit={sapService.createPurchaseRequest} 
+              <CreateOrderView
+                key="create-request"
+                title="Nova Solicitação de Compra"
+                onSubmit={sapService.createPurchaseRequest}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'list-requests' && (
-              <ListOrdersView 
-                key="list-requests" 
+              <ListOrdersView
+                key="list-requests"
                 title="Solicitações de Compra"
                 fetchOrders={sapService.getPurchaseRequests}
                 fetchOrderDetail={sapService.getPurchaseRequest}
-                selectedDocEntry={selectedRequestEntry} 
+                selectedDocEntry={selectedRequestEntry}
                 onBack={() => setSelectedRequestEntry(null)}
                 onViewDetails={handleViewRequestDetails}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-quotation' && (
-              <CreateOrderView 
-                key="create-quotation" 
-                title="Nova Cotação de Compra" 
-                onSubmit={sapService.createPurchaseQuotation} 
+              <CreateOrderView
+                key="create-quotation"
+                title="Nova Cotação de Compra"
+                onSubmit={sapService.createPurchaseQuotation}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'list-quotations' && (
-              <ListOrdersView 
-                key="list-quotations" 
+              <ListOrdersView
+                key="list-quotations"
                 title="Cotações de Compra"
                 fetchOrders={sapService.getPurchaseQuotations}
                 fetchOrderDetail={sapService.getPurchaseQuotation}
-                selectedDocEntry={selectedQuotationEntry} 
+                selectedDocEntry={selectedQuotationEntry}
                 onBack={() => setSelectedQuotationEntry(null)}
                 onViewDetails={handleViewQuotationDetails}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'bid-map' && (
-              <BidComparativeView 
-                key="bid-map" 
-                userEmail={sapUser?.email} 
+              <BidComparativeView
+                key="bid-map"
+                userEmail={sapUser?.email}
               />
             )}
             {currentView === 'create-down-payment' && (
-              <CreateOrderView 
-                key="create-down-payment" 
-                title="Novo Adiantamento a Fornecedor" 
-                onSubmit={sapService.createPurchaseDownPayment} 
+              <CreateOrderView
+                key="create-down-payment"
+                title="Novo Adiantamento a Fornecedor"
+                onSubmit={sapService.createPurchaseDownPayment}
                 userEmail={sapUser?.email}
                 allowAttachments={true}
               />
             )}
             {currentView === 'list-down-payments' && (
-              <ListOrdersView 
-                key="list-down-payments" 
+              <ListOrdersView
+                key="list-down-payments"
                 title="Adiantamentos a Fornecedores"
                 fetchOrders={sapService.getPurchaseDownPayments}
                 fetchOrderDetail={sapService.getPurchaseDownPayment}
-                selectedDocEntry={selectedDownPaymentEntry} 
+                selectedDocEntry={selectedDownPaymentEntry}
                 onBack={() => setSelectedDownPaymentEntry(null)}
                 onViewDetails={handleViewDownPaymentDetails}
                 userEmail={sapUser?.email}
               />
             )}
             {currentView === 'approvals' && (
-              <ApprovalsView key="approvals" />
+              <ApprovalsCenterView key="approvals" userEmail={sapUser?.email || userProfile?.email || activeAuthUser?.email || ""} userName={sapUser?.name || userProfile?.displayName || userProfile?.name || activeAuthUser?.displayName || ""} />
             )}
             {currentView === 'quality' && (
               <QualityView key="quality" />
@@ -2278,8 +2283,8 @@ export default function App() {
               <CostsView key="costs" />
             )}
             {currentView === 'quotations' && (
-              <QuotationsView 
-                key="quotations" 
+              <QuotationsView
+                key="quotations"
                 initialDocEntry={selectedQuotationEntry}
                 onClearSelection={() => setSelectedQuotationEntry(null)}
                 onOpenMeasurements={() => setIsMeasurementsModalOpen(true)}
@@ -2291,9 +2296,9 @@ export default function App() {
               />
             )}
             {currentView === 'sales-orders' && (
-              <SalesOrdersView 
-                key="sales-orders" 
-                userEmail={userProfile?.email || activeAuthUser?.email || ''} 
+              <SalesOrdersView
+                key="sales-orders"
+                userEmail={userProfile?.email || activeAuthUser?.email || ''}
                 initialDocEntry={selectedSalesOrderEntry}
                 onClearSelection={() => setSelectedSalesOrderEntry(null)}
               />
@@ -2309,7 +2314,7 @@ export default function App() {
       </div>
 
       {/* Global Measurements Summary Modal */}
-      <MeasurementsSummaryModal 
+      <MeasurementsSummaryModal
         isOpen={isMeasurementsModalOpen}
         onClose={() => setIsMeasurementsModalOpen(false)}
         onSelectQuotation={(docEntry) => {
@@ -2330,8 +2335,8 @@ export default function App() {
           <div className="space-y-4 py-3">
             <div className="space-y-1">
               <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">URL do Service Layer</Label>
-              <Input 
-                value={sapConfig.url} 
+              <Input
+                value={sapConfig.url}
                 onChange={(e) => setSapConfig({ ...sapConfig, url: e.target.value })}
                 placeholder="https://piqualithse.b1cloud.com.br:50000/b1s/v1"
                 className="rounded-none border-evo-bg text-xs font-mono"
@@ -2340,8 +2345,8 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Usuário Técnico</Label>
-                <Input 
-                  value={sapConfig.user} 
+                <Input
+                  value={sapConfig.user}
                   onChange={(e) => setSapConfig({ ...sapConfig, user: e.target.value })}
                   placeholder="B1i"
                   className="rounded-none border-evo-bg text-xs font-bold"
@@ -2349,9 +2354,9 @@ export default function App() {
               </div>
               <div className="space-y-1">
                 <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">Senha Técnica</Label>
-                <Input 
+                <Input
                   type="password"
-                  value={sapConfig.password} 
+                  value={sapConfig.password}
                   onChange={(e) => setSapConfig({ ...sapConfig, password: e.target.value })}
                   placeholder="••••••••"
                   className="rounded-none border-evo-bg text-xs font-bold"
@@ -2381,12 +2386,12 @@ export default function App() {
 
 function SidebarItem({ icon, label, badge, active, expanded, onClick }: any) {
   return (
-    <button 
+    <button
       onClick={onClick}
       className={`
         w-full flex items-center justify-between px-6 py-2.5 transition-all duration-200 border-l-4 text-left group
-        ${active 
-          ? 'bg-white/5 text-white border-evo-teal' 
+        ${active
+          ? 'bg-white/5 text-white border-evo-teal'
           : 'border-transparent hover:bg-white/5 hover:text-white'}
       `}
     >
@@ -2405,13 +2410,13 @@ function SidebarItem({ icon, label, badge, active, expanded, onClick }: any) {
   );
 }
 
-function DashboardView({ 
-  onViewDetails, 
+function DashboardView({
+  onViewDetails,
   activeModules = {},
-  onOpenMeasurements 
-}: { 
-  key?: string; 
-  onViewDetails: (id: number, type: string) => void; 
+  onOpenMeasurements
+}: {
+  key?: string;
+  onViewDetails: (id: number, type: string) => void;
   activeModules?: any;
   onOpenMeasurements?: () => void;
 }) {
@@ -2506,11 +2511,11 @@ function DashboardView({
   const totalPurchaseOrdersValue = stats.orders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
   const totalSalesOrdersValue = stats.salesOrders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
   const totalSalesQuotationsValue = stats.salesQuotations.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
-  
-  const totalPersonnelCosts = stats.personnelCosts.reduce((acc: number, c: any) => 
+
+  const totalPersonnelCosts = stats.personnelCosts.reduce((acc: number, c: any) =>
     acc + (Number(c.U_ValorTotal || c.U_TotalCost || c.DocTotal || c.U_SalarioBase) || 0), 0
   );
-  const totalRentalCosts = stats.rentalCosts.reduce((acc: number, c: any) => 
+  const totalRentalCosts = stats.rentalCosts.reduce((acc: number, c: any) =>
     acc + (Number(c.U_ValorTotal || c.U_TotalCost || c.DocTotal || c.U_ValorAluguel) || 0), 0
   );
 
@@ -2543,7 +2548,7 @@ function DashboardView({
     .slice(0, 8);
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
@@ -2557,7 +2562,7 @@ function DashboardView({
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          {[1,2,3,4].map(i => (
+          {[1, 2, 3, 4].map(i => (
             <div key={i} className="bg-white p-8 h-48 animate-pulse border border-evo-bg" />
           ))}
         </div>
@@ -2566,57 +2571,57 @@ function DashboardView({
           {/* Top KPI Bento Grid Layout */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
             {hasCosts && (
-              <StatCard 
-                title="Receita Pessoa" 
-                value={`R$ ${(totalPersonnelCosts/1000).toFixed(1)}k`} 
+              <StatCard
+                title="Receita Pessoa"
+                value={`R$ ${(totalPersonnelCosts / 1000).toFixed(1)}k`}
                 icon={<Users />}
                 description={`${stats.personnelCosts.length} lançamentos de folha e encargos`}
               />
             )}
             {hasCosts && (
-              <StatCard 
-                title="Receita Locação" 
-                value={`R$ ${(totalRentalCosts/1000).toFixed(1)}k`} 
+              <StatCard
+                title="Receita Locação"
+                value={`R$ ${(totalRentalCosts / 1000).toFixed(1)}k`}
                 icon={<Building />}
                 description={`${stats.rentalCosts.length} imóveis e instalações`}
               />
             )}
             {hasSalesOrders && (
-              <StatCard 
-                title="Pedidos de Venda" 
-                value={`R$ ${(totalSalesOrdersValue/1000).toFixed(1)}k`} 
+              <StatCard
+                title="Pedidos de Venda"
+                value={`R$ ${(totalSalesOrdersValue / 1000).toFixed(1)}k`}
                 icon={<ShoppingCart />}
                 description={`${stats.salesOrders.length} pedidos de venda ativos`}
               />
             )}
             {hasNegotiations && (
-              <StatCard 
-                title="Cotações de Venda" 
-                value={`R$ ${(totalSalesQuotationsValue/1000).toFixed(1)}k`} 
+              <StatCard
+                title="Cotações de Venda"
+                value={`R$ ${(totalSalesQuotationsValue / 1000).toFixed(1)}k`}
                 icon={<ClipboardList />}
                 description={`${stats.salesQuotations.length} cotações em negociação`}
               />
             )}
             {hasProcurement && (
-              <StatCard 
-                title="Volume de Compras" 
-                value={`R$ ${(totalPurchaseOrdersValue/1000).toFixed(1)}k`} 
+              <StatCard
+                title="Volume de Compras"
+                value={`R$ ${(totalPurchaseOrdersValue / 1000).toFixed(1)}k`}
                 icon={<TrendingUp />}
                 description={`${stats.orders.length} ordens de compra em suprimentos`}
               />
             )}
             {hasProcurement && (
-              <StatCard 
-                title="Solicitações Pendentes" 
-                value={openRequests} 
+              <StatCard
+                title="Solicitações Pendentes"
+                value={openRequests}
                 icon={<FileText />}
                 description="Aguardando cotação/pedido"
               />
             )}
             {hasApprovals && (
-              <StatCard 
-                title="Aprovações Ativas" 
-                value={pendingApprovals} 
+              <StatCard
+                title="Aprovações Ativas"
+                value={pendingApprovals}
                 icon={<CheckSquare />}
                 description="Aguardando decisão gestor"
               />
@@ -2654,7 +2659,7 @@ function DashboardView({
                   <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
                     <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Distribuição Pessoa vs Locação</p>
                     <p className="text-2xl font-black text-evo-dark mt-1">
-                      {totalPersonnelCosts + totalRentalCosts > 0 
+                      {totalPersonnelCosts + totalRentalCosts > 0
                         ? `${Math.round((totalPersonnelCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}% / ${Math.round((totalRentalCosts / (totalPersonnelCosts + totalRentalCosts)) * 100)}%`
                         : '0% / 0%'}
                     </p>
@@ -2868,7 +2873,7 @@ function DashboardView({
                       const manualRaw = localStorage.getItem('qualitech_manual_measurements_v1');
                       let manualMap: any = {};
                       if (manualRaw) {
-                        try { manualMap = JSON.parse(manualRaw); } catch {}
+                        try { manualMap = JSON.parse(manualRaw); } catch { }
                       }
 
                       let items: any[] = [];
@@ -2933,8 +2938,8 @@ function DashboardView({
                       }
 
                       return items.map((item, idx) => (
-                        <TableRow 
-                          key={idx} 
+                        <TableRow
+                          key={idx}
                           className="hover:bg-slate-50 transition-colors cursor-pointer group"
                           onClick={() => onViewDetails(item.docEntry, 'sales-quotation')}
                         >
@@ -2992,19 +2997,19 @@ function DashboardView({
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                    <XAxis 
-                      dataKey="name" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fontSize: 9, fontWeight: 900, fill: '#1a1a1a', letterSpacing: '0.1em' }} 
+                    <XAxis
+                      dataKey="name"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 9, fontWeight: 900, fill: '#1a1a1a', letterSpacing: '0.1em' }}
                     />
-                    <YAxis 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fontSize: 9, fontWeight: 700, fill: '#ababab' }} 
+                    <YAxis
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 9, fontWeight: 700, fill: '#ababab' }}
                     />
-                    <Tooltip 
-                      cursor={{ fill: '#f8fafc' }} 
+                    <Tooltip
+                      cursor={{ fill: '#f8fafc' }}
                       contentStyle={{ borderRadius: '0', border: '1px solid #f0f0f0', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
                       formatter={(val: any) => [`R$ ${Number(val).toLocaleString('pt-BR')}`, 'Volume (R$)']}
                     />
@@ -3046,9 +3051,9 @@ function DashboardView({
                         <p className="text-xs font-black text-evo-dark">
                           R$ {(activity.DocTotal || activity.U_ValorTotal || activity.U_TotalCost || activity.U_SalarioBase || activity.U_ValorAluguel || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </p>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="h-6 w-6 text-evo-teal hover:bg-evo-teal hover:text-white rounded-none ml-2 mt-1"
                           onClick={() => onViewDetails(activity.DocEntry, activity._type)}
                         >
@@ -3077,19 +3082,19 @@ function StatCard({ title, value, icon, description }: any) {
     <Card className="evo-card border-none relative overflow-hidden group h-full">
       <div className="absolute top-0 right-0 w-32 h-32 bg-evo-teal/5 rounded-bl-full -mr-16 -mt-16 transition-transform duration-500 group-hover:scale-110" />
       <div className="absolute bottom-0 left-0 w-24 h-1 bg-evo-teal transform origin-left transition-transform duration-500 scale-x-0 group-hover:scale-x-100" />
-      
+
       <CardContent className="pt-10 pb-8 px-8 relative z-10">
         <div className="flex flex-col h-full justify-between">
           <div className="bg-evo-bg w-14 h-14 flex items-center justify-center transition-colors duration-500 group-hover:bg-evo-teal/10 mb-6">
             {React.cloneElement(icon as React.ReactElement, { className: 'w-6 h-6 text-evo-dark group-hover:text-evo-teal transition-colors' })}
           </div>
-          
+
           <div className="space-y-4">
             <div>
               <p className="text-[10px] font-black text-evo-dark/40 uppercase tracking-[0.3em] mb-1">{title}</p>
               <h3 className="text-3xl font-black text-evo-dark tracking-tighter leading-none">{value}</h3>
             </div>
-            
+
             <div className="pt-4 border-t border-evo-bg flex items-center justify-between">
               <p className="text-[9px] font-bold uppercase tracking-widest text-evo-teal/70">{description}</p>
               <div className="w-1.5 h-1.5 rounded-full bg-evo-teal animate-pulse" />
@@ -3101,43 +3106,59 @@ function StatCard({ title, value, icon, description }: any) {
   );
 }
 
-function CreateOrderView({ 
-  title = "Novo Pedido de Compra", 
-  onSubmit = sapService.createPurchaseOrder, 
+function CreateOrderView({
+  title = "Novo Pedido de Compra",
+  onSubmit = sapService.createPurchaseOrder,
   userEmail,
-  allowAttachments = false 
-}: { 
-  key?: string, 
-  title?: string, 
-  onSubmit?: (data: any, email?: string) => Promise<any>, 
+  allowAttachments = false
+}: {
+  key?: string,
+  title?: string,
+  onSubmit?: (data: any, email?: string) => Promise<any>,
   userEmail?: string,
   allowAttachments?: boolean
 }) {
   const [supplierSearch, setSupplierSearch] = useState('');
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
-  
+
   const isRequest = title.includes('Solicitação');
 
   const [itemSearch, setItemSearch] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [orderItems, setOrderItems] = useState<any[]>([]);
-  
+
   const [businessPlaces, setBusinessPlaces] = useState<any[]>([]);
   const [selectedBPL, setSelectedBPL] = useState<string>('');
-  
+  const [selectedUsage, setSelectedUsage] = useState<string>('');
+
   const [dimensions, setDimensions] = useState<any[]>([]);
   const [distRules, setDistRules] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [usages, setUsages] = useState<any[]>([]);
-  
+  const [paymentTermsList, setPaymentTermsList] = useState<any[]>([]);
+  const [selectedPaymentGroup, setSelectedPaymentGroup] = useState<string>('-1');
+  const [uDataPgto, setUDataPgto] = useState<string>(() => calculateUDataPgtoFromPymntGroup(''));
+  const [buyersList, setBuyersList] = useState<any[]>([]);
+  const [selectedBuyer, setSelectedBuyer] = useState<string>('-1');
+  const [comments, setComments] = useState<string>('');
+
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [docDueDate, setDocDueDate] = useState<string>(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSearchingItems, setIsSearchingItems] = useState(false);
+  const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
   const [lastAddedIdx, setLastAddedIdx] = useState<number | null>(null);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [createdDocEntry, setCreatedDocEntry] = useState<number | null>(null);
+
+  const handlePaymentGroupChange = (groupNumStr: string, termsSource: any[] = paymentTermsList) => {
+    setSelectedPaymentGroup(groupNumStr);
+    const matchTerm = termsSource.find((t: any) => String(t.GroupNumber ?? t.GroupNum) === String(groupNumStr));
+    const pymntGroup = matchTerm ? (matchTerm.PaymentTermsGroupName ?? matchTerm.PymntGroup ?? '') : '';
+    const calculatedDate = calculateUDataPgtoFromPymntGroup(pymntGroup);
+    setUDataPgto(calculatedDate);
+  };
 
   const handleSendEmail = (to: string, cc: string, subject: string, body: string) => {
     const mailtoUrl = `mailto:${to}?cc=${cc}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -3147,35 +3168,48 @@ function CreateOrderView({
     setOrderItems([]);
     setSelectedSupplier(null);
     setSelectedFiles([]);
+    setSelectedUsage('');
+    setSelectedPaymentGroup('-1');
+    setUDataPgto(calculateUDataPgtoFromPymntGroup(''));
+    setSelectedBuyer('-1');
+    setComments('');
   };
 
   useEffect(() => {
     fetchBusinessPlaces();
     fetchAccountingData();
-    fetchInitialItems();
   }, []);
 
-  const fetchInitialItems = async () => {
-    try {
-      const data = await sapService.getItems();
-      setItems(data);
-    } catch (error) {
-      console.error('Erro ao carregar itens iniciais:', error);
+  useEffect(() => {
+    const trimmed = itemSearch.trim();
+    if (!trimmed) {
+      setItems([]);
+      setIsSearchingItems(false);
+      return;
     }
-  };
+    if (trimmed.length < 2) return;
+    const timer = setTimeout(() => {
+      searchItems(trimmed);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [itemSearch]);
 
   const fetchAccountingData = async () => {
     try {
-      const [dims, rules, projs, use] = await Promise.all([
+      const [dims, rules, projs, use, pTerms, buyers] = await Promise.all([
         sapService.getDimensions(),
         sapService.getDistributionRules(),
         sapService.getProjects(),
-        sapService.getUsages()
+        sapService.getUsages(),
+        sapService.getPaymentTerms(),
+        sapService.getBuyers()
       ]);
       setDimensions(dims);
       setDistRules(rules);
       setProjects(projs);
       setUsages(use);
+      setPaymentTermsList(pTerms || []);
+      setBuyersList(buyers || []);
     } catch (error) {
       console.error('Erro ao carregar dados contábeis:', error);
     }
@@ -3203,16 +3237,18 @@ function CreateOrderView({
     }
   };
 
-  const searchItems = async () => {
-    if (!itemSearch && items.length > 0) return; // Don't re-search empty if we already have items
+  const searchItems = async (queryOverride?: string) => {
+    const queryStr = (queryOverride !== undefined ? queryOverride : itemSearch).trim();
+    if (!queryStr) {
+      setItems([]);
+      setIsItemLookupOpen(true);
+      return;
+    }
     setIsSearchingItems(true);
     try {
-      const rawData: any = await sapService.getItems(itemSearch);
+      const rawData: any = await sapService.getItems(queryStr);
       const data = Array.isArray(rawData) ? rawData : (rawData?.value || []);
       setItems(data);
-      if (data.length === 0) {
-        toast.info('Nenhum item encontrado com este termo.');
-      }
     } catch (error) {
       toast.error('Erro ao buscar itens.');
     } finally {
@@ -3224,19 +3260,35 @@ function CreateOrderView({
     let targetIdx = -1;
     const existingIdx = orderItems.findIndex(i => i.ItemCode === item.ItemCode);
     if (existingIdx !== -1) {
-      setOrderItems(orderItems.map((i, idx) => 
+      setOrderItems(orderItems.map((i, idx) =>
         idx === existingIdx ? { ...i, Quantity: i.Quantity + 1 } : i
       ));
       setLastAddedIdx(existingIdx);
       targetIdx = existingIdx;
     } else {
-      const newItems = [...orderItems, { ...item, Quantity: 1, Price: 0, CostingCode: 'BR', CostingCode2: 'MATRIZ', CostingCode3: 'OPER_OFF', CostingCode4: 'BASE' }];
+      const newItems = [
+        ...orderItems,
+        {
+          ...item,
+          Quantity: 1,
+          Price: 0,
+          CostingCode: 'BR',
+          CostingCode2: 'MATRIZ',
+          CostingCode3: 'OPER_OFF',
+          CostingCode4: 'BASE',
+          ProjectCode: 'BASE',
+          Usage: selectedUsage || undefined
+        }
+      ];
       setOrderItems(newItems);
       setLastAddedIdx(newItems.length - 1);
       targetIdx = newItems.length - 1;
     }
+    setItemSearch('');
+    setItems([]);
+    setIsItemLookupOpen(false);
     toast.success(`${item.ItemName} adicionado.`);
-    
+
     // Focus the price input after some delay for the item to render
     setTimeout(() => {
       const idx = targetIdx;
@@ -3263,11 +3315,15 @@ function CreateOrderView({
     }
 
     // Validation: Block if project or dimension 1 is missing
-    const missingAccounting = orderItems.some(item => !item.ProjectCode || !item.CostingCode);
+    const missingAccounting = orderItems.some(item => !(item.ProjectCode || item.CostingCode4) || !item.CostingCode);
     if (missingAccounting) {
       toast.error('Todos os itens devem ter Projeto SAP e Dimensão 1 preenchidos no Detalhamento Contábil.');
       return;
     }
+
+    const firstLineUsage = orderItems.find(i => i.Usage && i.Usage !== 'none')?.Usage;
+    const effectiveHeaderUsage = selectedUsage || (firstLineUsage ? String(firstLineUsage) : '');
+    const parsedHeaderUsage = effectiveHeaderUsage ? parseInt(effectiveHeaderUsage, 10) : undefined;
 
     setIsLoading(true);
     try {
@@ -3278,13 +3334,31 @@ function CreateOrderView({
         attachmentEntry = attachResult.AbsoluteEntry;
       }
 
+      const parsedPaymentGroup = selectedPaymentGroup !== '' ? parseInt(selectedPaymentGroup, 10) : -1;
+      const matchTerm = paymentTermsList.find((t: any) => Number(t.GroupNumber ?? t.GroupNum) === parsedPaymentGroup);
+      const pymntGroupStr = matchTerm ? (matchTerm.PaymentTermsGroupName ?? matchTerm.PymntGroup ?? '') : '';
+      const computedUDataPgto = uDataPgto || calculateUDataPgtoFromPymntGroup(pymntGroupStr);
+      const parsedBuyerCode = selectedBuyer !== '' ? parseInt(selectedBuyer, 10) : -1;
+
       const orderData: any = {
         CardCode: selectedSupplier?.CardCode || '',
         DocDueDate: docDueDate,
+        PaymentGroupCode: !isNaN(parsedPaymentGroup) ? parsedPaymentGroup : -1,
+        U_DataPgto: computedUDataPgto,
+        SalesPersonCode: !isNaN(parsedBuyerCode) ? parsedBuyerCode : -1,
+        ...(comments.trim() ? { Comments: comments.trim() } : {}),
+        ...(parsedHeaderUsage ? {
+          MainUsage: parsedHeaderUsage,
+          TaxExtension: {
+            MainUsage: parsedHeaderUsage
+          }
+        } : {}),
         DocumentLines: orderItems.map(i => {
           const lineProject = i.CostingCode4 || i.ProjectCode || 'BASE';
+          const lineUsage = i.Usage && i.Usage !== 'none' ? parseInt(String(i.Usage), 10) : parsedHeaderUsage;
           return {
             ItemCode: i.ItemCode,
+            ItemDescription: i.ItemDescription || i.ItemName,
             Quantity: i.Quantity,
             Price: i.Price,
             CostingCode: i.CostingCode || 'BR',
@@ -3292,7 +3366,7 @@ function CreateOrderView({
             CostingCode3: i.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: i.CostingCode5 || undefined,
-            Usage: i.Usage ? parseInt(i.Usage) : undefined
+            Usage: lineUsage || undefined
           };
         })
       };
@@ -3309,7 +3383,7 @@ function CreateOrderView({
       }
 
       const response = await onSubmit(orderData, userEmail);
-      
+
       // Only show portal email prompt for Purchase Quotations
       if (title === "Nova Cotação de Compra" && response?.DocEntry) {
         setCreatedDocEntry(response.DocEntry);
@@ -3319,6 +3393,11 @@ function CreateOrderView({
         setOrderItems([]);
         setSelectedSupplier(null);
         setSelectedFiles([]);
+        setSelectedUsage('');
+        setSelectedPaymentGroup('-1');
+        setUDataPgto(calculateUDataPgtoFromPymntGroup(''));
+        setSelectedBuyer('-1');
+        setComments('');
       }
     } catch (error: any) {
       toast.error(error.response?.data?.error?.message?.value || 'Erro ao processar operação.');
@@ -3328,13 +3407,13 @@ function CreateOrderView({
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
       className="space-y-10 max-w-6xl mx-auto"
     >
-      <EmailQuotationModal 
+      <EmailQuotationModal
         isOpen={isEmailModalOpen}
         onClose={() => {
           setIsEmailModalOpen(false);
@@ -3342,6 +3421,11 @@ function CreateOrderView({
           setOrderItems([]);
           setSelectedSupplier(null);
           setSelectedFiles([]);
+          setSelectedUsage('');
+          setSelectedPaymentGroup('-1');
+          setUDataPgto(calculateUDataPgtoFromPymntGroup(''));
+          setSelectedBuyer('-1');
+          setComments('');
         }}
         onConfirm={handleSendEmail}
         defaultTo={selectedSupplier?.EmailAddress || ''}
@@ -3355,9 +3439,9 @@ function CreateOrderView({
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Portal de Operações SAP Business One</p>
         </div>
-        <Button 
-          onClick={handleFormSubmit} 
-          disabled={isLoading} 
+        <Button
+          onClick={handleFormSubmit}
+          disabled={isLoading}
           className="evo-button-primary shadow-xl"
         >
           {isLoading ? 'Efetivando...' : 'Efetivar Registro'}
@@ -3372,7 +3456,7 @@ function CreateOrderView({
             <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Informações de Cabeçalho</h2>
             <Card className="evo-card border-none">
               <CardContent className="pt-8 pb-8 px-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <div className="space-y-2">
                     <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Filial Responsável</Label>
                     <Select value={selectedBPL} onValueChange={setSelectedBPL}>
@@ -3392,11 +3476,107 @@ function CreateOrderView({
                   </div>
                   <div className="space-y-2">
                     <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Data de Vencimento</Label>
-                    <Input 
-                      type="date" 
+                    <Input
+                      type="date"
                       className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold"
                       value={docDueDate}
                       onChange={(e) => setDocDueDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Utilização Fiscal (Cabeçalho)</Label>
+                    <Select
+                      value={selectedUsage || 'none'}
+                      onValueChange={(val) => {
+                        const usageVal = val === 'none' ? '' : val;
+                        setSelectedUsage(usageVal);
+                        setOrderItems(prev => prev.map(it => ({ ...it, Usage: usageVal || undefined })));
+                      }}
+                    >
+                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
+                        <SelectValue placeholder="Selecione a utilização">
+                          {(() => {
+                            if (!selectedUsage || selectedUsage === 'none') return 'Selecione a utilização';
+                            const matchUsage = usages.find((u: any) => u.ID?.toString() === selectedUsage.toString());
+                            return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${selectedUsage}`;
+                          })()}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-none border-evo-bg min-w-[300px]">
+                        <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-2.5">
+                          Nenhuma Selecionada
+                        </SelectItem>
+                        {usages.map((u: any) => (
+                          <SelectItem key={u.ID} value={u.ID.toString()} className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                            <span className="text-evo-teal font-black mr-1.5">[{u.ID}]</span> {u.Usage}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Condição de Pagamento (OCTG)</Label>
+                    <Select
+                      value={selectedPaymentGroup || '-1'}
+                      onValueChange={(val) => handlePaymentGroupChange(val)}
+                    >
+                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
+                        <SelectValue placeholder="Selecione a condição">
+                          {(() => {
+                            const match = paymentTermsList.find((t: any) => String(t.GroupNumber ?? t.GroupNum) === String(selectedPaymentGroup));
+                            return match ? `${match.PaymentTermsGroupName ?? match.PymntGroup}` : (selectedPaymentGroup === '-1' ? '--- (À Vista / Padrão)' : `Condição ${selectedPaymentGroup}`);
+                          })()}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-none border-evo-bg min-w-[300px] max-h-72">
+                        {paymentTermsList.map((pt: any) => (
+                          <SelectItem key={pt.GroupNumber} value={String(pt.GroupNumber)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                            <span className="text-evo-teal font-black mr-1.5">[{pt.GroupNumber}]</span> {pt.PaymentTermsGroupName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Data Prev. Pgto. (U_DataPgto)</Label>
+                    <Input
+                      type="date"
+                      className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold"
+                      value={uDataPgto}
+                      onChange={(e) => setUDataPgto(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Comprador</Label>
+                    <Select
+                      value={selectedBuyer || '-1'}
+                      onValueChange={(val) => setSelectedBuyer(val)}
+                    >
+                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
+                        <SelectValue placeholder="Selecione o comprador">
+                          {(() => {
+                            const match = buyersList.find((b: any) => String(b.SalesEmployeeCode) === String(selectedBuyer));
+                            return match ? match.SalesEmployeeName : (selectedBuyer === '-1' ? '-Nenhum vendedor / comprador-' : `Comprador ${selectedBuyer}`);
+                          })()}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-none border-evo-bg min-w-[280px] max-h-72">
+                        {buyersList.map((buyer: any) => (
+                          <SelectItem key={buyer.SalesEmployeeCode} value={String(buyer.SalesEmployeeCode)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                            {buyer.SalesEmployeeName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 md:col-span-2 lg:col-span-3">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Observações</Label>
+                    <textarea
+                      rows={3}
+                      placeholder="Ex: REQ 2213 - Itens manutenção Eddy Current. QT-52547 WO 3805..."
+                      className="w-full rounded-none border border-evo-bg bg-evo-bg/30 p-3 text-xs font-bold text-evo-dark placeholder:text-evo-dark/30 focus:outline-none focus:border-evo-teal transition-colors resize-y"
+                      value={comments}
+                      onChange={(e) => setComments(e.target.value)}
                     />
                   </div>
                 </div>
@@ -3409,51 +3589,112 @@ function CreateOrderView({
             <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Itens e Serviços</h2>
             <Card className="evo-card border-none">
               <CardContent className="pt-8 pb-8 px-8 space-y-8">
-                <div className="flex gap-4">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-evo-dark/30 w-4 h-4" />
-                    <Input 
-                      placeholder="PESQUISAR POR CÓDIGO OU DESCRIÇÃO..." 
-                      className="pl-10 h-11 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest placeholder:text-evo-dark/20"
-                      value={itemSearch}
-                      onChange={(e) => setItemSearch(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          searchItems();
-                        }
-                      }}
-                    />
+                <div className="relative">
+                  <div className="flex gap-4">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-evo-dark/30 w-4 h-4" />
+                      <Input
+                        placeholder="DIGITE CÓDIGO OU DESCRIÇÃO DO ITEM PARA BUSCAR..."
+                        className="pl-10 pr-8 h-11 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest placeholder:text-evo-dark/20"
+                        value={itemSearch}
+                        onChange={(e) => setItemSearch(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            searchItems();
+                          } else if (e.key === 'Escape') {
+                            setItemSearch('');
+                            setItems([]);
+                          }
+                        }}
+                      />
+                      {itemSearch && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setItemSearch('');
+                            setItems([]);
+                          }}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/30 hover:text-evo-dark"
+                          title="Limpar busca"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <Button
+                      onClick={() => setIsItemLookupOpen(true)}
+                      disabled={isSearchingItems}
+                      variant="outline"
+                      className="h-11 rounded-none px-6 font-bold border-evo-bg uppercase text-[10px] tracking-widest hover:bg-evo-bg transition-all flex items-center gap-2"
+                    >
+                      <Search className="w-3.5 h-3.5" />
+                      Buscar no Catálogo
+                    </Button>
                   </div>
-                  <Button 
-                    onClick={searchItems} 
-                    disabled={isSearchingItems}
-                    variant="outline" 
-                    className="h-11 rounded-none px-8 font-bold border-evo-bg uppercase text-[10px] tracking-widest hover:bg-evo-bg transition-all"
-                  >
-                    {isSearchingItems ? (
-                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    ) : null}
-                    {isSearchingItems ? 'Buscando...' : 'Buscar'}
-                  </Button>
+
+                  {itemSearch.trim().length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-evo-bg border-t-4 border-t-evo-teal shadow-2xl">
+                      <div className="flex items-center justify-between px-4 py-2.5 bg-evo-bg/30 border-b border-evo-bg">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-evo-dark/60">
+                          {isSearchingItems ? 'Pesquisando no SAP...' : `${items.length} Item(ns) Encontrado(s)`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setItemSearch('');
+                            setItems([]);
+                          }}
+                          className="text-evo-dark/40 hover:text-evo-dark p-0.5"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="max-h-80 overflow-y-auto divide-y divide-evo-bg">
+                        {isSearchingItems && items.length === 0 ? (
+                          <div className="p-8 text-center text-[10px] font-bold text-evo-dark/40 uppercase tracking-widest flex items-center justify-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-evo-teal" />
+                            Pesquisando itens no SAP...
+                          </div>
+                        ) : items.length === 0 ? (
+                          <div className="p-8 text-center text-[10px] font-bold text-evo-dark/30 uppercase tracking-widest">
+                            {itemSearch.trim().length < 2 ? 'Digite ao menos 2 caracteres...' : 'Nenhum item encontrado para este termo'}
+                          </div>
+                        ) : (
+                          items.map(item => (
+                            <button
+                              key={item.ItemCode}
+                              type="button"
+                              title={item.ItemName}
+                              className="w-full text-left p-3.5 bg-white hover:bg-evo-teal/5 transition-all flex justify-between items-start gap-3 group border-l-2 border-transparent hover:border-evo-teal cursor-pointer"
+                              onClick={() => addItemToOrder(item)}
+                            >
+                              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 w-full">
+                                <span className="font-black text-xs text-evo-teal shrink-0">{item.ItemCode}</span>
+                                <span className="text-[11px] font-bold text-evo-dark uppercase whitespace-normal break-words leading-snug sm:text-right flex-1">{item.ItemName}</span>
+                              </div>
+                              <Plus className="w-3.5 h-3.5 shrink-0 mt-0.5 text-evo-dark/20 group-hover:text-evo-teal transition-colors" />
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {items.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-56 overflow-y-auto p-4 bg-evo-bg/20 border border-evo-bg">
-                    {items.map(item => (
-                      <button 
-                        key={item.ItemCode}
-                        className="text-left p-3 bg-white hover:bg-evo-teal/5 transition-all flex justify-between items-center group border border-transparent hover:border-evo-teal/20"
-                        onClick={() => addItemToOrder(item)}
-                      >
-                        <div className="overflow-hidden">
-                          <p className="text-[10px] font-black uppercase tracking-tight text-evo-dark truncate">{item.ItemName}</p>
-                          <p className="text-[9px] font-bold tracking-[0.2em] text-evo-teal/60">{item.ItemCode}</p>
-                        </div>
-                        <Plus className="w-3 h-3 shrink-0 text-evo-dark/20 group-hover:text-evo-teal transition-colors" />
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <LookupDialog
+                  isOpen={isItemLookupOpen}
+                  onClose={() => setIsItemLookupOpen(false)}
+                  title="Pesquisar Item no SAP"
+                  placeholder="Digite o código ou descrição do item..."
+                  onSelect={(item: any) => addItemToOrder(item)}
+                  searchFn={sapService.getItems}
+                  renderItem={(item: any) => (
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 w-full">
+                      <span className="font-black text-xs text-evo-teal shrink-0">{item.ItemCode}</span>
+                      <span className="text-[11px] font-bold text-evo-dark uppercase whitespace-normal break-words leading-snug sm:text-right">{item.ItemName}</span>
+                    </div>
+                  )}
+                />
 
                 <Table>
                   <TableHeader>
@@ -3468,15 +3709,15 @@ function CreateOrderView({
                   <TableBody>
                     {orderItems.map((item, idx) => (
                       <TableRow key={idx} className="border-evo-bg hover:bg-evo-bg/5 transition-colors group">
-                        <TableCell className="px-2 py-4">
-                          <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">{item.ItemName}</p>
-                          <p className="text-[9px] font-bold text-evo-teal/60 tracking-widest">{item.ItemCode}</p>
+                        <TableCell className="px-2 py-4 max-w-md">
+                          <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark whitespace-normal break-words leading-snug">{item.ItemName || item.ItemDescription}</p>
+                          <p className="text-[9px] font-bold text-evo-teal/60 tracking-widest mt-0.5">{item.ItemCode}</p>
                         </TableCell>
                         <TableCell className="px-2 py-4">
-                          <Input 
-                            type="number" 
+                          <Input
+                            type="number"
                             className="h-9 rounded-none border-evo-bg bg-white text-xs font-bold text-center"
-                            value={item.Quantity} 
+                            value={item.Quantity}
                             onChange={(e) => {
                               const val = parseInt(e.target.value) || 0;
                               setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Quantity: val } : it));
@@ -3486,13 +3727,13 @@ function CreateOrderView({
                         <TableCell className="px-2 py-4">
                           <div className="flex items-center justify-end gap-1.5">
                             <span className="text-[9px] font-black text-evo-dark/30">R$</span>
-                            <Input 
-                              type="number" 
+                            <Input
+                              type="number"
                               step="0.01"
                               data-item-idx={idx}
                               data-field="price"
                               className="h-9 w-24 rounded-none border-evo-bg bg-white text-xs font-bold text-right"
-                              value={item.Price} 
+                              value={item.Price}
                               onChange={(e) => {
                                 const val = parseFloat(e.target.value) || 0;
                                 setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Price: val } : it));
@@ -3521,122 +3762,140 @@ function CreateOrderView({
                                       </Button>
                                     } />
                                   </div>
-                                  <div className="mt-4 p-3 bg-evo-bg/20 border-l-4 border-evo-teal flex items-center gap-3">
-                                    <div className="bg-evo-teal text-white text-[8px] font-black px-1.5 py-0.5 uppercase">ITEM</div>
-                                    <p className="text-xs font-black uppercase text-evo-dark tracking-tight truncate">{item.ItemName}</p>
+                                  <div className="mt-4 p-3 bg-evo-bg/20 border-l-4 border-evo-teal flex items-start gap-3">
+                                    <div className="bg-evo-teal text-white text-[8px] font-black px-1.5 py-0.5 uppercase shrink-0 mt-0.5">ITEM</div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-black uppercase text-evo-dark tracking-tight whitespace-normal break-words leading-snug">{item.ItemName}</p>
+                                      <p className="text-[9px] font-bold text-evo-teal tracking-widest mt-0.5">{item.ItemCode}</p>
+                                    </div>
                                   </div>
                                 </DialogHeader>
-                                
+
                                 <div className="p-6">
                                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {/* Dimensions Grid Section */}
-                                {[...dimensions].sort((a,b) => (a.DimensionCode || a.DimensionNumber || 0) - (b.DimensionCode || b.DimensionNumber || 0)).map((dim: any) => (
-                                  <div key={dim.DimensionCode || dim.DimensionNumber} className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
-                                    <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">
-                                        {dim.DimensionName || `Dimensão ${dim.DimensionCode || dim.DimensionNumber}`}
-                                      </Label>
-                                      <div className="text-[9px] font-bold text-evo-dark/30">DIM {dim.DimensionCode || dim.DimensionNumber}</div>
-                                    </div>
-                                    <Select 
-                                      value={item[`CostingCode${(dim.DimensionCode || dim.DimensionNumber) === 1 ? '' : (dim.DimensionCode || dim.DimensionNumber)}`] || 'none'} 
-                                      onValueChange={(val) => {
-                                        const dimNum = dim.DimensionCode || dim.DimensionNumber;
-                                        const field = `CostingCode${dimNum === 1 ? '' : dimNum}`;
-                                        setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, [field]: val === 'none' ? undefined : val } : it));
-                                      }}
-                                    >
-                                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                        <SelectValue placeholder="Centro de Custo" />
-                                      </SelectTrigger>
-                                      <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
-                                        <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
-                                        {distRules
-                                          .filter((r: any) => Number(r.InWhichDimension) === Number(dim.DimensionCode || dim.DimensionNumber))
-                                          .map((rule: any) => (
-                                            <SelectItem key={rule.FactorCode} value={rule.FactorCode} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0 hover:bg-evo-teal/5">
-                                              <span className="text-evo-teal font-black mr-2">{rule.FactorCode}</span> {rule.FactorDescription}
+                                    {[...dimensions].sort((a, b) => (a.DimensionCode || a.DimensionNumber || 0) - (b.DimensionCode || b.DimensionNumber || 0)).map((dim: any) => (
+                                      <div key={dim.DimensionCode || dim.DimensionNumber} className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
+                                        <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
+                                          <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">
+                                            {dim.DimensionName || `Dimensão ${dim.DimensionCode || dim.DimensionNumber}`}
+                                          </Label>
+                                          <div className="text-[9px] font-bold text-evo-dark/30">DIM {dim.DimensionCode || dim.DimensionNumber}</div>
+                                        </div>
+                                        <Select
+                                          value={item[`CostingCode${(dim.DimensionCode || dim.DimensionNumber) === 1 ? '' : (dim.DimensionCode || dim.DimensionNumber)}`] || 'none'}
+                                          onValueChange={(val) => {
+                                            const dimNum = Number(dim.DimensionCode || dim.DimensionNumber);
+                                            const field = `CostingCode${dimNum === 1 ? '' : dimNum}`;
+                                            const cleanVal = val === 'none' ? undefined : val;
+                                            setOrderItems(orderItems.map((it, i) => i === idx ? {
+                                              ...it,
+                                              [field]: cleanVal,
+                                              ...(dimNum === 4 ? { ProjectCode: cleanVal } : {})
+                                            } : it));
+                                          }}
+                                        >
+                                          <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
+                                            <SelectValue placeholder="Centro de Custo" />
+                                          </SelectTrigger>
+                                          <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
+                                            <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
+                                            {distRules
+                                              .filter((r: any) => Number(r.InWhichDimension) === Number(dim.DimensionCode || dim.DimensionNumber))
+                                              .map((rule: any) => (
+                                                <SelectItem key={rule.FactorCode} value={rule.FactorCode} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0 hover:bg-evo-teal/5">
+                                                  <span className="text-evo-teal font-black mr-2">{rule.FactorCode}</span> {rule.FactorDescription}
+                                                </SelectItem>
+                                              ))
+                                            }
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    ))}
+
+                                    {/* SAP Project Section */}
+                                    {/* Projeto (Centro de Custo - Dim 4 / OcrCode4) */}
+                                    <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
+                                      <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
+                                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Projeto (Dim 4 / Centro de Custo)</Label>
+                                        <div className="text-[9px] font-bold text-evo-dark/30">DIM 4 / PROJ</div>
+                                      </div>
+                                      <Select
+                                        value={item.CostingCode4 || item.ProjectCode || 'none'}
+                                        onValueChange={(val) => {
+                                          const projVal = val === 'none' ? undefined : val;
+                                          setOrderItems(orderItems.map((it, i) => i === idx ? {
+                                            ...it,
+                                            CostingCode4: projVal,
+                                            ProjectCode: projVal
+                                          } : it));
+                                        }}
+                                      >
+                                        <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
+                                          <SelectValue placeholder="Selecionar Projeto / WO">
+                                            {(() => {
+                                              const currentCode = item.CostingCode4 || item.ProjectCode;
+                                              if (!currentCode || currentCode === 'none') return 'Selecionar Projeto / WO';
+                                              const matchProj = projects.find((p: any) => p.Code === currentCode);
+                                              return matchProj ? `${matchProj.Code} - ${matchProj.Name}` : currentCode;
+                                            })()}
+                                          </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
+                                          <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
+                                          {projects.map((p: any) => (
+                                            <SelectItem key={p.Code} value={p.Code} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
+                                              <span className="text-evo-teal font-black mr-2">{p.Code}</span> {p.Name}
                                             </SelectItem>
-                                          ))
-                                        }
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                ))}
-
-                                  {/* SAP Project Section */}
-                                   {/* Projeto (Centro de Custo - Dim 4 / OcrCode4) */}
-                                  <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
-                                    <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Projeto (Dim 4 / Centro de Custo)</Label>
-                                      <div className="text-[9px] font-bold text-evo-dark/30">DIM 4 / PROJ</div>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
                                     </div>
-                                    <Select 
-                                      value={item.CostingCode4 || item.ProjectCode || 'none'} 
-                                      onValueChange={(val) => {
-                                        const projVal = val === 'none' ? undefined : val;
-                                        setOrderItems(orderItems.map((it, i) => i === idx ? { 
-                                          ...it, 
-                                          CostingCode4: projVal,
-                                          ProjectCode: projVal 
-                                        } : it));
-                                      }}
-                                    >
-                                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                        <SelectValue placeholder="Selecionar Projeto / WO">
-                                          {(() => {
-                                            const currentCode = item.CostingCode4 || item.ProjectCode;
-                                            if (!currentCode || currentCode === 'none') return 'Selecionar Projeto / WO';
-                                            const matchProj = projects.find((p: any) => p.Code === currentCode);
-                                            return matchProj ? `${matchProj.Code} - ${matchProj.Name}` : currentCode;
-                                          })()}
-                                        </SelectValue>
-                                      </SelectTrigger>
-                                      <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
-                                        <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
-                                        {projects.map((p: any) => (
-                                          <SelectItem key={p.Code} value={p.Code} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
-                                            <span className="text-evo-teal font-black mr-2">{p.Code}</span> {p.Name}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
 
-                                  {/* Usage Section */}
-                                  <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
-                                    <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Utilização Fiscal</Label>
-                                      <div className="text-[9px] font-bold text-evo-dark/30">USO</div>
+                                    {/* Usage Section */}
+                                    <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
+                                      <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
+                                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Utilização Fiscal</Label>
+                                        <div className="text-[9px] font-bold text-evo-dark/30">USO</div>
+                                      </div>
+                                      <Select
+                                        value={item.Usage?.toString() || 'none'}
+                                        onValueChange={(val) => {
+                                          const cleanUsage = val === 'none' ? undefined : val;
+                                          if (cleanUsage && !selectedUsage) {
+                                            setSelectedUsage(cleanUsage);
+                                            setOrderItems(orderItems.map((it, i) => {
+                                              if (i === idx) return { ...it, Usage: cleanUsage };
+                                              if (!it.Usage || it.Usage === 'none') return { ...it, Usage: cleanUsage };
+                                              return it;
+                                            }));
+                                          } else {
+                                            setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: cleanUsage } : it));
+                                          }
+                                        }}
+                                      >
+                                        <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
+                                          <SelectValue placeholder="Selecionar Utilização">
+                                            {(() => {
+                                              if (!item.Usage || item.Usage === 'none') return 'Selecionar Utilização';
+                                              const matchUsage = usages.find((u: any) => u.ID?.toString() === item.Usage?.toString());
+                                              return matchUsage ? matchUsage.Usage : `Utilização ${item.Usage}`;
+                                            })()}
+                                          </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
+                                          <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
+                                          {usages.map((u: any) => (
+                                            <SelectItem key={u.ID} value={u.ID.toString()} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
+                                              <span className="text-evo-teal font-black mr-2">[{u.ID}]</span> {u.Usage}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
                                     </div>
-                                    <Select 
-                                      value={item.Usage?.toString() || 'none'} 
-                                      onValueChange={(val) => {
-                                        setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: val === 'none' ? undefined : val } : it));
-                                      }}
-                                    >
-                                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                        <SelectValue placeholder="Selecionar Utilização">
-                                          {(() => {
-                                            if (!item.Usage || item.Usage === 'none') return 'Selecionar Utilização';
-                                            const matchUsage = usages.find((u: any) => u.ID?.toString() === item.Usage?.toString());
-                                            return matchUsage ? matchUsage.Usage : `Utilização ${item.Usage}`;
-                                          })()}
-                                        </SelectValue>
-                                      </SelectTrigger>
-                                      <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
-                                        <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
-                                        {usages.map((u: any) => (
-                                          <SelectItem key={u.ID} value={u.ID.toString()} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
-                                            <span className="text-evo-teal font-black mr-2">[{u.ID}]</span> {u.Usage}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
                                   </div>
                                 </div>
-                              </div>
-                              
+
                                 <div className="p-6 pt-0 mt-auto flex justify-end border-t border-evo-bg pt-6 bg-gray-50/50">
                                   <DialogClose render={
                                     <Button className="evo-button-primary rounded-none px-12 h-12 text-[10px] font-black uppercase tracking-[0.2em] shadow-lg hover:translate-y-[-1px] transition-all" onClick={() => {
@@ -3651,9 +3910,9 @@ function CreateOrderView({
                           </Dialog>
                         </TableCell>
                         <TableCell className="px-2 py-4">
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             className="h-8 w-8 text-rose-500 hover:bg-rose-50 rounded-none opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={() => setOrderItems(orderItems.filter((_, i) => i !== idx))}
                           >
@@ -3695,8 +3954,8 @@ function CreateOrderView({
                           <span className="text-[10px] font-bold text-white/70">{selectedSupplier.FederalTaxID}</span>
                         </div>
                       )}
-                      <Button 
-                        variant="link" 
+                      <Button
+                        variant="link"
                         className="p-0 h-auto mt-4 text-[9px] uppercase tracking-widest font-black text-rose-400 hover:text-rose-300"
                         onClick={() => setSelectedSupplier(null)}
                       >
@@ -3707,8 +3966,8 @@ function CreateOrderView({
                 ) : (
                   <div className="space-y-5">
                     <div className="flex gap-2">
-                      <Input 
-                        placeholder="NOME DO FORNECEDOR..." 
+                      <Input
+                        placeholder="NOME DO FORNECEDOR..."
                         className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest"
                         value={supplierSearch}
                         onChange={(e) => setSupplierSearch(e.target.value)}
@@ -3722,7 +3981,7 @@ function CreateOrderView({
                     </div>
                     <div className="max-h-80 overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white shadow-inner">
                       {suppliers.map(s => (
-                        <button 
+                        <button
                           key={s.CardCode}
                           type="button"
                           className="w-full text-left p-4 hover:bg-evo-teal/10 transition-all group cursor-pointer border-none outline-none block relative z-30"
@@ -3731,6 +3990,9 @@ function CreateOrderView({
                             e.stopPropagation();
                             console.log('Selecionando BP:', s.CardCode);
                             setSelectedSupplier(s);
+                            if (s.PayTermsGrpCode !== undefined && s.PayTermsGrpCode !== null) {
+                              handlePaymentGroupChange(String(s.PayTermsGrpCode));
+                            }
                           }}
                         >
                           <p className="text-[10px] font-black uppercase tracking-tight text-evo-dark group-hover:text-evo-teal leading-tight pointer-events-none">{s.CardName}</p>
@@ -3759,11 +4021,11 @@ function CreateOrderView({
                       <Plus className="w-8 h-8 text-evo-dark/10 mx-auto mb-3 group-hover:text-evo-teal/40 transition-colors" />
                       <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Selecionar Aquivos</p>
                     </div>
-                    <input 
-                      id="attachments" 
-                      type="file" 
-                      multiple 
-                      className="hidden" 
+                    <input
+                      id="attachments"
+                      type="file"
+                      multiple
+                      className="hidden"
                       onChange={(e) => {
                         if (e.target.files) {
                           setSelectedFiles([...selectedFiles, ...Array.from(e.target.files)]);
@@ -3777,10 +4039,10 @@ function CreateOrderView({
                       {selectedFiles.map((file, idx) => (
                         <div key={idx} className="flex items-center justify-between p-3 bg-evo-bg/50 border-l-2 border-evo-teal text-[10px] font-bold uppercase tracking-tight">
                           <span className="truncate max-w-[180px]">{file.name}</span>
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-6 w-6 text-rose-500 hover:bg-rose-50" 
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-rose-500 hover:bg-rose-50"
                             onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
                           >
                             <X className="w-3 h-3" />
@@ -3843,7 +4105,7 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-evo-dark/80 backdrop-blur-sm">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         className="bg-white rounded-none w-full max-w-xl overflow-hidden shadow-2xl"
@@ -3857,21 +4119,21 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
             <X className="w-5 h-5" />
           </Button>
         </div>
-        
+
         <div className="p-8 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60">Para (Fornecedor)</Label>
-              <Input 
-                value={to} 
+              <Input
+                value={to}
                 onChange={e => setTo(e.target.value)}
                 className="rounded-none border-evo-bg bg-evo-bg/20 font-bold text-xs"
               />
             </div>
             <div className="space-y-2">
               <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60">Cópia (CC)</Label>
-              <Input 
-                value={cc} 
+              <Input
+                value={cc}
                 onChange={e => setCc(e.target.value)}
                 className="rounded-none border-evo-bg bg-evo-bg/20 font-bold text-xs"
               />
@@ -3880,8 +4142,8 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
 
           <div className="space-y-2">
             <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60">Assunto</Label>
-            <Input 
-              value={subject} 
+            <Input
+              value={subject}
               onChange={e => setSubject(e.target.value)}
               className="rounded-none border-evo-bg bg-evo-bg/20 font-bold text-xs"
             />
@@ -3889,7 +4151,7 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
 
           <div className="space-y-2">
             <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60">Mensagem</Label>
-            <textarea 
+            <textarea
               value={body}
               onChange={e => setBody(e.target.value)}
               className="w-full h-40 border border-evo-bg bg-evo-bg/10 p-4 text-xs font-medium rounded-none focus:ring-1 focus:ring-evo-teal focus:outline-none transition-all"
@@ -3901,7 +4163,7 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
           <Button variant="ghost" onClick={onClose} className="rounded-none text-[10px] font-black uppercase tracking-widest">
             Cancelar
           </Button>
-          <Button 
+          <Button
             onClick={() => onConfirm(to, cc, subject, body)}
             className="evo-button-primary rounded-none h-12 px-8 flex items-center gap-2"
           >
@@ -3913,18 +4175,18 @@ function EmailQuotationModal({ isOpen, onClose, onConfirm, defaultTo, defaultCC,
   );
 }
 
-function ListOrdersView({ 
-  selectedDocEntry, 
-  onBack, 
-  onViewDetails, 
-  title = "Pedidos de Compra", 
-  fetchOrders = sapService.getPurchaseOrders, 
+function ListOrdersView({
+  selectedDocEntry,
+  onBack,
+  onViewDetails,
+  title = "Pedidos de Compra",
+  fetchOrders = sapService.getPurchaseOrders,
   fetchOrderDetail = sapService.getPurchaseOrder,
   userEmail = ""
-}: { 
-  key?: string, 
-  selectedDocEntry: number | null, 
-  onBack: () => void, 
+}: {
+  key?: string,
+  selectedDocEntry: number | null,
+  onBack: () => void,
   onViewDetails: (id: number) => void,
   title?: string,
   fetchOrders?: (options?: any) => Promise<any[]>,
@@ -3985,7 +4247,7 @@ function ListOrdersView({
     try {
       const data = await fetchOrderDetail(docEntry);
       setSelectedOrder(data);
-      
+
       // Fetch Supplier Email if CardCode exists
       if (data.CardCode) {
         try {
@@ -4012,10 +4274,10 @@ function ListOrdersView({
         const match = sapService.findCustomerMatch(targetFilters.clientName);
         clientTarget = match ? match.CardCode : targetFilters.clientName;
       }
-      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
+      const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
       const data = await fetchOrders({
         skip: targetPage * targetPageSize,
-        top: targetPageSize,
+        top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
         search: searchTarget
       });
       const orderList = Array.isArray(data) ? data : [];
@@ -4069,9 +4331,9 @@ function ListOrdersView({
   const filteredOrders = orders.filter((order) => {
     // 1. Status Filter
     const isOpen = order.DocumentStatus === 'bost_Open' || order.DocumentStatus === 'O';
-    const matchesStatus = statusFilter === 'all' || 
-                         (statusFilter === 'open' && isOpen) || 
-                         (statusFilter === 'closed' && !isOpen);
+    const matchesStatus = statusFilter === 'all' ||
+      (statusFilter === 'open' && isOpen) ||
+      (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
 
     // 2. DocNum
@@ -4181,12 +4443,12 @@ function ListOrdersView({
 
   if (selectedOrder || isDetailLoading) {
     return (
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         className="space-y-10"
       >
-        <EmailQuotationModal 
+        <EmailQuotationModal
           isOpen={isEmailModalOpen}
           onClose={() => setIsEmailModalOpen(false)}
           onConfirm={handleSendEmail}
@@ -4209,9 +4471,9 @@ function ListOrdersView({
             <div className="flex items-center gap-2 ml-auto">
               {title === "Cotações de Compra" && (
                 <>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => {
                       const url = `${window.location.origin}${window.location.pathname}?portal=quotation&id=${selectedOrder.DocEntry}`;
                       navigator.clipboard.writeText(url);
@@ -4221,9 +4483,9 @@ function ListOrdersView({
                   >
                     <Paperclip className="w-3 h-3" /> Copiar Link Portal
                   </Button>
-                  <Button 
-                    variant="default" 
-                    size="sm" 
+                  <Button
+                    variant="default"
+                    size="sm"
                     onClick={() => setIsEmailModalOpen(true)}
                     className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
                   >
@@ -4231,9 +4493,9 @@ function ListOrdersView({
                   </Button>
                 </>
               )}
-              <Button 
-                variant="default" 
-                size="sm" 
+              <Button
+                variant="default"
+                size="sm"
                 onClick={() => handleOpenPrintModal(selectedOrder)}
                 className="rounded-none bg-evo-teal hover:bg-evo-teal/90 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-sm"
                 title="Visualizar Layout em PDF"
@@ -4314,7 +4576,7 @@ function ListOrdersView({
               </Card>
 
               {/* Document Attachments Section in Order Detail */}
-              <DocumentAttachmentsSection 
+              <DocumentAttachmentsSection
                 documentType="purchase-order"
                 docId={selectedOrder?.DocEntry || 'draft'}
               />
@@ -4323,7 +4585,7 @@ function ListOrdersView({
         )}
 
         {/* Purchase Order Print Layout Modal in Detail View */}
-        <PurchaseOrderPrintModal 
+        <PurchaseOrderPrintModal
           isOpen={isPrintModalOpen}
           onClose={() => setIsPrintModalOpen(false)}
           order={orderForPrint || selectedOrder}
@@ -4334,7 +4596,7 @@ function ListOrdersView({
   }
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
@@ -4396,8 +4658,8 @@ function ListOrdersView({
                 const orderWoValue = getDocumentWO(order) || order.CostingCode4 || order.DocumentLines?.[0]?.CostingCode4 || 'BASE';
 
                 return (
-                  <TableRow 
-                    key={order.DocEntry} 
+                  <TableRow
+                    key={order.DocEntry}
                     className="border-evo-bg transition-colors hover:bg-evo-teal/5 group cursor-pointer"
                     onClick={() => onViewDetails(order.DocEntry)}
                   >
@@ -4464,9 +4726,9 @@ function ListOrdersView({
                     </TableCell>
                     <TableCell className="px-4 py-3.5 text-right whitespace-nowrap w-[95px]">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="h-9 w-9 text-evo-teal hover:bg-evo-teal hover:text-white transition-all rounded-none border border-evo-bg"
                           title="Visualizar Layout em PDF"
                           onClick={(e) => {
@@ -4476,9 +4738,9 @@ function ListOrdersView({
                         >
                           <Printer className="w-4 h-4" />
                         </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="h-9 w-9 text-evo-dark opacity-40 group-hover:opacity-100 group-hover:text-evo-teal group-hover:bg-evo-teal/10 transition-all rounded-none"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -4510,8 +4772,8 @@ function ListOrdersView({
             <span>Página {page + 1} ({orders.length} registros nesta página)</span>
             <div className="flex items-center gap-2">
               <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
-              <select 
-                value={pageSize} 
+              <select
+                value={pageSize}
                 onChange={(e) => handlePageSizeChange(Number(e.target.value))}
                 className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
               >
@@ -4523,20 +4785,20 @@ function ListOrdersView({
           </div>
 
           <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => handlePageChange(0)} 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(0)}
               disabled={page === 0 || isLoading}
               className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
               title="Primeira Página"
             >
               <ChevronsLeft className="w-3.5 h-3.5" />
             </Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => handlePageChange(page - 1)} 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(page - 1)}
               disabled={page === 0 || isLoading}
               className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
             >
@@ -4545,10 +4807,10 @@ function ListOrdersView({
             <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
               {page + 1}
             </span>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => handlePageChange(page + 1)} 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(page + 1)}
               disabled={!hasMore || orders.length < pageSize || isLoading}
               className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
             >
@@ -4558,7 +4820,7 @@ function ListOrdersView({
         </div>
       </Card>
       {/* Purchase Order Print Layout Modal in List View */}
-      <PurchaseOrderPrintModal 
+      <PurchaseOrderPrintModal
         isOpen={isPrintModalOpen}
         onClose={() => setIsPrintModalOpen(false)}
         order={orderForPrint}
@@ -4647,7 +4909,7 @@ function ApprovalsView() {
   const filteredRequests = allRequests.filter(r => isStatus(r.Status, activeTab as any));
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20 }}
@@ -4756,7 +5018,7 @@ function ApprovalsView() {
                           <div className="space-y-8 py-10">
                             <div className="space-y-3">
                               <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 ml-1">Observações do Parecer</Label>
-                              <textarea 
+                              <textarea
                                 className="w-full min-h-[160px] p-5 bg-evo-bg/50 border border-evo-bg focus:border-evo-teal focus:ring-0 text-xs font-bold transition-all outline-none rounded-none placeholder:text-evo-dark/20"
                                 placeholder="Descreva formalmente o motivo da sua decisão..."
                                 value={remarks}
@@ -4764,14 +5026,14 @@ function ApprovalsView() {
                               />
                             </div>
                             <div className="flex flex-col gap-4">
-                              <Button 
+                              <Button
                                 className="h-14 bg-evo-teal hover:bg-evo-teal-dark rounded-none uppercase text-[11px] font-black tracking-widest text-white transition-all shadow-xl"
                                 onClick={() => handleAction(req.Code, 'ardApproved')}
                                 disabled={isActionLoading}
                               >
                                 {isActionLoading ? 'Sincronizando...' : 'Aprovar Documento'}
                               </Button>
-                              <Button 
+                              <Button
                                 variant="outline"
                                 className="h-14 border-evo-bg hover:bg-rose-50 hover:text-rose-600 rounded-none uppercase text-[11px] font-black tracking-widest text-evo-dark/40 transition-all"
                                 onClick={() => handleAction(req.Code, 'ardNotApproved')}
@@ -4785,10 +5047,10 @@ function ApprovalsView() {
                       </Sheet>
                     </TableCell>
                   )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </Card>
       </Tabs>
     </motion.div>
@@ -4799,7 +5061,24 @@ function QualityView() {
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitLoading, setIsSubmitLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+  const [selectedSupplier, setSelectedSupplier] = useState<{
+    cardCode: string;
+    cardName: string;
+    federalTaxId?: string;
+  } | null>(null);
+
+  // Supplier receipts (last 20)
+  const [receipts, setReceipts] = useState<any[]>([]);
+  const [isLoadingReceipts, setIsLoadingReceipts] = useState(false);
+  const [expandedReceiptDocEntry, setExpandedReceiptDocEntry] = useState<number | null>(null);
+
   const [formData, setFormData] = useState({
+    DocEntry: null as number | null,
+    DocNum: null as number | null,
+    CardCode: '',
+    CardName: '',
     U_Atendimento: 0,
     U_Prazo: 0,
     U_Quantidade: 0,
@@ -4811,11 +5090,11 @@ function QualityView() {
     U_IPF: 0
   });
 
-  const ipfValue = (Number(formData.U_Atendimento) || 0) + 
-                   (Number(formData.U_Prazo) || 0) + 
-                   (Number(formData.U_Quantidade) || 0) + 
-                   (Number(formData.U_Documentacao) || 0) + 
-                   (Number(formData.U_Qualidade) || 0);
+  const ipfValue = (Number(formData.U_Atendimento) || 0) +
+    (Number(formData.U_Prazo) || 0) +
+    (Number(formData.U_Quantidade) || 0) +
+    (Number(formData.U_Documentacao) || 0) +
+    (Number(formData.U_Qualidade) || 0);
 
   useEffect(() => {
     fetchRecords();
@@ -4833,28 +5112,126 @@ function QualityView() {
     }
   };
 
+  const loadSupplierReceipts = async (cardCode: string) => {
+    if (!cardCode) {
+      setReceipts([]);
+      return;
+    }
+    setIsLoadingReceipts(true);
+    try {
+      const data = await sapService.getSupplierReceipts(cardCode);
+      setReceipts(data || []);
+    } catch (error) {
+      console.warn('Erro ao carregar recebimentos do fornecedor:', error);
+      toast.error('Erro ao carregar recebimentos do fornecedor.');
+      setReceipts([]);
+    } finally {
+      setIsLoadingReceipts(false);
+    }
+  };
+
+  const handleOpenNewEvaluation = () => {
+    setSelectedSupplier(null);
+    setReceipts([]);
+    setExpandedReceiptDocEntry(null);
+    setFormData({
+      DocEntry: null,
+      DocNum: null,
+      CardCode: '',
+      CardName: '',
+      U_Atendimento: 0,
+      U_Prazo: 0,
+      U_Quantidade: 0,
+      U_Documentacao: 0,
+      U_Qualidade: 0,
+      U_Status: 'AT',
+      U_Leg: '1',
+      U_Aviso_IPF: '',
+      U_IPF: 0
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEvaluateRecord = (rec: any) => {
+    const supp = {
+      cardCode: rec.CardCode || '',
+      cardName: rec.CardName || '',
+      federalTaxId: rec.FederalTaxID || ''
+    };
+    setSelectedSupplier(supp);
+    setExpandedReceiptDocEntry(null);
+    setFormData({
+      DocEntry: rec.DocEntry || null,
+      DocNum: rec.DocNum || null,
+      CardCode: rec.CardCode || '',
+      CardName: rec.CardName || '',
+      U_Atendimento: Number(rec.U_Atendimento) || 0,
+      U_Prazo: Number(rec.U_Prazo) || 0,
+      U_Quantidade: Number(rec.U_Quantidade) || 0,
+      U_Documentacao: Number(rec.U_Documentacao) || 0,
+      U_Qualidade: Number(rec.U_Qualidade) || 0,
+      U_Status: rec.U_Status || 'AT',
+      U_Leg: rec.U_Leg || '1',
+      U_Aviso_IPF: rec.U_Aviso_IPF || '',
+      U_IPF: Number(rec.U_IPF) || 0
+    });
+    if (supp.cardCode) {
+      loadSupplierReceipts(supp.cardCode);
+    }
+    setIsModalOpen(true);
+  };
+
+  const handleSelectSupplier = (supplier: { cardCode: string; cardName: string; federalTaxId: string }) => {
+    setSelectedSupplier(supplier);
+    setFormData(prev => ({
+      ...prev,
+      CardCode: supplier.cardCode,
+      CardName: supplier.cardName
+    }));
+    setIsSupplierModalOpen(false);
+    loadSupplierReceipts(supplier.cardCode);
+  };
+
+  const toggleReceiptExpand = (docEntry: number) => {
+    setExpandedReceiptDocEntry(prev => prev === docEntry ? null : docEntry);
+  };
+
+  const handleSelectReceiptForEvaluation = (rcp: any) => {
+    setFormData(prev => ({
+      ...prev,
+      DocEntry: rcp.DocEntry,
+      DocNum: rcp.DocNum,
+      CardCode: rcp.CardCode || prev.CardCode,
+      CardName: rcp.CardName || prev.CardName,
+      U_Atendimento: rcp.U_Atendimento !== undefined && rcp.U_Atendimento !== null ? Number(rcp.U_Atendimento) : prev.U_Atendimento,
+      U_Prazo: rcp.U_Prazo !== undefined && rcp.U_Prazo !== null ? Number(rcp.U_Prazo) : prev.U_Prazo,
+      U_Quantidade: rcp.U_Quantidade !== undefined && rcp.U_Quantidade !== null ? Number(rcp.U_Quantidade) : prev.U_Quantidade,
+      U_Documentacao: rcp.U_Documentacao !== undefined && rcp.U_Documentacao !== null ? Number(rcp.U_Documentacao) : prev.U_Documentacao,
+      U_Qualidade: rcp.U_Qualidade !== undefined && rcp.U_Qualidade !== null ? Number(rcp.U_Qualidade) : prev.U_Qualidade,
+      U_Status: rcp.U_Status || prev.U_Status,
+      U_Aviso_IPF: rcp.U_Aviso_IPF || prev.U_Aviso_IPF
+    }));
+    toast.success(`Recebimento #${rcp.DocNum || rcp.DocEntry} vinculado à avaliação!`);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.CardCode && !selectedSupplier?.cardCode) {
+      toast.error('Selecione um fornecedor para registrar a avaliação.');
+      return;
+    }
     setIsSubmitLoading(true);
     try {
       await sapService.createQualityRecord({
         ...formData,
+        CardCode: selectedSupplier?.cardCode || formData.CardCode,
+        CardName: selectedSupplier?.cardName || formData.CardName,
         U_IPF: ipfValue,
         U_Aviso_IPF: ipfValue < 10 ? 'Fornecedor Crítico' : 'Desempenho Adequado'
       });
       toast.success('Avaliação de qualidade registrada com sucesso!');
+      setIsModalOpen(false);
       fetchRecords();
-      setFormData({
-        U_Atendimento: 0,
-        U_Prazo: 0,
-        U_Quantidade: 0,
-        U_Documentacao: 0,
-        U_Qualidade: 0,
-        U_Status: 'AT',
-        U_Leg: '1',
-        U_Aviso_IPF: '',
-        U_IPF: 0
-      });
     } catch (error) {
       toast.error('Erro ao salvar avaliação.');
     } finally {
@@ -4862,8 +5239,23 @@ function QualityView() {
     }
   };
 
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '-';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr);
+      return d.toLocaleDateString('pt-BR');
+    } catch {
+      return String(dateStr);
+    }
+  };
+
+  const formatCurrency = (val: number | null | undefined) => {
+    return `R$ ${(Number(val) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="space-y-10"
@@ -4874,143 +5266,388 @@ function QualityView() {
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Avaliação de Performance de Fornecedores (IPF)</p>
         </div>
-        
-        <Dialog>
-          <DialogTrigger render={
-            <Button className="evo-button-primary shadow-xl">Nova Avaliação</Button>
-          } />
-          <DialogContent className="max-w-2xl rounded-none">
-            <DialogHeader>
-              <DialogTitle className="uppercase tracking-tight font-black">Registro de Qualidade (QLT_QLDADE)</DialogTitle>
-              <CardDescription className="text-[10px] uppercase tracking-widest">Insira as pontuações para cálculo do IPF</CardDescription>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-6 py-4">
-              <div className="grid grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Atendimento (0 a 2)</Label>
-                  <Input 
-                    type="number" min="0" max="2" 
-                    value={formData.U_Atendimento} 
-                    onChange={e => setFormData({...formData, U_Atendimento: parseInt(e.target.value) || 0})}
-                    className="rounded-none h-11 border-evo-bg"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Prazo (0 a 4)</Label>
-                  <Input 
-                    type="number" min="0" max="4" 
-                    value={formData.U_Prazo} 
-                    onChange={e => setFormData({...formData, U_Prazo: parseInt(e.target.value) || 0})}
-                    className="rounded-none h-11 border-evo-bg"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Quantidade (0 a 4)</Label>
-                  <Input 
-                    type="number" min="0" max="4" 
-                    value={formData.U_Quantidade} 
-                    onChange={e => setFormData({...formData, U_Quantidade: parseInt(e.target.value) || 0})}
-                    className="rounded-none h-11 border-evo-bg"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Documentação (0 a 4)</Label>
-                  <Input 
-                    type="number" min="0" max="4" 
-                    value={formData.U_Documentacao} 
-                    onChange={e => setFormData({...formData, U_Documentacao: parseInt(e.target.value) || 0})}
-                    className="rounded-none h-11 border-evo-bg"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Qualidade (0 a 8)</Label>
-                  <Input 
-                    type="number" min="0" max="8" 
-                    value={formData.U_Qualidade} 
-                    onChange={e => setFormData({...formData, U_Qualidade: parseInt(e.target.value) || 0})}
-                    className="rounded-none h-11 border-evo-bg"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Legenda</Label>
-                  <Select value={formData.U_Leg} onValueChange={val => setFormData({...formData, U_Leg: val})}>
-                    <SelectTrigger className="h-11 rounded-none border-evo-bg">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-none">
-                      <SelectItem value="1">Excelente (1)</SelectItem>
-                      <SelectItem value="2">Bom (2)</SelectItem>
-                      <SelectItem value="3">Ruim (3)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest">Status da Avaliação</Label>
-                  <Select value={formData.U_Status} onValueChange={val => setFormData({...formData, U_Status: val})}>
-                    <SelectTrigger className="h-11 rounded-none border-evo-bg">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-none">
-                      <SelectItem value="AT">Atenção (AT)</SelectItem>
-                      <SelectItem value="OK">Conforme (OK)</SelectItem>
-                      <SelectItem value="RE">Reprovado (RE)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
 
-              <div className="p-6 bg-evo-dark text-white rounded-none flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">IPF Calculado</p>
-                  <h3 className="text-3xl font-black tracking-tighter">{ipfValue.toFixed(2)}</h3>
-                </div>
-                {ipfValue < 10 && (
-                  <div className="flex items-center gap-2 text-rose-400">
-                    <AlertCircle className="w-5 h-5" />
-                    <span className="text-[10px] font-black uppercase tracking-[0.1em]">Fornecedor Crítico</span>
+        <Button onClick={handleOpenNewEvaluation} className="evo-button-primary shadow-xl">
+          <Plus className="w-4 h-4 mr-1.5" />
+          Nova Avaliação
+        </Button>
+      </div>
+
+      {/* Modal de Avaliação de Qualidade */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto rounded-none p-6 space-y-6">
+          <DialogHeader>
+            <DialogTitle className="uppercase tracking-tight font-black text-lg">Registro de Qualidade (QLT_QLDADE)</DialogTitle>
+            <CardDescription className="text-[10px] uppercase tracking-widest text-evo-dark/60">
+              Insira as pontuações para cálculo do IPF e consulte os últimos recebimentos
+            </CardDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Bloco do Fornecedor */}
+            <div className="space-y-2">
+              <Label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/70">
+                Fornecedor
+              </Label>
+              {selectedSupplier ? (
+                <div className="flex items-center justify-between p-3.5 bg-evo-dark/5 border border-evo-bg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-evo-teal/10 border border-evo-teal/30 flex items-center justify-center text-evo-teal">
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-evo-dark">{selectedSupplier.cardName}</span>
+                        <Badge className="bg-evo-dark text-white rounded-none text-[9px] font-mono font-bold px-1.5 py-0.5">
+                          {selectedSupplier.cardCode}
+                        </Badge>
+                      </div>
+                      {selectedSupplier.federalTaxId && (
+                        <p className="text-[10px] font-mono text-evo-dark/50">CNPJ: {selectedSupplier.federalTaxId}</p>
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsSupplierModalOpen(true)}
+                    className="rounded-none text-[10px] font-bold uppercase tracking-wider h-8"
+                  >
+                    Alterar Fornecedor
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between p-4 border border-dashed border-evo-bg bg-evo-bg/20">
+                  <div className="flex items-center gap-2 text-evo-dark/50">
+                    <Building2 className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-wide">Nenhum fornecedor selecionado</span>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => setIsSupplierModalOpen(true)}
+                    className="evo-button-primary rounded-none text-[10px] font-bold uppercase tracking-wider h-8"
+                  >
+                    <Search className="w-3.5 h-3.5 mr-1" />
+                    Selecionar Fornecedor
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Inputs de Pontuações */}
+            <div className="grid grid-cols-2 gap-4 md:gap-6">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Atendimento (0 a 2)</Label>
+                <Input
+                  type="number" min="0" max="2"
+                  value={formData.U_Atendimento}
+                  onChange={e => setFormData({ ...formData, U_Atendimento: parseInt(e.target.value) || 0 })}
+                  className="rounded-none h-10 border-evo-bg"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Prazo (0 a 4)</Label>
+                <Input
+                  type="number" min="0" max="4"
+                  value={formData.U_Prazo}
+                  onChange={e => setFormData({ ...formData, U_Prazo: parseInt(e.target.value) || 0 })}
+                  className="rounded-none h-10 border-evo-bg"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Quantidade (0 a 4)</Label>
+                <Input
+                  type="number" min="0" max="4"
+                  value={formData.U_Quantidade}
+                  onChange={e => setFormData({ ...formData, U_Quantidade: parseInt(e.target.value) || 0 })}
+                  className="rounded-none h-10 border-evo-bg"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Documentação (0 a 4)</Label>
+                <Input
+                  type="number" min="0" max="4"
+                  value={formData.U_Documentacao}
+                  onChange={e => setFormData({ ...formData, U_Documentacao: parseInt(e.target.value) || 0 })}
+                  className="rounded-none h-10 border-evo-bg"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Qualidade (0 a 8)</Label>
+                <Input
+                  type="number" min="0" max="8"
+                  value={formData.U_Qualidade}
+                  onChange={e => setFormData({ ...formData, U_Qualidade: parseInt(e.target.value) || 0 })}
+                  className="rounded-none h-10 border-evo-bg"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Legenda</Label>
+                <Select value={formData.U_Leg} onValueChange={val => setFormData({ ...formData, U_Leg: val })}>
+                  <SelectTrigger className="h-10 rounded-none border-evo-bg">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-none">
+                    <SelectItem value="1">Excelente (1)</SelectItem>
+                    <SelectItem value="2">Bom (2)</SelectItem>
+                    <SelectItem value="3">Ruim (3)</SelectItem>
+                    <SelectItem value="4">Péssimo (4)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 col-span-2">
+                <Label className="text-[10px] font-bold uppercase tracking-widest">Status da Avaliação</Label>
+                <Select value={formData.U_Status} onValueChange={val => setFormData({ ...formData, U_Status: val })}>
+                  <SelectTrigger className="h-10 rounded-none border-evo-bg">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-none">
+                    <SelectItem value="AT">Atenção (AT)</SelectItem>
+                    <SelectItem value="OK">Conforme (OK)</SelectItem>
+                    <SelectItem value="RE">Reprovado (RE)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Caixa IPF Calculado */}
+            <div className="p-5 bg-evo-dark text-white rounded-none flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">IPF Calculado</p>
+                <h3 className="text-3xl font-black tracking-tighter">{ipfValue.toFixed(2)}</h3>
+              </div>
+              {ipfValue < 10 ? (
+                <div className="flex items-center gap-2 text-rose-400">
+                  <AlertCircle className="w-5 h-5" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.1em]">Fornecedor Crítico</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <CheckCircle className="w-5 h-5" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.1em]">Desempenho Adequado</span>
+                </div>
+              )}
+            </div>
+
+            {/* ABAIXO DO IPF CALCULADO: GRID COM A LISTA DOS ÚLTIMOS 20 RECEBIMENTOS */}
+            <div className="space-y-3 pt-2 border-t border-evo-bg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider text-evo-dark flex items-center gap-2">
+                    <Package className="w-4 h-4 text-evo-teal" />
+                    Últimos 20 Recebimentos do Fornecedor
+                  </h4>
+                  <p className="text-[10px] text-evo-dark/50 font-medium">
+                    Clique em um recebimento para detalhar os itens (código, descrição, quantidade e valor unitário)
+                  </p>
+                </div>
+                {selectedSupplier && receipts.length > 0 && (
+                  <Badge variant="outline" className="rounded-none text-[9px] font-bold text-evo-dark/60">
+                    {receipts.length} {receipts.length === 1 ? 'recebimento' : 'recebimentos'}
+                  </Badge>
                 )}
               </div>
 
-              <DialogFooter>
-                <DialogClose render={
-                  <Button variant="outline" className="rounded-none uppercase text-[10px] font-black tracking-widest">Cancelar</Button>
-                } />
-                <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none">
-                  {isSubmitLoading ? 'Gravando...' : 'Gravar Avaliação'}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
+              {isLoadingReceipts ? (
+                <div className="p-8 text-center text-xs text-evo-dark/40 font-bold uppercase tracking-widest flex items-center justify-center gap-2 border border-evo-bg">
+                  <Loader2 className="w-4 h-4 animate-spin text-evo-teal" />
+                  Consultando recebimentos no SAP...
+                </div>
+              ) : !selectedSupplier ? (
+                <div className="p-6 border border-dashed border-evo-bg text-center text-xs text-evo-dark/40 font-bold uppercase tracking-wider">
+                  Selecione um fornecedor acima para visualizar os últimos 20 recebimentos
+                </div>
+              ) : receipts.length === 0 ? (
+                <div className="p-6 border border-dashed border-evo-bg text-center text-xs text-evo-dark/40 font-bold uppercase tracking-wider">
+                  Nenhum recebimento de mercadorias encontrado para este fornecedor no SAP
+                </div>
+              ) : (
+                <div className="border border-evo-bg rounded-none overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <TableHeader className="bg-evo-dark/5 sticky top-0 z-10 backdrop-blur">
+                      <TableRow className="border-b border-evo-bg">
+                        <TableHead className="text-[9px] font-black uppercase tracking-wider text-evo-dark/60 py-2">Nº do Documento</TableHead>
+                        <TableHead className="text-[9px] font-black uppercase tracking-wider text-evo-dark/60 py-2">Data do Documento</TableHead>
+                        <TableHead className="text-[9px] font-black uppercase tracking-wider text-evo-dark/60 py-2">Valor Total</TableHead>
+                        <TableHead className="text-[9px] font-black uppercase tracking-wider text-evo-dark/60 py-2 text-right">Ação</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {receipts.map((rcp) => {
+                        const isExpanded = expandedReceiptDocEntry === rcp.DocEntry;
+                        const isSelectedDoc = formData.DocEntry === rcp.DocEntry;
+                        return (
+                          <React.Fragment key={rcp.DocEntry}>
+                            <TableRow
+                              className={`cursor-pointer transition-colors hover:bg-evo-teal/5 ${isExpanded ? 'bg-evo-teal/10 font-bold' : ''} ${isSelectedDoc ? 'border-l-4 border-l-evo-teal' : ''}`}
+                              onClick={() => toggleReceiptExpand(rcp.DocEntry)}
+                            >
+                              <TableCell className="text-xs font-bold py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-3.5 h-3.5 text-evo-teal" />
+                                  ) : (
+                                    <ChevronRight className="w-3.5 h-3.5 text-evo-dark/40" />
+                                  )}
+                                  <span>#{rcp.DocNum || rcp.DocEntry}</span>
+                                  {isSelectedDoc && (
+                                    <Badge className="bg-evo-teal text-white text-[8px] font-bold rounded-none px-1 py-0">
+                                      Selecionado
+                                    </Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-xs py-2.5">
+                                {formatDate(rcp.DocDate)}
+                              </TableCell>
+                              <TableCell className="text-xs font-black text-evo-teal py-2.5">
+                                {formatCurrency(rcp.DocTotal)}
+                              </TableCell>
+                              <TableCell className="text-xs py-2.5 text-right space-x-1" onClick={e => e.stopPropagation()}>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-[10px] font-bold text-evo-teal hover:bg-evo-teal/10 uppercase tracking-wider"
+                                  onClick={() => toggleReceiptExpand(rcp.DocEntry)}
+                                >
+                                  {isExpanded ? 'Ocultar Itens' : 'Ver Itens'}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className={`h-7 text-[9px] font-bold uppercase tracking-wider rounded-none ${isSelectedDoc ? 'bg-evo-teal text-white border-evo-teal' : 'text-evo-dark/70 hover:bg-evo-bg'}`}
+                                  onClick={() => handleSelectReceiptForEvaluation(rcp)}
+                                >
+                                  {isSelectedDoc ? 'Vinculado' : 'Vincular'}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
 
+                            {/* Detalhe dos Itens do Recebimento */}
+                            {isExpanded && (
+                              <TableRow className="bg-evo-dark/[0.02]">
+                                <TableCell colSpan={4} className="p-3 pl-8">
+                                  <div className="bg-white border border-evo-bg p-3 shadow-sm space-y-2">
+                                    <div className="flex items-center justify-between border-b border-evo-bg pb-2">
+                                      <p className="text-[10px] font-black uppercase tracking-wider text-evo-dark/70">
+                                        Itens do Recebimento #{rcp.DocNum || rcp.DocEntry}
+                                      </p>
+                                      <span className="text-[9px] font-bold text-evo-dark/40">
+                                        {rcp.DocumentLines?.length || 0} {(rcp.DocumentLines?.length === 1) ? 'item' : 'itens'}
+                                      </span>
+                                    </div>
+
+                                    {(!rcp.DocumentLines || rcp.DocumentLines.length === 0) ? (
+                                      <p className="text-[10px] text-evo-dark/40 py-2 italic">Nenhum item detalhado neste recebimento.</p>
+                                    ) : (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-[11px]">
+                                          <thead>
+                                            <tr className="border-b border-evo-bg/60 text-[9px] font-black uppercase tracking-wider text-evo-dark/50">
+                                              <th className="py-1.5 pr-3">Código do Item</th>
+                                              <th className="py-1.5 px-3">Descrição</th>
+                                              <th className="py-1.5 px-3 text-right">Quantidade</th>
+                                              <th className="py-1.5 pl-3 text-right">Valor Unitário</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-evo-bg/40">
+                                            {rcp.DocumentLines.map((line: any, idx: number) => (
+                                              <tr key={idx} className="hover:bg-evo-bg/20">
+                                                <td className="py-1.5 pr-3 font-mono font-bold text-evo-dark/80">{line.ItemCode || '-'}</td>
+                                                <td className="py-1.5 px-3 text-evo-dark font-medium">{line.ItemDescription || line.Dscription || '-'}</td>
+                                                <td className="py-1.5 px-3 text-right font-bold text-evo-dark">{line.Quantity}</td>
+                                                <td className="py-1.5 pl-3 text-right font-black text-evo-teal">{formatCurrency(line.Price || line.UnitPrice || 0)}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsModalOpen(false)}
+                className="rounded-none uppercase text-[10px] font-black tracking-widest"
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={isSubmitLoading} className="evo-button-primary rounded-none">
+                {isSubmitLoading ? 'Gravando...' : 'Gravar Avaliação'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Busca de Fornecedores */}
+      <CustomerSelectionModal
+        isOpen={isSupplierModalOpen}
+        onClose={() => setIsSupplierModalOpen(false)}
+        partnerType="supplier"
+        title="Selecionar Fornecedor"
+        onSelect={handleSelectSupplier}
+      />
+
+      {/* Tabela Principal de Controle de Qualidade */}
       <Card className="evo-card border-none overflow-hidden">
         <Table>
           <TableHeader className="bg-evo-dark">
             <TableRow className="border-none hover:bg-transparent">
-              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">ID</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">ID / Doc</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Fornecedor</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Data</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">IPF</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Status</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Aviso</TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6">Avaliação (At/Pr/Qt/Dc/Ql)</TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-[0.2em] text-white/50 px-6 text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 animate-pulse">Consultando base SAP...</TableCell>
+                <TableCell colSpan={8} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 animate-pulse">Consultando base SAP...</TableCell>
               </TableRow>
             ) : records.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">Sem registros de qualidade cadastrados.</TableCell>
+                <TableCell colSpan={8} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">Sem registros de qualidade cadastrados.</TableCell>
               </TableRow>
             ) : records.map((rec, i) => (
               <TableRow key={i} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">#{rec.DocNum || rec.DocEntry || i+1}</TableCell>
-                <TableCell className="px-6 py-5 font-black text-xl text-evo-teal tracking-tighter">{Number(rec.U_IPF || 0).toFixed(2)}</TableCell>
+                <TableCell className="px-6 py-5 font-black text-xs text-evo-dark">
+                  #{rec.DocNum || rec.DocEntry || i + 1}
+                </TableCell>
                 <TableCell className="px-6 py-5">
-                  <Badge className="bg-evo-dark text-white rounded-none text-[9px] font-black px-2 py-0.5">{rec.U_Status}</Badge>
+                  <div className="flex flex-col max-w-xs">
+                    <span className="text-xs font-bold text-evo-dark leading-snug">{rec.CardName || '-'}</span>
+                    {rec.CardCode && <span className="text-[10px] font-mono text-evo-dark/40">{rec.CardCode}</span>}
+                  </div>
+                </TableCell>
+                <TableCell className="px-6 py-5 text-xs text-evo-dark/70">
+                  {formatDate(rec.DocDate)}
+                </TableCell>
+                <TableCell className="px-6 py-5 font-black text-xl text-evo-teal tracking-tighter">
+                  {Number(rec.U_IPF || 0).toFixed(2)}
+                </TableCell>
+                <TableCell className="px-6 py-5">
+                  <Badge className="bg-evo-dark text-white rounded-none text-[9px] font-black px-2 py-0.5">{rec.U_Status || 'AT'}</Badge>
                 </TableCell>
                 <TableCell className="px-6 py-5">
                   <span className={`text-[10px] font-bold uppercase tracking-tight ${Number(rec.U_IPF || 0) < 10 ? 'text-rose-600' : 'text-evo-teal'}`}>
@@ -5018,7 +5655,17 @@ function QualityView() {
                   </span>
                 </TableCell>
                 <TableCell className="px-6 py-5 text-[10px] font-bold text-evo-dark/40 tracking-widest">
-                  {rec.U_Atendimento}/{rec.U_Prazo}/{rec.U_Quantidade}/{rec.U_Documentacao}/{rec.U_Qualidade}
+                  {rec.U_Atendimento ?? 0}/{rec.U_Prazo ?? 0}/{rec.U_Quantidade ?? 0}/{rec.U_Documentacao ?? 0}/{rec.U_Qualidade ?? 0}
+                </TableCell>
+                <TableCell className="px-6 py-5 text-right">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-none text-[10px] font-bold uppercase tracking-wider h-8"
+                    onClick={() => handleOpenEvaluateRecord(rec)}
+                  >
+                    Avaliar / Histórico
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
@@ -5034,7 +5681,7 @@ function MaintenanceView() {
   const [calibrations, setCalibrations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitLoading, setIsSubmitLoading] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     U_ITEM: '',
     U_ItemName: '',
@@ -5111,7 +5758,7 @@ function MaintenanceView() {
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="space-y-10"
@@ -5122,7 +5769,7 @@ function MaintenanceView() {
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Controle de intervenções e calibração de equipamentos</p>
         </div>
-        
+
         <Dialog>
           <DialogTrigger render={
             <Button className="evo-button-primary shadow-xl">Registrar Intervenção</Button>
@@ -5139,54 +5786,54 @@ function MaintenanceView() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Nº do Item</Label>
-                      <Input value={formData.U_ITEM} onChange={e => setFormData({...formData, U_ITEM: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_ITEM} onChange={e => setFormData({ ...formData, U_ITEM: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">QT</Label>
-                      <Input value={formData.U_QT} onChange={e => setFormData({...formData, U_QT: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_QT} onChange={e => setFormData({ ...formData, U_QT: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Nº Série Fabricante</Label>
-                    <Input value={formData.U_NumSerFab} onChange={e => setFormData({...formData, U_NumSerFab: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                    <Input value={formData.U_NumSerFab} onChange={e => setFormData({ ...formData, U_NumSerFab: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                   </div>
 
                   <div className="flex gap-8 py-2">
                     <div className="flex items-center space-x-2">
-                      <input type="checkbox" id="prev" checked={formData.U_TipoPrev === 'S'} onChange={e => setFormData({...formData, U_TipoPrev: e.target.checked ? 'S' : 'N'})} className="border-evo-dark" />
+                      <input type="checkbox" id="prev" checked={formData.U_TipoPrev === 'S'} onChange={e => setFormData({ ...formData, U_TipoPrev: e.target.checked ? 'S' : 'N' })} className="border-evo-dark" />
                       <Label htmlFor="prev" className="text-[9px] font-black uppercase tracking-tight">Preventiva</Label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <input type="checkbox" id="cor" checked={formData.U_TipoCor === 'S'} onChange={e => setFormData({...formData, U_TipoCor: e.target.checked ? 'S' : 'N'})} className="border-evo-dark" />
+                      <input type="checkbox" id="cor" checked={formData.U_TipoCor === 'S'} onChange={e => setFormData({ ...formData, U_TipoCor: e.target.checked ? 'S' : 'N' })} className="border-evo-dark" />
                       <Label htmlFor="cor" className="text-[9px] font-black uppercase tracking-tight">Corretiva</Label>
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Vencimento</Label>
-                    <Input type="date" value={formData.U_DtVenc} onChange={e => setFormData({...formData, U_DtVenc: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                    <Input type="date" value={formData.U_DtVenc} onChange={e => setFormData({ ...formData, U_DtVenc: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 items-end">
                     <div className="space-y-1.5 col-span-1">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Cód. Inspecionado</Label>
-                      <Input value={formData.U_Insp} onChange={e => setFormData({...formData, U_Insp: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_Insp} onChange={e => setFormData({ ...formData, U_Insp: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                     <div className="space-y-1.5 col-span-2">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Inspecionado Por</Label>
-                      <Input value={formData.U_DescInsp} onChange={e => setFormData({...formData, U_DescInsp: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_DescInsp} onChange={e => setFormData({ ...formData, U_DescInsp: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 items-end">
                     <div className="space-y-1.5 col-span-1">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Cód. Aprovador</Label>
-                      <Input value={formData.U_Aprov} onChange={e => setFormData({...formData, U_Aprov: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_Aprov} onChange={e => setFormData({ ...formData, U_Aprov: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                     <div className="space-y-1.5 col-span-2">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Aprovado Por</Label>
-                      <Input value={formData.U_DescAprov} onChange={e => setFormData({...formData, U_DescAprov: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_DescAprov} onChange={e => setFormData({ ...formData, U_DescAprov: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
                 </div>
@@ -5195,44 +5842,44 @@ function MaintenanceView() {
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Descrição do Equipamento</Label>
-                    <Input value={formData.U_ItemName} onChange={e => setFormData({...formData, U_ItemName: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                    <Input value={formData.U_ItemName} onChange={e => setFormData({ ...formData, U_ItemName: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data da Manutenção</Label>
-                    <Input type="date" value={formData.U_DtInicia} onChange={e => setFormData({...formData, U_DtInicia: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                    <Input type="date" value={formData.U_DtInicia} onChange={e => setFormData({ ...formData, U_DtInicia: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 items-end">
                     <div className="space-y-1.5 col-span-1">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Fornecedor</Label>
-                      <Input value={formData.U_Forn} onChange={e => setFormData({...formData, U_Forn: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_Forn} onChange={e => setFormData({ ...formData, U_Forn: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                     <div className="space-y-1.5 col-span-2">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Nome do Fornecedor</Label>
-                      <Input value={formData.U_DescForn} onChange={e => setFormData({...formData, U_DescForn: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_DescForn} onChange={e => setFormData({ ...formData, U_DescForn: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Observação</Label>
-                    <textarea value={formData.U_OBS} onChange={e => setFormData({...formData, U_OBS: e.target.value})} className="w-full rounded-none border border-evo-bg min-h-[80px] p-2 text-xs" />
+                    <textarea value={formData.U_OBS} onChange={e => setFormData({ ...formData, U_OBS: e.target.value })} className="w-full rounded-none border border-evo-bg min-h-[80px] p-2 text-xs" />
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Fabricante</Label>
-                      <Input value={formData.U_Fabricante} onChange={e => setFormData({...formData, U_Fabricante: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_Fabricante} onChange={e => setFormData({ ...formData, U_Fabricante: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Modelo</Label>
-                      <Input value={formData.U_Modelo} onChange={e => setFormData({...formData, U_Modelo: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                      <Input value={formData.U_Modelo} onChange={e => setFormData({ ...formData, U_Modelo: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Centro de Custo</Label>
-                    <Input value={formData.U_CCusto} onChange={e => setFormData({...formData, U_CCusto: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                    <Input value={formData.U_CCusto} onChange={e => setFormData({ ...formData, U_CCusto: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                   </div>
                 </div>
               </div>
@@ -5348,7 +5995,7 @@ function CostsView() {
   const [rental, setRental] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitLoading, setIsSubmitLoading] = useState(false);
-  
+
   const [isPersDialogOpen, setIsPersDialogOpen] = useState(false);
   const [isRentalDialogOpen, setIsRentalDialogOpen] = useState(false);
   const [isCollabLookupOpen, setIsCollabLookupOpen] = useState(false);
@@ -5444,10 +6091,10 @@ function CostsView() {
       formData.U_TxExtraNot !== currentPersBreakdown.totalTxExtraNoturna ||
       formData.U_TotalGeral !== currentPersBreakdown.totalTaxas
     ) {
-      setFormData(prev => ({ 
-        ...prev, 
+      setFormData(prev => ({
+        ...prev,
         U_StandBy: currentPersBreakdown.standByRate,
-        U_StandByRate: currentPersBreakdown.standByRate, 
+        U_StandByRate: currentPersBreakdown.standByRate,
         U_Total: currentPersBreakdown.totalGeral,
         U_TxExtraDiurna: currentPersBreakdown.totalTxExtraDiurna,
         U_TxExtraNot: currentPersBreakdown.totalTxExtraNoturna,
@@ -5455,16 +6102,16 @@ function CostsView() {
       }));
     }
   }, [
-    formData.U_VlNormal, 
+    formData.U_VlNormal,
     formData.U_QtdDiarias,
-    formData.U_QtdDiariasNormal, 
+    formData.U_QtdDiariasNormal,
     formData.U_QtdDiariasSt,
-    formData.U_QtdDiariasStandBy, 
+    formData.U_QtdDiariasStandBy,
     formData.U_NotNor,
-    formData.U_NoturnoNor, 
+    formData.U_NoturnoNor,
     formData.U_NotNob,
-    formData.U_NoturnoNob, 
-    formData.U_HExtraDiu, 
+    formData.U_NoturnoNob,
+    formData.U_HExtraDiu,
     formData.U_HExtraNot,
     formData.U_HrExtraDiurna,
     formData.U_HrExtraNot,
@@ -5478,9 +6125,9 @@ function CostsView() {
   ]);
 
   const calculateRentalTotal = () => {
-    const total = (Number(rentalFormData.U_ValorBase) * (Number(rentalFormData.U_HorasNor) + Number(rentalFormData.U_HorasNob))) + 
-                (Number(rentalFormData.U_HENor) * (Number(rentalFormData.U_ValorBase) * 1.5)) + 
-                (Number(rentalFormData.U_HENob) * (Number(rentalFormData.U_ValorBase) * 2.0));
+    const total = (Number(rentalFormData.U_ValorBase) * (Number(rentalFormData.U_HorasNor) + Number(rentalFormData.U_HorasNob))) +
+      (Number(rentalFormData.U_HENor) * (Number(rentalFormData.U_ValorBase) * 1.5)) +
+      (Number(rentalFormData.U_HENob) * (Number(rentalFormData.U_ValorBase) * 2.0));
     setRentalFormData(prev => ({ ...prev, U_Total: total }));
   };
 
@@ -5670,7 +6317,7 @@ function CostsView() {
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="space-y-10"
@@ -5697,9 +6344,9 @@ function CostsView() {
             }
           }}>
             <DialogTrigger render={<Button className="evo-button-primary shadow-xl" onClick={() => {
-                setEditingId(null);
-                setFormData(initialPersForm);
-              }} />}>Nova Receita Pessoal</DialogTrigger>
+              setEditingId(null);
+              setFormData(initialPersForm);
+            }} />}>Nova Receita Pessoal</DialogTrigger>
             <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
                 <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Receita Pessoal' : 'Registro de Receita de Pessoal (CustosPessoal)'}</DialogTitle>
@@ -5711,16 +6358,16 @@ function CostsView() {
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Colaborador (Código CO)</Label>
                       <div className="flex gap-1">
-                        <Input 
-                          value={formData.U_Colaborador} 
-                          onChange={e => setFormData({...formData, U_Colaborador: e.target.value})} 
-                          className="rounded-none h-10 border-evo-bg flex-1 font-bold" 
-                          placeholder="Código ou Nome do Colaborador (Ex: CO...)" 
+                        <Input
+                          value={formData.U_Colaborador}
+                          onChange={e => setFormData({ ...formData, U_Colaborador: e.target.value })}
+                          className="rounded-none h-10 border-evo-bg flex-1 font-bold"
+                          placeholder="Código ou Nome do Colaborador (Ex: CO...)"
                           required
                         />
-                        <Button 
-                          type="button" 
-                          variant="outline" 
+                        <Button
+                          type="button"
+                          variant="outline"
                           className="rounded-none h-10 w-10 p-0 border-evo-bg"
                           onClick={() => setIsCollabLookupOpen(true)}
                           title="Listar Parceiros CO"
@@ -5729,7 +6376,7 @@ function CostsView() {
                         </Button>
                       </div>
 
-                      <LookupDialog 
+                      <LookupDialog
                         isOpen={isCollabLookupOpen}
                         onClose={() => setIsCollabLookupOpen(false)}
                         title="Pesquisar Colaborador (CO)"
@@ -5760,14 +6407,14 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4 border-t border-evo-bg pt-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Normal (R$)</Label>
-                        <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({...formData, U_VlNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="number" step="0.01" value={formData.U_VlNormal} onChange={e => setFormData({ ...formData, U_VlNormal: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
                         <div className="flex justify-between items-center">
                           <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Qtd Diárias (Normal)</Label>
                           <span className="text-[8px] font-bold text-evo-teal tracking-tighter" title="Fórmula Excel: =SE(B41=&quot;&quot;;0;C41-B41+1-K41-L41)">Auto (Excel)</span>
                         </div>
-                        <Input type="number" step="0.5" value={formData.U_QtdDiariasNormal} onChange={e => setFormData({...formData, U_QtdDiariasNormal: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg font-bold" />
+                        <Input type="number" step="0.5" value={formData.U_QtdDiariasNormal} onChange={e => setFormData({ ...formData, U_QtdDiariasNormal: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg font-bold" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -5790,7 +6437,7 @@ function CostsView() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Noturno Dobrado</Label>
-                        <DecimalInput value={formData.U_NoturnoNob} onChange={val => setFormData({...formData, U_NoturnoNob: val})} className="rounded-none h-10 border-evo-bg" />
+                        <DecimalInput value={formData.U_NoturnoNob} onChange={val => setFormData({ ...formData, U_NoturnoNob: val })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
 
@@ -5812,11 +6459,11 @@ function CostsView() {
                             <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Qtd Dobras</Label>
                             <span className="text-[8px] font-bold text-amber-800">Decimais (ex: 1 ou 1,5)</span>
                           </div>
-                          <DecimalInput 
-                            value={formData.U_QtdDobra} 
-                            onChange={val => setFormData({...formData, U_QtdDobra: val})} 
-                            className="rounded-none h-9 border-amber-300 bg-white font-bold" 
-                            placeholder="0,0" 
+                          <DecimalInput
+                            value={formData.U_QtdDobra}
+                            onChange={val => setFormData({ ...formData, U_QtdDobra: val })}
+                            className="rounded-none h-9 border-amber-300 bg-white font-bold"
+                            placeholder="0,0"
                           />
                         </div>
 
@@ -5825,23 +6472,21 @@ function CostsView() {
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() => setFormData({...formData, U_PercDobra: 40})}
-                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
-                                formData.U_PercDobra === 40 
-                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                              onClick={() => setFormData({ ...formData, U_PercDobra: 40 })}
+                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${formData.U_PercDobra === 40
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
                                   : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
-                              }`}
+                                }`}
                             >
                               40%
                             </button>
                             <button
                               type="button"
-                              onClick={() => setFormData({...formData, U_PercDobra: 50})}
-                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${
-                                formData.U_PercDobra === 50 
-                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                              onClick={() => setFormData({ ...formData, U_PercDobra: 50 })}
+                              className={`flex-1 h-9 text-xs font-black uppercase transition-all border ${formData.U_PercDobra === 50
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
                                   : 'bg-white text-evo-dark border-evo-bg hover:bg-amber-50'
-                              }`}
+                                }`}
                             >
                               50%
                             </button>
@@ -5863,10 +6508,10 @@ function CostsView() {
                           <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraDiu (Total)</Label>
                           <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                         </div>
-                        <DecimalInput 
-                          value={formData.U_HExtraDiu} 
-                          onChange={val => setFormData({...formData, U_HExtraDiu: val})} 
-                          className="rounded-none h-10 border-evo-bg font-bold" 
+                        <DecimalInput
+                          value={formData.U_HExtraDiu}
+                          onChange={val => setFormData({ ...formData, U_HExtraDiu: val })}
+                          className="rounded-none h-10 border-evo-bg font-bold"
                           placeholder="0,0"
                           title="Ex: 2,5 ou 2.5 ou 2:30"
                         />
@@ -5876,10 +6521,10 @@ function CostsView() {
                           <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">HExtraNot (Total)</Label>
                           <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Horas no total da linha">Decimais (ex: 2,5)</span>
                         </div>
-                        <DecimalInput 
-                          value={formData.U_HExtraNot} 
-                          onChange={val => setFormData({...formData, U_HExtraNot: val})} 
-                          className="rounded-none h-10 border-evo-bg font-bold" 
+                        <DecimalInput
+                          value={formData.U_HExtraNot}
+                          onChange={val => setFormData({ ...formData, U_HExtraNot: val })}
+                          className="rounded-none h-10 border-evo-bg font-bold"
                           placeholder="0,0"
                           title="Ex: 2,5 ou 2.5 ou 2:30"
                         />
@@ -5899,11 +6544,11 @@ function CostsView() {
                             <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Diurna</Label>
                             <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentPersBreakdown.totalTxExtraDiurna.toFixed(2)}</span>
                           </div>
-                          <DecimalInput 
-                            value={formData.U_HrExtraDiurna} 
-                            onChange={val => setFormData({...formData, U_HrExtraDiurna: val})} 
-                            className="rounded-none h-9 border-slate-300 bg-white font-bold" 
-                            placeholder="0,0" 
+                          <DecimalInput
+                            value={formData.U_HrExtraDiurna}
+                            onChange={val => setFormData({ ...formData, U_HrExtraDiurna: val })}
+                            className="rounded-none h-9 border-slate-300 bg-white font-bold"
+                            placeholder="0,0"
                           />
                         </div>
 
@@ -5912,11 +6557,11 @@ function CostsView() {
                             <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/70">Hr Extra Not</Label>
                             <span className="text-[8px] font-bold text-slate-500">Taxa: R$ {currentPersBreakdown.totalTxExtraNoturna.toFixed(2)}</span>
                           </div>
-                          <DecimalInput 
-                            value={formData.U_HrExtraNot} 
-                            onChange={val => setFormData({...formData, U_HrExtraNot: val})} 
-                            className="rounded-none h-9 border-slate-300 bg-white font-bold" 
-                            placeholder="0,0" 
+                          <DecimalInput
+                            value={formData.U_HrExtraNot}
+                            onChange={val => setFormData({ ...formData, U_HrExtraNot: val })}
+                            className="rounded-none h-9 border-slate-300 bg-white font-bold"
+                            placeholder="0,0"
                           />
                         </div>
                       </div>
@@ -6016,9 +6661,9 @@ function CostsView() {
             }
           }}>
             <DialogTrigger render={<Button variant="outline" className="rounded-none h-12 uppercase text-[10px] font-black tracking-widest border-evo-dark hover:bg-evo-dark hover:text-white transition-all px-8" onClick={() => {
-                setEditingId(null);
-                setRentalFormData(initialRentalForm);
-              }} />}>Nova Receita Locação</DialogTrigger>
+              setEditingId(null);
+              setRentalFormData(initialRentalForm);
+            }} />}>Nova Receita Locação</DialogTrigger>
             <DialogContent className="max-w-4xl rounded-none border-evo-teal/20 shadow-2xl">
               <DialogHeader>
                 <DialogTitle className="uppercase tracking-tight font-black">{editingId ? 'Editar Receita de Locação' : 'Registro de Receita de Locação (CustosLoc)'}</DialogTitle>
@@ -6029,21 +6674,21 @@ function CostsView() {
                   <div className="space-y-4">
                     <div className="space-y-1.5">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Equipamento / Recurso</Label>
-                      <Input value={rentalFormData.U_Recurso} onChange={e => setRentalFormData({...rentalFormData, U_Recurso: e.target.value})} className="rounded-none h-10 border-evo-bg" placeholder="Descrição do Recurso" />
+                      <Input value={rentalFormData.U_Recurso} onChange={e => setRentalFormData({ ...rentalFormData, U_Recurso: e.target.value })} className="rounded-none h-10 border-evo-bg" placeholder="Descrição do Recurso" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Inicial</Label>
-                        <Input type="date" value={rentalFormData.U_DataInicial} onChange={e => setRentalFormData({...rentalFormData, U_DataInicial: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="date" value={rentalFormData.U_DataInicial} onChange={e => setRentalFormData({ ...rentalFormData, U_DataInicial: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Data Final</Label>
-                        <Input type="date" value={rentalFormData.U_DataFinal} onChange={e => setRentalFormData({...rentalFormData, U_DataFinal: e.target.value})} className="rounded-none h-10 border-evo-bg" />
+                        <Input type="date" value={rentalFormData.U_DataFinal} onChange={e => setRentalFormData({ ...rentalFormData, U_DataFinal: e.target.value })} className="rounded-none h-10 border-evo-bg" />
                       </div>
                     </div>
                     <div className="space-y-1.5 border-t border-evo-bg pt-4">
                       <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Valor Base (R$)</Label>
-                      <Input type="number" step="0.01" value={rentalFormData.U_ValorBase} onChange={e => setRentalFormData({...rentalFormData, U_ValorBase: parseFloat(e.target.value) || 0})} className="rounded-none h-10 border-evo-bg" />
+                      <Input type="number" step="0.01" value={rentalFormData.U_ValorBase} onChange={e => setRentalFormData({ ...rentalFormData, U_ValorBase: parseFloat(e.target.value) || 0 })} className="rounded-none h-10 border-evo-bg" />
                     </div>
                   </div>
 
@@ -6051,11 +6696,11 @@ function CostsView() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Normais</Label>
-                        <DecimalInput value={rentalFormData.U_HorasNor} onChange={val => setRentalFormData({...rentalFormData, U_HorasNor: val})} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
+                        <DecimalInput value={rentalFormData.U_HorasNor} onChange={val => setRentalFormData({ ...rentalFormData, U_HorasNor: val })} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">Horas Nob</Label>
-                        <DecimalInput value={rentalFormData.U_HorasNob} onChange={val => setRentalFormData({...rentalFormData, U_HorasNob: val})} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
+                        <DecimalInput value={rentalFormData.U_HorasNob} onChange={val => setRentalFormData({ ...rentalFormData, U_HorasNob: val })} className="rounded-none h-10 border-evo-bg" placeholder="0,0" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -6064,10 +6709,10 @@ function CostsView() {
                           <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Normal</Label>
                           <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
                         </div>
-                        <DecimalInput 
-                          value={rentalFormData.U_HENor} 
-                          onChange={val => setRentalFormData({...rentalFormData, U_HENor: val})} 
-                          className="rounded-none h-10 border-evo-bg font-bold" 
+                        <DecimalInput
+                          value={rentalFormData.U_HENor}
+                          onChange={val => setRentalFormData({ ...rentalFormData, U_HENor: val })}
+                          className="rounded-none h-10 border-evo-bg font-bold"
                           placeholder="0,0"
                           title="Ex: 2,5 ou 2.5 ou 2:30"
                         />
@@ -6077,10 +6722,10 @@ function CostsView() {
                           <Label className="text-[9px] font-black uppercase tracking-tight text-evo-dark/60">H. Extra Nob</Label>
                           <span className="text-[8px] font-bold text-evo-teal tracking-tight" title="Permite vírgula ou ponto (ex: 2,5 ou 2.5 ou 2:30)">Decimais (ex: 2,5)</span>
                         </div>
-                        <DecimalInput 
-                          value={rentalFormData.U_HENob} 
-                          onChange={val => setRentalFormData({...rentalFormData, U_HENob: val})} 
-                          className="rounded-none h-10 border-evo-bg font-bold" 
+                        <DecimalInput
+                          value={rentalFormData.U_HENob}
+                          onChange={val => setRentalFormData({ ...rentalFormData, U_HENob: val })}
+                          className="rounded-none h-10 border-evo-bg font-bold"
                           placeholder="0,0"
                           title="Ex: 2,5 ou 2.5 ou 2:30"
                         />
@@ -6146,12 +6791,12 @@ function CostsView() {
                   <TableCell className="px-6 py-4 font-black text-xs text-evo-teal">R$ {Number(p.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                       <button onClick={() => handleEditPers(p)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
-                         <Edit className="w-3.5 h-3.5" />
-                       </button>
-                       <button onClick={() => handleDeletePers(p.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
-                         <Trash2 className="w-3.5 h-3.5" />
-                       </button>
+                      <button onClick={() => handleEditPers(p)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDeletePers(p.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -6186,12 +6831,12 @@ function CostsView() {
                   <TableCell className="px-6 py-4 font-black text-xs text-evo-teal">R$ {Number(r.U_Total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                       <button onClick={() => handleEditRental(r)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
-                         <Edit className="w-3.5 h-3.5" />
-                       </button>
-                       <button onClick={() => handleDeleteRental(r.Code || r.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
-                         <Trash2 className="w-3.5 h-3.5" />
-                       </button>
+                      <button onClick={() => handleEditRental(r)} className="p-2 hover:bg-evo-bg text-evo-dark/40 hover:text-evo-teal transition-colors rounded-full" title="Editar">
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDeleteRental(r.Code || r.DocEntry)} className="p-2 hover:bg-red-50 text-evo-dark/40 hover:text-red-500 transition-colors rounded-full" title="Excluir">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -6292,10 +6937,10 @@ function QuotationsView({
         const match = sapService.findCustomerMatch(targetFilters.clientName);
         clientTarget = match ? match.CardCode : targetFilters.clientName;
       }
-      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
+      const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
       const data = await sapService.getQuotations({
         skip: targetPage * targetPageSize,
-        top: targetPageSize,
+        top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
         search: searchTarget
       });
       const quoteList = Array.isArray(data) ? data : [];
@@ -6362,9 +7007,9 @@ function QuotationsView({
 
   const filteredQuotations = quotations.filter(q => {
     const isOpen = q.DocumentStatus === 'bost_Open' || q.DocumentStatus === 'O';
-    const matchesStatus = statusFilter === 'all' || 
-                         (statusFilter === 'open' && isOpen) || 
-                         (statusFilter === 'closed' && !isOpen);
+    const matchesStatus = statusFilter === 'all' ||
+      (statusFilter === 'open' && isOpen) ||
+      (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
 
     if (appliedFilters.docNum.trim()) {
@@ -6524,7 +7169,7 @@ function QuotationsView({
         savedQuote = await sapService.createQuotation(quoteToSave);
         toast.success('Cotação criada com sucesso!');
       }
-      
+
       // Attempt automatic conversion to order after saving if quote is valid
       if (savedQuote && savedQuote.DocEntry) {
         try {
@@ -6543,7 +7188,7 @@ function QuotationsView({
           if (!orderToPrompt?.DocEntry && savedQuote?.DocEntry) {
             try {
               const recentOrders = await sapService.getOrders({ top: 5 });
-              const match = (recentOrders || []).find((o: any) => 
+              const match = (recentOrders || []).find((o: any) =>
                 (o.DocumentLines || []).some((l: any) => Number(l.BaseEntry) === Number(savedQuote.DocEntry) && Number(l.BaseType) === 23)
               );
               if (match) {
@@ -6564,7 +7209,7 @@ function QuotationsView({
           toast.warning(`Cotação salva, porém erro ao converter em Pedido: ${errDetail}`);
         }
       }
-      
+
       fetchQuotations();
       setIsModalOpen(false);
     } catch (error: any) {
@@ -6598,7 +7243,7 @@ function QuotationsView({
       if (!orderToPrompt?.DocEntry && selectedQuote?.DocEntry) {
         try {
           const recentOrders = await sapService.getOrders({ top: 5 });
-          const match = (recentOrders || []).find((o: any) => 
+          const match = (recentOrders || []).find((o: any) =>
             (o.DocumentLines || []).some((l: any) => Number(l.BaseEntry) === Number(selectedQuote.DocEntry) && Number(l.BaseType) === 23)
           );
           if (match) {
@@ -6686,19 +7331,19 @@ function QuotationsView({
     const proj = selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || 'BASE';
     const currentLines = selectedQuote?.DocumentLines || [];
     const newIdx = currentLines.length;
-    const newLine = { 
-      ItemCode: '', 
-      ItemDescription: '', 
-      Quantity: 1, 
+    const newLine = {
+      ItemCode: '',
+      ItemDescription: '',
+      Quantity: 1,
       Taxa: '',
-      Price: 0, 
+      Price: 0,
       UnitPrice: 0,
       CostingCode: 'BR',
       CostingCode2: 'MATRIZ',
       CostingCode3: 'OPER_OFF',
       CostingCode4: proj,
-      ProjectCode: resolveSapFinancialProject(proj) || '', 
-      U_nITEM: '', 
+      ProjectCode: resolveSapFinancialProject(proj) || '',
+      U_nITEM: '',
       U_ItemLoc: '',
       U_nItem: '',
       DiscountPercent: 0
@@ -6718,8 +7363,8 @@ function QuotationsView({
       if (newLines[index]) {
         const isTaxaField = field === 'Taxa';
         const taxaVal = isTaxaField ? parseDecimalInput(value) : 0;
-        newLines[index] = { 
-          ...newLines[index], 
+        newLines[index] = {
+          ...newLines[index],
           [field]: value,
           ...(field === 'CostingCode4' ? { ProjectCode: value } : {}),
           ...(isTaxaField && taxaVal > 0 ? {
@@ -6740,7 +7385,7 @@ function QuotationsView({
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="space-y-8"
@@ -6752,10 +7397,10 @@ function QuotationsView({
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           {onOpenMeasurements && (
-            <Button 
-              type="button" 
-              onClick={onOpenMeasurements} 
-              variant="outline" 
+            <Button
+              type="button"
+              onClick={onOpenMeasurements}
+              variant="outline"
               className="h-12 rounded-none border-evo-teal text-evo-teal hover:bg-evo-teal hover:text-white font-black uppercase text-[10px] tracking-widest px-6 shadow-sm flex items-center gap-2"
             >
               <Ruler className="w-4 h-4" />
@@ -6852,8 +7497,8 @@ function QuotationsView({
               <span>Página {page + 1} ({quotations.length} cotações nesta página)</span>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
-                <select 
-                  value={pageSize} 
+                <select
+                  value={pageSize}
                   onChange={(e) => handlePageSizeChange(Number(e.target.value))}
                   className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
                 >
@@ -6865,20 +7510,20 @@ function QuotationsView({
             </div>
 
             <div className="flex items-center gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(0)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(0)}
                 disabled={page === 0 || isLoading}
                 className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
                 title="Primeira Página"
               >
                 <ChevronsLeft className="w-3.5 h-3.5" />
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(page - 1)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(page - 1)}
                 disabled={page === 0 || isLoading}
                 className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
               >
@@ -6887,10 +7532,10 @@ function QuotationsView({
               <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
                 {page + 1}
               </span>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(page + 1)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(page + 1)}
                 disabled={!hasMore || quotations.length < pageSize || isLoading}
                 className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
               >
@@ -6902,8 +7547,8 @@ function QuotationsView({
       </div>
 
       {/* Main Quotation Modal */}
-      <Dialog 
-        open={isModalOpen} 
+      <Dialog
+        open={isModalOpen}
         onOpenChange={(open) => {
           if (!open) {
             if (isSavingQuoteRef.current) {
@@ -6920,8 +7565,8 @@ function QuotationsView({
           <DialogHeader className="bg-evo-dark p-6 sm:p-8 text-white relative shrink-0">
             <div className="absolute top-0 right-0 p-6 flex items-center gap-4 z-10">
               {selectedQuote?.DocEntry && (selectedQuote.DocumentStatus === 'bost_Open' || selectedQuote.DocumentStatus === 'O') && (
-                <Button 
-                  onClick={handleGenerateOrder} 
+                <Button
+                  onClick={handleGenerateOrder}
                   disabled={isOrderLoading}
                   className="bg-evo-teal hover:bg-evo-teal/80 text-evo-dark font-black uppercase text-[10px] tracking-widest px-8 rounded-none h-10 shadow-lg"
                 >
@@ -6929,10 +7574,10 @@ function QuotationsView({
                   <Zap className="ml-2 w-3 h-3 text-evo-dark" />
                 </Button>
               )}
-              <Button 
-                type="button" 
-                variant="ghost" 
-                onClick={() => setShowConfirmClose(true)} 
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setShowConfirmClose(true)}
                 className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none"
               >
                 <X className="w-6 h-6" />
@@ -6952,13 +7597,13 @@ function QuotationsView({
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
                     <div className="flex gap-1">
-                      <Input 
+                      <Input
                         value={selectedQuote.CardCode}
                         onChange={(e) => setSelectedQuote({ ...selectedQuote, CardCode: e.target.value })}
                         className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold flex-1"
                         placeholder="EX: C20000"
                       />
-                      <Button 
+                      <Button
                         type="button"
                         variant="outline"
                         className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0"
@@ -6971,7 +7616,7 @@ function QuotationsView({
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Nome do Cliente</label>
-                    <Input 
+                    <Input
                       value={selectedQuote.CardName || ""}
                       onChange={(e) => setSelectedQuote({ ...selectedQuote, CardName: e.target.value })}
                       placeholder="Nome do Cliente"
@@ -6984,7 +7629,7 @@ function QuotationsView({
                       <span className="text-[8px] font-bold text-evo-teal uppercase">Dimensão 4</span>
                     </div>
                     <div className="flex gap-1">
-                      <Input 
+                      <Input
                         value={selectedQuote.CostingCode4 || selectedQuote.U_Projeto || selectedQuote.Project || selectedQuote.ProjectCode || ""}
                         onChange={(e) => {
                           const val = e.target.value.toUpperCase();
@@ -7008,9 +7653,9 @@ function QuotationsView({
                         placeholder="EX: WO 2040 OU PROJETO"
                         className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal flex-1"
                       />
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                      <Button
+                        type="button"
+                        variant="outline"
                         className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0 hover:bg-evo-dark hover:text-white"
                         onClick={() => setIsProjectLookupOpen(true)}
                         title="Pesquisar Projeto / WO"
@@ -7021,12 +7666,12 @@ function QuotationsView({
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
-                    <Input 
+                    <Input
                       value={selectedQuote.NumAtCard || selectedQuote.U_POCliente || ""}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setSelectedQuote({ 
-                          ...selectedQuote, 
+                        setSelectedQuote({
+                          ...selectedQuote,
                           NumAtCard: val,
                           U_POCliente: val
                         });
@@ -7037,7 +7682,7 @@ function QuotationsView({
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
-                    <Input 
+                    <Input
                       type="date"
                       value={selectedQuote.DocDueDate ? selectedQuote.DocDueDate.split('T')[0] : ""}
                       onChange={(e) => setSelectedQuote({ ...selectedQuote, DocDueDate: e.target.value })}
@@ -7047,9 +7692,9 @@ function QuotationsView({
                 </div>
 
                 {/* Section for Attachments (PO Cliente, Cotação Qualitech, Email de Aprovação) */}
-                <DocumentAttachmentsSection 
-                  documentType="quotation" 
-                  docId={selectedQuote.DocEntry || 'draft'} 
+                <DocumentAttachmentsSection
+                  documentType="quotation"
+                  docId={selectedQuote.DocEntry || 'draft'}
                 />
 
                 <div className="space-y-4">
@@ -7060,7 +7705,7 @@ function QuotationsView({
                     </div>
                     <Button onClick={handleAddLine} variant="outline" size="sm" className="rounded-none uppercase text-[9px] font-black border-2 h-9 px-6 hover:bg-evo-dark hover:text-white transition-all">Adicionar Item</Button>
                   </div>
-                  
+
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
                     <Table className="min-w-[1380px] w-full">
                       <TableHeader className="bg-evo-dark">
@@ -7091,342 +7736,340 @@ function QuotationsView({
                           const hasRentalMeasurement = Number(line.lineRentalCost) > 0;
 
                           return (
-                          <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-3 py-4 min-w-[220px]">
-                              <div className="space-y-1.5">
-                                <div className="flex gap-1.5">
-                                  <Input 
-                                    value={line.ItemCode || ''}
-                                    onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    onClick={() => {
-                                      setLineIndexForLookup(idx);
-                                      setIsItemLookupOpen(true);
-                                    }}
-                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 cursor-pointer min-w-[100px]"
-                                    placeholder="CÓDIGO (EX: ITEM-001)"
-                                    title="Clique para pesquisar itens no SAP"
-                                  />
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline" 
-                                    className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
-                                    onClick={() => {
-                                      setLineIndexForLookup(idx);
-                                      setIsItemLookupOpen(true);
-                                    }}
-                                    title="Pesquisar Item no SAP"
-                                  >
-                                    <Search className="w-3.5 h-3.5" />
-                                  </Button>
-                                </div>
-                                <div className="space-y-1">
-                                  <Input 
-                                    value={line.ItemDescription || line.ItemName || line.Dscription || ''}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      updateLine(idx, 'ItemDescription', val);
-                                      updateLine(idx, 'ItemName', val);
-                                      updateLine(idx, 'Dscription', val);
-                                    }}
-                                    onClick={() => {
-                                      if (!line.ItemCode) {
+                            <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
+                              <TableCell className="px-3 py-4 min-w-[220px]">
+                                <div className="space-y-1.5">
+                                  <div className="flex gap-1.5">
+                                    <Input
+                                      value={line.ItemCode || ''}
+                                      onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
+                                      onClick={() => {
                                         setLineIndexForLookup(idx);
                                         setIsItemLookupOpen(true);
-                                      }
-                                    }}
-                                    className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
-                                    placeholder="Descrição do item ou serviço..."
-                                    title={line.ItemDescription || line.ItemName || line.Dscription || ''}
-                                  />
-                                  {(line.ItemDescription || line.ItemName || line.Dscription) && (
-                                    <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
-                                      {line.ItemDescription || line.ItemName || line.Dscription}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            </TableCell>
-
-                            {/* Quantidade */}
-                            <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
-                              <DecimalInput 
-                                value={Number(line.Quantity) || 0}
-                                onChange={(val) => updateLine(idx, 'Quantity', val)}
-                                allowTimeFormat={false}
-                                placeholder="1"
-                                className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
-                              />
-                            </TableCell>
-
-                            {/* Taxa */}
-                            <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
-                              <div className="relative w-full">
-                                <Input 
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === '') {
-                                      updateLine(idx, 'Taxa', '');
-                                      return;
-                                    }
-                                    if (/^[-0-9.,]*$/.test(raw)) {
-                                      updateLine(idx, 'Taxa', raw);
-                                    }
-                                  }}
-                                  placeholder="0%"
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
-                                  title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
-                                />
-                                {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
-                                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
-                                )}
-                              </div>
-                            </TableCell>
-
-                            {/* Valor Unitário */}
-                            <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
-                              <div className="relative w-full">
-                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
-                                <DecimalInput 
-                                  value={Number(line.Price ?? line.UnitPrice ?? 0)}
-                                  onChange={(val) => {
-                                    updateLine(idx, 'Price', val);
-                                    updateLine(idx, 'UnitPrice', val);
-                                  }}
-                                  allowTimeFormat={false}
-                                  placeholder="0,00"
-                                  className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
-                                />
-                              </div>
-                            </TableCell>
-
-                            {/* Desconto % */}
-                            <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
-                              <div className="relative w-full">
-                                <Input 
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.5"
-                                  value={line.DiscountPercent ?? 0}
-                                  onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
-                                  placeholder="0%"
-                                />
-                              </div>
-                            </TableCell>
-                            {/* Dim 1: País (CostingCode) */}
-                            <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
-                              <select 
-                                value={line.CostingCode || 'BR'}
-                                onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 1: País (CostingCode)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
-                                  <option value="BR">BR - Brasil</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
-                                  <option value={line.CostingCode}>{line.CostingCode}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 2: Empresa (CostingCode2) */}
-                            <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
-                              <select 
-                                value={line.CostingCode2 || 'MATRIZ'}
-                                onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 2: Empresa (CostingCode2)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
-                                  <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
-                                  <option value={line.CostingCode2}>{line.CostingCode2}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 3: Unidade / Operação (CostingCode3) */}
-                            <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
-                              <select 
-                                value={line.CostingCode3 || 'OPER_OFF'}
-                                onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 3: Unidade / Operação (CostingCode3)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
-                                  <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
-                                  <option value={line.CostingCode3}>{line.CostingCode3}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 4: Projeto / WO (CostingCode4) */}
-                            <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
-                              <select 
-                                value={line.CostingCode4 || line.ProjectCode || selectedQuote.CostingCode4 || selectedQuote.U_Projeto || 'BASE'}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setSelectedQuote((prev: any) => {
-                                    if (!prev) return prev;
-                                    const newLines = [...(prev.DocumentLines || [])];
-                                    if (newLines[idx]) {
-                                      newLines[idx] = {
-                                        ...newLines[idx],
-                                        CostingCode4: val,
-                                        ProjectCode: val
-                                      };
-                                    }
-                                    return { ...prev, DocumentLines: newLines };
-                                  });
-                                }}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 4: Projeto / WO (CostingCode4)"
-                              >
-                                <option value="">Nenhum Projeto</option>
-                                {projects.map((p) => (
-                                  <option key={p.Code} value={p.Code}>
-                                    {p.Code} - {p.Name}
-                                  </option>
-                                ))}
-                                {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
-                                  <option value={line.CostingCode4}>{line.CostingCode4}</option>
-                                )}
-                              </select>
-                            </TableCell>
-                            <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
-                              {(() => {
-                                const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
-                                  ? parseDecimalInput(line.Taxa)
-                                  : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
-                                const hasTaxa = taxaNum > 0;
-                                const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
-                                const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
-                                return (
-                                  <div className="space-y-1.5">
-                                    <div className="flex items-center gap-6">
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
-                                        <div className="flex items-center gap-2">
-                                          <Button 
-                                            size="sm" 
-                                            variant="ghost" 
-                                            disabled={hasTaxa}
-                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${
-                                              hasTaxa 
-                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
-                                                : nItemVal 
-                                                  ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
-                                                  : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
-                                            }`}
-                                            onClick={() => {
-                                              if (hasTaxa) {
-                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
-                                                return;
-                                              }
-                                              setActiveLineIndex(idx);
-                                              setIsPersCostModalOpen(true);
-                                            }}
-                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
-                                          >
-                                            <User className="w-3.5 h-3.5" />
-                                          </Button>
-                                          <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
-                                            {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      <div className="w-[1px] h-8 bg-evo-bg" />
-
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
-                                        <div className="flex items-center gap-2">
-                                          <Button 
-                                            size="sm" 
-                                            variant="ghost" 
-                                            disabled={hasTaxa}
-                                            className={`h-8 w-8 p-0 border rounded-none transition-all ${
-                                              hasTaxa 
-                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
-                                                : itemLocVal 
-                                                  ? 'bg-indigo-100 border-indigo-400 text-indigo-700' 
-                                                  : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
-                                            }`}
-                                            onClick={() => {
-                                              if (hasTaxa) {
-                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
-                                                return;
-                                              }
-                                              setActiveLineIndex(idx);
-                                              setIsRentalCostModalOpen(true);
-                                            }}
-                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
-                                          >
-                                            <Truck className="w-3.5 h-3.5" />
-                                          </Button>
-                                          <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-indigo-600' : 'text-indigo-400'}`}>
-                                            {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {(hasPersMeasurement || hasRentalMeasurement) && (
-                                      <div className="text-[8px] font-bold text-slate-500 font-mono flex items-center gap-2 bg-slate-50 p-1 border border-slate-200">
-                                        <span>Medição:</span>
-                                        {hasPersMeasurement && (
-                                          <span className="text-teal-700">Pessoal: R$ {Number(line.linePersonnelCost).toFixed(2)}</span>
-                                        )}
-                                        {hasPersMeasurement && hasRentalMeasurement && <span>+</span>}
-                                        {hasRentalMeasurement && (
-                                          <span className="text-indigo-700">Locação: R$ {Number(line.lineRentalCost).toFixed(2)}</span>
-                                        )}
-                                      </div>
+                                      }}
+                                      className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 cursor-pointer min-w-[100px]"
+                                      placeholder="CÓDIGO (EX: ITEM-001)"
+                                      title="Clique para pesquisar itens no SAP"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
+                                      onClick={() => {
+                                        setLineIndexForLookup(idx);
+                                        setIsItemLookupOpen(true);
+                                      }}
+                                      title="Pesquisar Item no SAP"
+                                    >
+                                      <Search className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Input
+                                      value={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        updateLine(idx, 'ItemDescription', val);
+                                        updateLine(idx, 'ItemName', val);
+                                        updateLine(idx, 'Dscription', val);
+                                      }}
+                                      onClick={() => {
+                                        if (!line.ItemCode) {
+                                          setLineIndexForLookup(idx);
+                                          setIsItemLookupOpen(true);
+                                        }
+                                      }}
+                                      className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
+                                      placeholder="Descrição do item ou serviço..."
+                                      title={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                    />
+                                    {(line.ItemDescription || line.ItemName || line.Dscription) && (
+                                      <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
+                                        {line.ItemDescription || line.ItemName || line.Dscription}
+                                      </p>
                                     )}
                                   </div>
-                                );
-                              })()}
-                            </TableCell>
-                            <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
-                              <div>
-                                R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                {hasTaxa && (
-                                  <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                    (Taxa {taxaVal}%)
-                                  </span>
-                                )}
-                                {lineDiscPct > 0 && (
-                                  <span className="block text-[9px] font-bold text-rose-500 font-mono">
-                                    (-{lineDiscPct}%)
-                                  </span>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
+                                </div>
+                              </TableCell>
+
+                              {/* Quantidade */}
+                              <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
+                                <DecimalInput
+                                  value={Number(line.Quantity) || 0}
+                                  onChange={(val) => updateLine(idx, 'Quantity', val)}
+                                  allowTimeFormat={false}
+                                  placeholder="1"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
+                                />
+                              </TableCell>
+
+                              {/* Taxa */}
+                              <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
+                                <div className="relative w-full">
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '') {
+                                        updateLine(idx, 'Taxa', '');
+                                        return;
+                                      }
+                                      if (/^[-0-9.,]*$/.test(raw)) {
+                                        updateLine(idx, 'Taxa', raw);
+                                      }
+                                    }}
+                                    placeholder="0%"
+                                    className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
+                                    title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
+                                  />
+                                  {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
+                                    <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
+                                  )}
+                                </div>
+                              </TableCell>
+
+                              {/* Valor Unitário */}
+                              <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
+                                <div className="relative w-full">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
+                                  <DecimalInput
+                                    value={Number(line.Price ?? line.UnitPrice ?? 0)}
+                                    onChange={(val) => {
+                                      updateLine(idx, 'Price', val);
+                                      updateLine(idx, 'UnitPrice', val);
+                                    }}
+                                    allowTimeFormat={false}
+                                    placeholder="0,00"
+                                    className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
+                                  />
+                                </div>
+                              </TableCell>
+
+                              {/* Desconto % */}
+                              <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
+                                <div className="relative w-full">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.5"
+                                    value={line.DiscountPercent ?? 0}
+                                    onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                    className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
+                                    placeholder="0%"
+                                  />
+                                </div>
+                              </TableCell>
+                              {/* Dim 1: País (CostingCode) */}
+                              <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
+                                <select
+                                  value={line.CostingCode || 'BR'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 1: País (CostingCode)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
+                                    <option value="BR">BR - Brasil</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
+                                    <option value={line.CostingCode}>{line.CostingCode}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 2: Empresa (CostingCode2) */}
+                              <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
+                                <select
+                                  value={line.CostingCode2 || 'MATRIZ'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 2: Empresa (CostingCode2)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
+                                    <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
+                                    <option value={line.CostingCode2}>{line.CostingCode2}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 3: Unidade / Operação (CostingCode3) */}
+                              <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
+                                <select
+                                  value={line.CostingCode3 || 'OPER_OFF'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 3: Unidade / Operação (CostingCode3)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
+                                    <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
+                                    <option value={line.CostingCode3}>{line.CostingCode3}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 4: Projeto / WO (CostingCode4) */}
+                              <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
+                                <select
+                                  value={line.CostingCode4 || line.ProjectCode || selectedQuote.CostingCode4 || selectedQuote.U_Projeto || 'BASE'}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSelectedQuote((prev: any) => {
+                                      if (!prev) return prev;
+                                      const newLines = [...(prev.DocumentLines || [])];
+                                      if (newLines[idx]) {
+                                        newLines[idx] = {
+                                          ...newLines[idx],
+                                          CostingCode4: val,
+                                          ProjectCode: val
+                                        };
+                                      }
+                                      return { ...prev, DocumentLines: newLines };
+                                    });
+                                  }}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 4: Projeto / WO (CostingCode4)"
+                                >
+                                  <option value="">Nenhum Projeto</option>
+                                  {projects.map((p) => (
+                                    <option key={p.Code} value={p.Code}>
+                                      {p.Code} - {p.Name}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
+                                    <option value={line.CostingCode4}>{line.CostingCode4}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+                              <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
+                                {(() => {
+                                  const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+                                    ? parseDecimalInput(line.Taxa)
+                                    : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+                                  const hasTaxa = taxaNum > 0;
+                                  const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
+                                  const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
+                                  return (
+                                    <div className="space-y-1.5">
+                                      <div className="flex items-center gap-6">
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                          <div className="flex items-center gap-2">
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              disabled={hasTaxa}
+                                              className={`h-8 w-8 p-0 border rounded-none transition-all ${hasTaxa
+                                                  ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                  : nItemVal
+                                                    ? 'bg-evo-teal/20 border-evo-teal text-evo-teal'
+                                                    : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
+                                                }`}
+                                              onClick={() => {
+                                                if (hasTaxa) {
+                                                  toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                  return;
+                                                }
+                                                setActiveLineIndex(idx);
+                                                setIsPersCostModalOpen(true);
+                                              }}
+                                              title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
+                                            >
+                                              <User className="w-3.5 h-3.5" />
+                                            </Button>
+                                            <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal' : 'text-rose-400'}`}>
+                                              {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        <div className="w-[1px] h-8 bg-evo-bg" />
+
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                          <div className="flex items-center gap-2">
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              disabled={hasTaxa}
+                                              className={`h-8 w-8 p-0 border rounded-none transition-all ${hasTaxa
+                                                  ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                  : itemLocVal
+                                                    ? 'bg-indigo-100 border-indigo-400 text-indigo-700'
+                                                    : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
+                                                }`}
+                                              onClick={() => {
+                                                if (hasTaxa) {
+                                                  toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                  return;
+                                                }
+                                                setActiveLineIndex(idx);
+                                                setIsRentalCostModalOpen(true);
+                                              }}
+                                              title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
+                                            >
+                                              <Truck className="w-3.5 h-3.5" />
+                                            </Button>
+                                            <span className={`text-[9px] font-black uppercase font-mono ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-indigo-600' : 'text-indigo-400'}`}>
+                                              {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {(hasPersMeasurement || hasRentalMeasurement) && (
+                                        <div className="text-[8px] font-bold text-slate-500 font-mono flex items-center gap-2 bg-slate-50 p-1 border border-slate-200">
+                                          <span>Medição:</span>
+                                          {hasPersMeasurement && (
+                                            <span className="text-teal-700">Pessoal: R$ {Number(line.linePersonnelCost).toFixed(2)}</span>
+                                          )}
+                                          {hasPersMeasurement && hasRentalMeasurement && <span>+</span>}
+                                          {hasRentalMeasurement && (
+                                            <span className="text-indigo-700">Locação: R$ {Number(line.lineRentalCost).toFixed(2)}</span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
+                                <div>
+                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                  {hasTaxa && (
+                                    <span className="block text-[8px] font-bold text-evo-teal font-mono">
+                                      (Taxa {taxaVal}%)
+                                    </span>
+                                  )}
+                                  {lineDiscPct > 0 && (
+                                    <span className="block text-[9px] font-bold text-rose-500 font-mono">
+                                      (-{lineDiscPct}%)
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
                         })}
                       </TableBody>
                     </Table>
@@ -7469,11 +8112,10 @@ function QuotationsView({
                               type="button"
                               size="sm"
                               variant="outline"
-                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${
-                                quoteDiscPct === pct 
-                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm' 
+                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${quoteDiscPct === pct
+                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm'
                                   : 'border-evo-bg hover:bg-evo-dark hover:text-white'
-                              }`}
+                                }`}
                               onClick={() => {
                                 const val = (quoteSubtotal * pct) / 100;
                                 setSelectedQuote({
@@ -7568,7 +8210,7 @@ function QuotationsView({
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações</label>
-                  <textarea 
+                  <textarea
                     value={selectedQuote.Comments || ""}
                     onChange={(e) => setSelectedQuote({ ...selectedQuote, Comments: e.target.value })}
                     className="w-full min-h-[100px] p-4 rounded-none border-2 border-evo-dark/10 focus:border-evo-teal transition-colors text-sm"
@@ -7580,7 +8222,7 @@ function QuotationsView({
 
           <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
             <Button variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
-            <Button 
+            <Button
               onClick={handleSaveQuotation}
               disabled={isOrderLoading}
               className="evo-button-primary rounded-none px-12 h-12 shadow-lg"
@@ -7601,7 +8243,7 @@ function QuotationsView({
       />
 
       {/* Item Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isItemLookupOpen}
         onClose={() => setIsItemLookupOpen(false)}
         title="Pesquisar Item"
@@ -7610,7 +8252,7 @@ function QuotationsView({
           if (lineIndexForLookup !== null) {
             const targetIdx = lineIndexForLookup;
             const desc = item.ItemName || item.ItemDescription || '';
-            
+
             // Check PriceList 1 in itemPrices if already attached, or query SAP PriceLists(1)
             let unitPrice = 0;
             let foundPrice = false;
@@ -7648,9 +8290,9 @@ function QuotationsView({
               const newLines = [...(prev.DocumentLines || [])];
               if (targetIdx >= 0 && targetIdx < newLines.length) {
                 const proj = prev.CostingCode4 || prev.U_Projeto || prev.Project || prev.ProjectCode || 'BASE';
-                newLines[targetIdx] = { 
-                  ...newLines[targetIdx], 
-                  ItemCode: item.ItemCode, 
+                newLines[targetIdx] = {
+                  ...newLines[targetIdx],
+                  ItemCode: item.ItemCode,
                   ItemDescription: desc,
                   ItemName: desc,
                   Dscription: desc,
@@ -7667,15 +8309,15 @@ function QuotationsView({
         }}
         searchFn={sapService.getItems}
         renderItem={(item) => (
-          <div className="flex justify-between items-center w-full">
-            <span className="font-black text-xs">{item.ItemCode}</span>
-            <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{item.ItemName}</span>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 w-full">
+            <span className="font-black text-xs text-evo-teal shrink-0">{item.ItemCode}</span>
+            <span className="text-[11px] font-bold text-evo-dark uppercase whitespace-normal break-words leading-snug sm:text-right">{item.ItemName}</span>
           </div>
         )}
       />
 
       {/* Business Partner (Customer) Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isBPLookupOpen}
         onClose={() => setIsBPLookupOpen(false)}
         title="Pesquisar Cliente"
@@ -7701,7 +8343,7 @@ function QuotationsView({
       />
 
       {/* Project / WO Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isProjectLookupOpen}
         onClose={() => setIsProjectLookupOpen(false)}
         title="Pesquisar Projeto / WO (Dimensão 4)"
@@ -7732,8 +8374,8 @@ function QuotationsView({
             const all = projects.length > 0 ? projects : await sapService.getProjects();
             if (!query.trim()) return all;
             const term = normalizeSearchText(query);
-            return all.filter((p: any) => 
-              normalizeSearchText(p.Code).includes(term) || 
+            return all.filter((p: any) =>
+              normalizeSearchText(p.Code).includes(term) ||
               normalizeSearchText(p.Name).includes(term)
             );
           } catch {
@@ -7749,8 +8391,8 @@ function QuotationsView({
       />
 
       {/* Personnel Cost Sub-Modal */}
-      <PersonnelCostModal 
-        isOpen={isPersCostModalOpen} 
+      <PersonnelCostModal
+        isOpen={isPersCostModalOpen}
         onClose={() => setIsPersCostModalOpen(false)}
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
@@ -7764,8 +8406,8 @@ function QuotationsView({
       />
 
       {/* Rental Cost Sub-Modal */}
-      <RentalCostModal 
-        isOpen={isRentalCostModalOpen} 
+      <RentalCostModal
+        isOpen={isRentalCostModalOpen}
         onClose={() => setIsRentalCostModalOpen(false)}
         docEntry={selectedQuote?.DocEntry}
         lineIndex={activeLineIndex}
@@ -7797,7 +8439,7 @@ function QuotationsView({
       />
 
       {/* Sales Order Print Layout Modal */}
-      <SalesOrderPrintModal 
+      <SalesOrderPrintModal
         isOpen={isPrintModalOpen}
         onClose={() => setIsPrintModalOpen(false)}
         order={orderForPrint}
@@ -7814,15 +8456,15 @@ function QuotationsView({
   );
 }
 
-function SalesOrdersView({ 
+function SalesOrdersView({
   userEmail = "",
   initialDocEntry,
   onClearSelection
-}: { 
-  userEmail?: string; 
+}: {
+  userEmail?: string;
   initialDocEntry?: number | null;
   onClearSelection?: () => void;
-  key?: string; 
+  key?: string;
 }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -7887,10 +8529,10 @@ function SalesOrdersView({
         const match = sapService.findCustomerMatch(targetFilters.clientName);
         clientTarget = match ? match.CardCode : targetFilters.clientName;
       }
-      const searchTarget = targetFilters.docNum || targetFilters.wo || clientTarget || targetFilters.po || '';
+      const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
       const data = await sapService.getOrders({
         skip: targetPage * targetPageSize,
-        top: targetPageSize,
+        top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
         search: searchTarget
       });
       const rawList = Array.isArray(data) ? data : [];
@@ -7961,9 +8603,9 @@ function SalesOrdersView({
     if (!isOrderServiceMainUsage(o)) return false;
 
     const isOpen = o.DocumentStatus === 'bost_Open' || o.DocumentStatus === 'O';
-    const matchesStatus = statusFilter === 'all' || 
-                         (statusFilter === 'open' && isOpen) || 
-                         (statusFilter === 'closed' && !isOpen);
+    const matchesStatus = statusFilter === 'all' ||
+      (statusFilter === 'open' && isOpen) ||
+      (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
 
     if (appliedFilters.docNum.trim()) {
@@ -8249,19 +8891,19 @@ function SalesOrdersView({
     const proj = selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || 'BASE';
     const currentLines = selectedOrder?.DocumentLines || [];
     const newIdx = currentLines.length;
-    const newLine = { 
-      ItemCode: '', 
-      ItemDescription: '', 
-      Quantity: 1, 
+    const newLine = {
+      ItemCode: '',
+      ItemDescription: '',
+      Quantity: 1,
       Taxa: '',
-      Price: 0, 
+      Price: 0,
       UnitPrice: 0,
-      CostingCode: 'BR', 
+      CostingCode: 'BR',
       CostingCode2: 'MATRIZ',
       CostingCode3: 'OPER_OFF',
       CostingCode4: proj,
-      ProjectCode: resolveSapFinancialProject(proj) || '', 
-      U_nITEM: '', 
+      ProjectCode: resolveSapFinancialProject(proj) || '',
+      U_nITEM: '',
       U_ItemLoc: '',
       U_nItem: '',
       DiscountPercent: 0
@@ -8289,8 +8931,8 @@ function SalesOrdersView({
       if (newLines[index]) {
         const isTaxaField = field === 'Taxa';
         const taxaVal = isTaxaField ? parseDecimalInput(value) : 0;
-        newLines[index] = { 
-          ...newLines[index], 
+        newLines[index] = {
+          ...newLines[index],
           [field]: value,
           ...(field === 'CostingCode4' ? { ProjectCode: value } : {}),
           ...(isTaxaField && taxaVal > 0 ? {
@@ -8397,9 +9039,9 @@ function SalesOrdersView({
                     </TableCell>
                     <TableCell className="px-6 py-5 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button 
-                          onClick={() => handleOpenPrintLayout(o)} 
-                          className="p-3 hover:bg-evo-teal hover:text-white text-evo-teal transition-all rounded-none border border-evo-bg" 
+                        <button
+                          onClick={() => handleOpenPrintLayout(o)}
+                          className="p-3 hover:bg-evo-teal hover:text-white text-evo-teal transition-all rounded-none border border-evo-bg"
                           title="Visualizar Layout de Impressão PDF"
                         >
                           <Printer className="w-4 h-4" />
@@ -8421,8 +9063,8 @@ function SalesOrdersView({
               <span>Página {page + 1} ({orders.length} pedidos nesta página)</span>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] uppercase font-black tracking-widest text-evo-dark/40">Exibir:</span>
-                <select 
-                  value={pageSize} 
+                <select
+                  value={pageSize}
                   onChange={(e) => handlePageSizeChange(Number(e.target.value))}
                   className="border border-evo-bg bg-white px-2 py-1 text-xs font-bold rounded-none focus:outline-none"
                 >
@@ -8434,20 +9076,20 @@ function SalesOrdersView({
             </div>
 
             <div className="flex items-center gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(0)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(0)}
                 disabled={page === 0 || isLoading}
                 className="rounded-none h-9 px-3 text-[10px] uppercase font-black tracking-widest"
                 title="Primeira Página"
               >
                 <ChevronsLeft className="w-3.5 h-3.5" />
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(page - 1)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(page - 1)}
                 disabled={page === 0 || isLoading}
                 className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
               >
@@ -8456,10 +9098,10 @@ function SalesOrdersView({
               <span className="px-3 py-1 bg-evo-dark text-white text-xs font-black min-w-[32px] text-center">
                 {page + 1}
               </span>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => handlePageChange(page + 1)} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(page + 1)}
                 disabled={!hasMore || orders.length < pageSize || isLoading}
                 className="rounded-none h-9 px-4 text-[10px] uppercase font-black tracking-widest flex items-center gap-1"
               >
@@ -8467,9 +9109,9 @@ function SalesOrdersView({
               </Button>
               <div className="flex items-center gap-1.5 ml-2 border-l border-evo-bg pl-3">
                 <span className="text-[10px] uppercase font-bold text-evo-dark/40">Ir pág:</span>
-                <input 
-                  type="number" 
-                  min={1} 
+                <input
+                  type="number"
+                  min={1}
                   placeholder={`${page + 1}`}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -8490,8 +9132,8 @@ function SalesOrdersView({
       </div>
 
       {/* Main Order Modal */}
-      <Dialog 
-        open={isModalOpen} 
+      <Dialog
+        open={isModalOpen}
         onOpenChange={(open) => {
           if (!open) {
             if (isSavingOrderRef.current) {
@@ -8508,7 +9150,7 @@ function SalesOrdersView({
           <DialogHeader className="bg-evo-dark p-6 sm:p-8 text-white relative shrink-0">
             <div className="absolute top-0 right-0 p-6 flex items-center gap-3 z-10">
               {selectedOrder?.DocEntry && (
-                <Button 
+                <Button
                   type="button"
                   onClick={() => handleOpenPrintLayout(selectedOrder)}
                   className="rounded-none uppercase text-[9px] font-black px-4 h-10 tracking-widest bg-evo-teal hover:bg-evo-teal-dark text-white flex items-center gap-1.5 shadow-md"
@@ -8519,8 +9161,8 @@ function SalesOrdersView({
                 </Button>
               )}
               {selectedOrder?.DocEntry && (
-                <Button 
-                  onClick={handleDeleteOrder} 
+                <Button
+                  onClick={handleDeleteOrder}
                   disabled={isSaving}
                   variant="destructive"
                   className="rounded-none uppercase text-[9px] font-black px-6 h-10 tracking-widest"
@@ -8528,10 +9170,10 @@ function SalesOrdersView({
                   Excluir Pedido
                 </Button>
               )}
-              <Button 
-                type="button" 
-                variant="ghost" 
-                onClick={() => setShowConfirmClose(true)} 
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setShowConfirmClose(true)}
                 className="text-white hover:bg-white/10 p-2 h-10 w-10 flex items-center justify-center rounded-none"
               >
                 <X className="w-6 h-6" />
@@ -8553,13 +9195,13 @@ function SalesOrdersView({
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Código do Cliente</label>
                     <div className="flex gap-1">
-                      <Input 
+                      <Input
                         value={selectedOrder.CardCode}
                         onChange={(e) => setSelectedOrder({ ...selectedOrder, CardCode: e.target.value })}
                         className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold flex-1"
                         placeholder="EX: C20000"
                       />
-                      <Button 
+                      <Button
                         type="button"
                         variant="outline"
                         className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10"
@@ -8571,7 +9213,7 @@ function SalesOrdersView({
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Nome do Cliente</label>
-                    <Input 
+                    <Input
                       value={selectedOrder.CardName || ""}
                       onChange={(e) => setSelectedOrder({ ...selectedOrder, CardName: e.target.value })}
                       placeholder="Nome do Cliente"
@@ -8584,7 +9226,7 @@ function SalesOrdersView({
                       <span className="text-[8px] font-bold text-evo-teal uppercase">Dimensão 4</span>
                     </div>
                     <div className="flex gap-1">
-                      <Input 
+                      <Input
                         value={selectedOrder.CostingCode4 || selectedOrder.U_Projeto || selectedOrder.Project || selectedOrder.ProjectCode || ""}
                         onChange={(e) => {
                           const val = e.target.value.toUpperCase();
@@ -8608,9 +9250,9 @@ function SalesOrdersView({
                         placeholder="EX: WO 2040 OU PROJETO"
                         className="rounded-none border-2 border-evo-dark/10 focus:border-evo-teal h-11 uppercase font-bold text-evo-teal flex-1"
                       />
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                      <Button
+                        type="button"
+                        variant="outline"
                         className="rounded-none h-11 w-11 p-0 border-2 border-evo-dark/10 shrink-0 hover:bg-evo-dark hover:text-white"
                         onClick={() => setIsProjectLookupOpen(true)}
                         title="Pesquisar Projeto / WO"
@@ -8621,12 +9263,12 @@ function SalesOrdersView({
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">PO do Cliente</label>
-                    <Input 
+                    <Input
                       value={selectedOrder.NumAtCard || selectedOrder.U_POCliente || ""}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setSelectedOrder({ 
-                          ...selectedOrder, 
+                        setSelectedOrder({
+                          ...selectedOrder,
                           NumAtCard: val,
                           U_POCliente: val
                         });
@@ -8637,7 +9279,7 @@ function SalesOrdersView({
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Data de Vencimento</label>
-                    <Input 
+                    <Input
                       type="date"
                       value={selectedOrder.DocDueDate ? selectedOrder.DocDueDate.split('T')[0] : ""}
                       onChange={(e) => setSelectedOrder({ ...selectedOrder, DocDueDate: e.target.value })}
@@ -8647,9 +9289,9 @@ function SalesOrdersView({
                 </div>
 
                 {/* Section for Attachments (PO Cliente, Cotação Qualitech, Email de Aprovação) */}
-                <DocumentAttachmentsSection 
-                  documentType="order" 
-                  docId={selectedOrder.DocEntry || 'draft'} 
+                <DocumentAttachmentsSection
+                  documentType="order"
+                  docId={selectedOrder.DocEntry || 'draft'}
                 />
 
                 <div className="space-y-4">
@@ -8662,7 +9304,7 @@ function SalesOrdersView({
                       Adicionar Item
                     </Button>
                   </div>
-                  
+
                   <div className="border border-evo-dark/10 overflow-x-auto bg-white shadow-lg">
                     <Table className="min-w-[1380px] w-full">
                       <TableHeader className="bg-evo-dark">
@@ -8691,323 +9333,321 @@ function SalesOrdersView({
                           const baseLineCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
                           const lineTotalCalc = baseLineCalc * (1 - lineDiscPct / 100);
                           return (
-                          <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
-                            <TableCell className="px-3 py-4 min-w-[220px]">
-                              <div className="space-y-1.5">
-                                <div className="flex gap-1.5">
-                                  <Input 
-                                    value={line.ItemCode || ''}
-                                    onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
-                                    className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 min-w-[100px]"
-                                    placeholder="CÓDIGO (EX: ITEM-001)"
-                                  />
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline" 
-                                    className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
-                                    onClick={() => {
-                                      setLineIndexForLookup(idx);
-                                      setIsItemLookupOpen(true);
-                                    }}
-                                    title="Pesquisar Item no SAP"
-                                  >
-                                    <Search className="w-3.5 h-3.5" />
-                                  </Button>
+                            <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
+                              <TableCell className="px-3 py-4 min-w-[220px]">
+                                <div className="space-y-1.5">
+                                  <div className="flex gap-1.5">
+                                    <Input
+                                      value={line.ItemCode || ''}
+                                      onChange={(e) => updateLine(idx, 'ItemCode', e.target.value)}
+                                      className="h-9 rounded-none text-xs border-evo-bg bg-white font-bold text-evo-dark flex-1 min-w-[100px]"
+                                      placeholder="CÓDIGO (EX: ITEM-001)"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 w-9 p-0 rounded-none border-evo-bg hover:bg-evo-dark hover:text-white shrink-0"
+                                      onClick={() => {
+                                        setLineIndexForLookup(idx);
+                                        setIsItemLookupOpen(true);
+                                      }}
+                                      title="Pesquisar Item no SAP"
+                                    >
+                                      <Search className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Input
+                                      value={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        updateLine(idx, 'ItemDescription', val);
+                                        updateLine(idx, 'ItemName', val);
+                                        updateLine(idx, 'Dscription', val);
+                                      }}
+                                      className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
+                                      placeholder="Descrição do item ou serviço..."
+                                      title={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                    />
+                                    {(line.ItemDescription || line.ItemName || line.Dscription) && (
+                                      <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
+                                        {line.ItemDescription || line.ItemName || line.Dscription}
+                                      </p>
+                                    )}
+                                  </div>
                                 </div>
-                                <div className="space-y-1">
-                                  <Input 
-                                    value={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                              </TableCell>
+
+                              {/* Quantidade */}
+                              <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
+                                <DecimalInput
+                                  value={Number(line.Quantity) || 0}
+                                  onChange={(val) => updateLine(idx, 'Quantity', val)}
+                                  allowTimeFormat={false}
+                                  placeholder="1"
+                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
+                                />
+                              </TableCell>
+
+                              {/* Taxa */}
+                              <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
+                                <div className="relative w-full">
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
                                     onChange={(e) => {
-                                      const val = e.target.value;
-                                      updateLine(idx, 'ItemDescription', val);
-                                      updateLine(idx, 'ItemName', val);
-                                      updateLine(idx, 'Dscription', val);
+                                      const raw = e.target.value;
+                                      if (raw === '') {
+                                        updateLine(idx, 'Taxa', '');
+                                        return;
+                                      }
+                                      if (/^[-0-9.,]*$/.test(raw)) {
+                                        updateLine(idx, 'Taxa', raw);
+                                      }
                                     }}
-                                    className="h-8 rounded-none text-xs border-evo-bg bg-white font-semibold text-evo-dark focus:border-evo-teal w-full"
-                                    placeholder="Descrição do item ou serviço..."
-                                    title={line.ItemDescription || line.ItemName || line.Dscription || ''}
+                                    placeholder="0%"
+                                    className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
+                                    title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
                                   />
-                                  {(line.ItemDescription || line.ItemName || line.Dscription) && (
-                                    <p className="text-[9px] font-bold text-evo-teal uppercase tracking-tight bg-evo-teal/5 px-2 py-0.5 border-l-2 border-evo-teal break-words">
-                                      {line.ItemDescription || line.ItemName || line.Dscription}
-                                    </p>
+                                  {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
+                                    <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
                                   )}
                                 </div>
-                              </div>
-                            </TableCell>
+                              </TableCell>
 
-                            {/* Quantidade */}
-                            <TableCell className="px-2 py-4 min-w-[70px] w-[70px]">
-                              <DecimalInput 
-                                value={Number(line.Quantity) || 0}
-                                onChange={(val) => updateLine(idx, 'Quantity', val)}
-                                allowTimeFormat={false}
-                                placeholder="1"
-                                className="h-10 rounded-none text-xs border-evo-bg text-center font-black w-full"
-                              />
-                            </TableCell>
+                              {/* Valor Unitário */}
+                              <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
+                                <div className="relative w-full">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
+                                  <DecimalInput
+                                    value={Number(line.Price ?? line.UnitPrice ?? 0)}
+                                    onChange={(val) => {
+                                      updateLine(idx, 'Price', val);
+                                      updateLine(idx, 'UnitPrice', val);
+                                    }}
+                                    allowTimeFormat={false}
+                                    placeholder="0,00"
+                                    className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
+                                  />
+                                </div>
+                              </TableCell>
 
-                            {/* Taxa */}
-                            <TableCell className="px-2 py-4 min-w-[95px] w-[95px]">
-                              <div className="relative w-full">
-                                <Input 
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={line.Taxa !== undefined && line.Taxa !== null ? String(line.Taxa).replace('.', ',') : ''}
+                              {/* Desconto % */}
+                              <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
+                                <div className="relative w-full">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.5"
+                                    value={line.DiscountPercent ?? 0}
+                                    onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                    className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
+                                    placeholder="0%"
+                                  />
+                                </div>
+                              </TableCell>
+                              {/* Dim 1: País (CostingCode) */}
+                              <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
+                                <select
+                                  value={line.CostingCode || 'BR'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 1: País (CostingCode)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
+                                    <option value="BR">BR - Brasil</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
+                                    <option value={line.CostingCode}>{line.CostingCode}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 2: Empresa (CostingCode2) */}
+                              <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
+                                <select
+                                  value={line.CostingCode2 || 'MATRIZ'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 2: Empresa (CostingCode2)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
+                                    <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
+                                    <option value={line.CostingCode2}>{line.CostingCode2}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 3: Unidade / Operação (CostingCode3) */}
+                              <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
+                                <select
+                                  value={line.CostingCode3 || 'OPER_OFF'}
+                                  onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 3: Unidade / Operação (CostingCode3)"
+                                >
+                                  {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
+                                    <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
+                                  )}
+                                  {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
+                                    <option key={cc.FactorCode} value={cc.FactorCode}>
+                                      {cc.FactorCode} - {cc.FactorDescription}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
+                                    <option value={line.CostingCode3}>{line.CostingCode3}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+
+                              {/* Dim 4: Projeto / WO (CostingCode4) */}
+                              <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
+                                <select
+                                  value={line.CostingCode4 || line.ProjectCode || selectedOrder.CostingCode4 || selectedOrder.U_Projeto || 'BASE'}
                                   onChange={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === '') {
-                                      updateLine(idx, 'Taxa', '');
-                                      return;
-                                    }
-                                    if (/^[-0-9.,]*$/.test(raw)) {
-                                      updateLine(idx, 'Taxa', raw);
-                                    }
+                                    const val = e.target.value;
+                                    setSelectedOrder((prev: any) => {
+                                      if (!prev) return prev;
+                                      const newLines = [...(prev.DocumentLines || [])];
+                                      if (newLines[idx]) {
+                                        newLines[idx] = {
+                                          ...newLines[idx],
+                                          CostingCode4: val,
+                                          ProjectCode: val
+                                        };
+                                      }
+                                      return { ...prev, DocumentLines: newLines };
+                                    });
                                   }}
-                                  placeholder="0%"
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full bg-white pr-5"
-                                  title="Taxa percentual aplicada sobre o valor unitário: (Valor Unit. * Taxa%) * Quant."
-                                />
-                                {line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && (
-                                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-teal pointer-events-none">%</span>
-                                )}
-                              </div>
-                            </TableCell>
+                                  className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
+                                  title="Dimensão 4: Projeto / WO (CostingCode4)"
+                                >
+                                  <option value="">Nenhum Projeto</option>
+                                  {projects.map((p) => (
+                                    <option key={p.Code} value={p.Code}>
+                                      {p.Code} - {p.Name}
+                                    </option>
+                                  ))}
+                                  {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
+                                    <option value={line.CostingCode4}>{line.CostingCode4}</option>
+                                  )}
+                                </select>
+                              </TableCell>
+                              <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
+                                {(() => {
+                                  const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
+                                    ? parseDecimalInput(line.Taxa)
+                                    : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
+                                  const hasTaxa = taxaNum > 0;
+                                  const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
+                                  const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
+                                  return (
+                                    <div className="flex items-center gap-4">
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={hasTaxa}
+                                            className={`h-7 w-7 p-0 border rounded-none transition-all ${hasTaxa
+                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                : nItemVal
+                                                  ? 'bg-evo-teal/20 border-evo-teal text-evo-teal'
+                                                  : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
+                                              }`}
+                                            onClick={() => {
+                                              if (hasTaxa) {
+                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                return;
+                                              }
+                                              setActiveLineIndex(idx);
+                                              setIsPersCostModalOpen(true);
+                                            }}
+                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
+                                          >
+                                            <User className="w-3 h-3" />
+                                          </Button>
+                                          <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
+                                            {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
+                                          </span>
+                                        </div>
+                                      </div>
 
-                            {/* Valor Unitário */}
-                            <TableCell className="px-2 py-4 min-w-[135px] w-[135px]">
-                              <div className="relative w-full">
-                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-evo-dark/40 z-10 pointer-events-none">R$</span>
-                                <DecimalInput 
-                                  value={Number(line.Price ?? line.UnitPrice ?? 0)}
-                                  onChange={(val) => {
-                                    updateLine(idx, 'Price', val);
-                                    updateLine(idx, 'UnitPrice', val);
-                                  }}
-                                  allowTimeFormat={false}
-                                  placeholder="0,00"
-                                  className="h-10 rounded-none text-xs border-evo-bg pl-7 pr-2 text-right font-bold w-full focus:border-evo-teal bg-white"
-                                />
-                              </div>
-                            </TableCell>
+                                      <div className="w-[1px] h-7 bg-evo-bg" />
 
-                            {/* Desconto % */}
-                            <TableCell className="px-2 py-4 min-w-[75px] w-[75px]">
-                              <div className="relative w-full">
-                                <Input 
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.5"
-                                  value={line.DiscountPercent ?? 0}
-                                  onChange={(e) => updateLine(idx, 'DiscountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                                  className="h-10 rounded-none text-xs border-evo-bg text-center font-bold w-full"
-                                  placeholder="0%"
-                                />
-                              </div>
-                            </TableCell>
-                            {/* Dim 1: País (CostingCode) */}
-                            <TableCell className="px-2 py-4 min-w-[125px] w-[125px]">
-                              <select 
-                                value={line.CostingCode || 'BR'}
-                                onChange={(e) => updateLine(idx, 'CostingCode', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 1: País (CostingCode)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 1 && cc.FactorCode === 'BR') && (
-                                  <option value="BR">BR - Brasil</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode && !['BR', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 1).map(c => c.FactorCode)].includes(line.CostingCode) && (
-                                  <option value={line.CostingCode}>{line.CostingCode}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 2: Empresa (CostingCode2) */}
-                            <TableCell className="px-2 py-4 min-w-[130px] w-[130px]">
-                              <select 
-                                value={line.CostingCode2 || 'MATRIZ'}
-                                onChange={(e) => updateLine(idx, 'CostingCode2', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 2: Empresa (CostingCode2)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 2 && cc.FactorCode === 'MATRIZ') && (
-                                  <option value="MATRIZ">MATRIZ - Qualitech Matriz</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode2 && !['MATRIZ', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 2).map(c => c.FactorCode)].includes(line.CostingCode2) && (
-                                  <option value={line.CostingCode2}>{line.CostingCode2}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 3: Unidade / Operação (CostingCode3) */}
-                            <TableCell className="px-2 py-4 min-w-[140px] w-[140px]">
-                              <select 
-                                value={line.CostingCode3 || 'OPER_OFF'}
-                                onChange={(e) => updateLine(idx, 'CostingCode3', e.target.value)}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 3: Unidade / Operação (CostingCode3)"
-                              >
-                                {!costCenters.some(cc => Number(cc.InWhichDimension) === 3 && cc.FactorCode === 'OPER_OFF') && (
-                                  <option value="OPER_OFF">OPER_OFF - Operações Offshore</option>
-                                )}
-                                {costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map((cc) => (
-                                  <option key={cc.FactorCode} value={cc.FactorCode}>
-                                    {cc.FactorCode} - {cc.FactorDescription}
-                                  </option>
-                                ))}
-                                {line.CostingCode3 && !['OPER_OFF', ...costCenters.filter(cc => Number(cc.InWhichDimension) === 3).map(c => c.FactorCode)].includes(line.CostingCode3) && (
-                                  <option value={line.CostingCode3}>{line.CostingCode3}</option>
-                                )}
-                              </select>
-                            </TableCell>
-
-                            {/* Dim 4: Projeto / WO (CostingCode4) */}
-                            <TableCell className="px-2 py-4 min-w-[150px] w-[150px]">
-                              <select 
-                                value={line.CostingCode4 || line.ProjectCode || selectedOrder.CostingCode4 || selectedOrder.U_Projeto || 'BASE'}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setSelectedOrder((prev: any) => {
-                                    if (!prev) return prev;
-                                    const newLines = [...(prev.DocumentLines || [])];
-                                    if (newLines[idx]) {
-                                      newLines[idx] = {
-                                        ...newLines[idx],
-                                        CostingCode4: val,
-                                        ProjectCode: val
-                                      };
-                                    }
-                                    return { ...prev, DocumentLines: newLines };
-                                  });
-                                }}
-                                className="h-10 w-full rounded-none text-[10px] font-bold border border-evo-bg bg-white px-2 uppercase"
-                                title="Dimensão 4: Projeto / WO (CostingCode4)"
-                              >
-                                <option value="">Nenhum Projeto</option>
-                                {projects.map((p) => (
-                                  <option key={p.Code} value={p.Code}>
-                                    {p.Code} - {p.Name}
-                                  </option>
-                                ))}
-                                {line.CostingCode4 && !projects.some(p => p.Code === line.CostingCode4) && (
-                                  <option value={line.CostingCode4}>{line.CostingCode4}</option>
-                                )}
-                              </select>
-                            </TableCell>
-                            <TableCell className="px-2 py-4 min-w-[170px] w-[170px]">
-                              {(() => {
-                                const taxaNum = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== ''
-                                  ? parseDecimalInput(line.Taxa)
-                                  : (Number(line.CommisionPercent ?? line.CommissionPercent ?? line.Commission) || 0);
-                                const hasTaxa = taxaNum > 0;
-                                const nItemVal = hasTaxa ? '' : (line.U_nItem || line.U_nITEM);
-                                const itemLocVal = hasTaxa ? '' : (line.U_ItemLoc || line.U_ITEMLOC);
-                                return (
-                                  <div className="flex items-center gap-4">
-                                    <div className="flex flex-col gap-0.5">
-                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Pessoal</span>
-                                      <div className="flex items-center gap-1.5">
-                                        <Button 
-                                          size="sm" 
-                                          variant="ghost" 
-                                          disabled={hasTaxa}
-                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${
-                                            hasTaxa 
-                                              ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
-                                              : nItemVal 
-                                                ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-500 hover:bg-rose-100'
-                                          }`}
-                                          onClick={() => {
-                                            if (hasTaxa) {
-                                              toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
-                                              return;
-                                            }
-                                            setActiveLineIndex(idx);
-                                            setIsPersCostModalOpen(true);
-                                          }}
-                                          title={hasTaxa ? 'Item tarifado por taxa de comissão' : nItemVal ? `Custo de pessoal #${nItemVal}` : 'Lançar custo de pessoal individual'}
-                                        >
-                                          <User className="w-3 h-3" />
-                                        </Button>
-                                        <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : nItemVal ? 'text-evo-teal font-mono' : 'text-rose-400'}`}>
-                                          {nItemVal ? `#${nItemVal}` : 'S/ RECEITA'}
-                                        </span>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={hasTaxa}
+                                            className={`h-7 w-7 p-0 border rounded-none transition-all ${hasTaxa
+                                                ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                                                : itemLocVal
+                                                  ? 'bg-evo-teal/20 border-evo-teal text-evo-teal'
+                                                  : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
+                                              }`}
+                                            onClick={() => {
+                                              if (hasTaxa) {
+                                                toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
+                                                return;
+                                              }
+                                              setActiveLineIndex(idx);
+                                              setIsRentalCostModalOpen(true);
+                                            }}
+                                            title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
+                                          >
+                                            <Truck className="w-3 h-3" />
+                                          </Button>
+                                          <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
+                                            {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
+                                          </span>
+                                        </div>
                                       </div>
                                     </div>
-
-                                    <div className="w-[1px] h-7 bg-evo-bg" />
-
-                                    <div className="flex flex-col gap-0.5">
-                                      <span className="text-[8px] font-black text-evo-dark/30 uppercase tracking-tighter">Locação</span>
-                                      <div className="flex items-center gap-1.5">
-                                        <Button 
-                                          size="sm" 
-                                          variant="ghost" 
-                                          disabled={hasTaxa}
-                                          className={`h-7 w-7 p-0 border rounded-none transition-all ${
-                                            hasTaxa 
-                                              ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
-                                              : itemLocVal 
-                                                ? 'bg-evo-teal/20 border-evo-teal text-evo-teal' 
-                                                : 'bg-indigo-50 border-indigo-200 text-indigo-500 hover:bg-indigo-100'
-                                          }`}
-                                          onClick={() => {
-                                            if (hasTaxa) {
-                                              toast.info('Item com taxa aplicada: receitas de pessoal e locação não se aplicam a esta linha.');
-                                              return;
-                                            }
-                                            setActiveLineIndex(idx);
-                                            setIsRentalCostModalOpen(true);
-                                          }}
-                                          title={hasTaxa ? 'Item tarifado por taxa de comissão' : itemLocVal ? `Custo de locação #${itemLocVal}` : 'Lançar custo de locação individual'}
-                                        >
-                                          <Truck className="w-3 h-3" />
-                                        </Button>
-                                        <span className={`text-[8px] font-black uppercase ${hasTaxa ? 'text-slate-400' : itemLocVal ? 'text-evo-teal font-mono' : 'text-indigo-400'}`}>
-                                          {itemLocVal ? `#${itemLocVal}` : 'S/ RECEITA'}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              })()}
-                            </TableCell>
-                            <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
-                              <div>
-                                R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                {hasTaxa && (
-                                  <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                    (Taxa {taxaVal}%)
-                                  </span>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
+                                <div>
+                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                  {hasTaxa && (
+                                    <span className="block text-[8px] font-bold text-evo-teal font-mono">
+                                      (Taxa {taxaVal}%)
+                                    </span>
+                                  )}
+                                  {lineDiscPct > 0 && (
+                                    <span className="block text-[8px] font-bold text-rose-500 font-mono">
+                                      (-{lineDiscPct}%)
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="px-2 py-4 text-center w-10 min-w-[40px]">
+                                {selectedOrder.DocumentLines.length > 1 && (
+                                  <button onClick={() => handleRemoveLine(idx)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-none transition-colors" title="Remover Linha">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
                                 )}
-                                {lineDiscPct > 0 && (
-                                  <span className="block text-[8px] font-bold text-rose-500 font-mono">
-                                    (-{lineDiscPct}%)
-                                  </span>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className="px-2 py-4 text-center w-10 min-w-[40px]">
-                              {selectedOrder.DocumentLines.length > 1 && (
-                                <button onClick={() => handleRemoveLine(idx)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-none transition-colors" title="Remover Linha">
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
+                              </TableCell>
+                            </TableRow>
+                          );
                         })}
                       </TableBody>
                     </Table>
@@ -9050,11 +9690,10 @@ function SalesOrdersView({
                               type="button"
                               size="sm"
                               variant="outline"
-                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${
-                                orderDiscPct === pct 
-                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm' 
+                              className={`h-7 px-2.5 text-[9px] font-black rounded-none border transition-all ${orderDiscPct === pct
+                                  ? 'bg-evo-teal text-white border-evo-teal shadow-sm'
                                   : 'border-evo-bg hover:bg-evo-dark hover:text-white'
-                              }`}
+                                }`}
                               onClick={() => {
                                 const val = (orderSubtotal * pct) / 100;
                                 setSelectedOrder({
@@ -9149,7 +9788,7 @@ function SalesOrdersView({
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/40">Observações do Pedido</label>
-                  <textarea 
+                  <textarea
                     value={selectedOrder.Comments || ""}
                     onChange={(e) => setSelectedOrder({ ...selectedOrder, Comments: e.target.value })}
                     className="w-full min-h-[100px] p-4 rounded-none border-2 border-evo-dark/10 focus:border-evo-teal transition-colors text-sm"
@@ -9161,10 +9800,10 @@ function SalesOrdersView({
 
           <div className="bg-white p-8 border-t border-evo-dark/10 flex justify-end gap-4 shadow-2xl shrink-0">
             {selectedOrder?.DocEntry && (
-              <Button 
+              <Button
                 type="button"
-                variant="outline" 
-                onClick={() => handleOpenPrintLayout(selectedOrder)} 
+                variant="outline"
+                onClick={() => handleOpenPrintLayout(selectedOrder)}
                 className="rounded-none uppercase text-[10px] font-black border-2 border-evo-teal text-evo-teal hover:bg-evo-teal hover:text-white px-6 h-12 flex items-center gap-2"
               >
                 <Printer className="w-4 h-4" />
@@ -9172,7 +9811,7 @@ function SalesOrdersView({
               </Button>
             )}
             <Button variant="outline" onClick={() => setShowConfirmClose(true)} className="rounded-none uppercase text-[10px] font-black border-2 px-10">Fechar</Button>
-            <Button 
+            <Button
               onClick={handleSaveOrder}
               disabled={isSaving}
               className="evo-button-primary rounded-none px-12 h-12 shadow-lg"
@@ -9193,7 +9832,7 @@ function SalesOrdersView({
       />
 
       {/* Customer Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isBPLookupOpen}
         onClose={() => setIsBPLookupOpen(false)}
         title="Pesquisar Cliente / Parceiro"
@@ -9219,7 +9858,7 @@ function SalesOrdersView({
       />
 
       {/* Project / WO Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isProjectLookupOpen}
         onClose={() => setIsProjectLookupOpen(false)}
         title="Pesquisar Projeto / WO (Dimensão 4)"
@@ -9250,8 +9889,8 @@ function SalesOrdersView({
             const all = projects.length > 0 ? projects : await sapService.getProjects();
             if (!query.trim()) return all;
             const term = normalizeSearchText(query);
-            return all.filter((p: any) => 
-              normalizeSearchText(p.Code).includes(term) || 
+            return all.filter((p: any) =>
+              normalizeSearchText(p.Code).includes(term) ||
               normalizeSearchText(p.Name).includes(term)
             );
           } catch {
@@ -9267,7 +9906,7 @@ function SalesOrdersView({
       />
 
       {/* Item Lookup Dialog */}
-      <LookupDialog 
+      <LookupDialog
         isOpen={isItemLookupOpen}
         onClose={() => setIsItemLookupOpen(false)}
         title="Pesquisar Item"
@@ -9276,7 +9915,7 @@ function SalesOrdersView({
           if (lineIndexForLookup !== null) {
             const targetIdx = lineIndexForLookup;
             const desc = item.ItemName || item.ItemDescription || '';
-            
+
             // Check PriceList 1 in itemPrices if already attached, or query SAP PriceLists(1)
             let unitPrice = 0;
             let foundPrice = false;
@@ -9314,9 +9953,9 @@ function SalesOrdersView({
               const newLines = [...(prev.DocumentLines || [])];
               if (targetIdx >= 0 && targetIdx < newLines.length) {
                 const proj = prev.CostingCode4 || prev.U_Projeto || prev.Project || prev.ProjectCode || 'BASE';
-                newLines[targetIdx] = { 
-                  ...newLines[targetIdx], 
-                  ItemCode: item.ItemCode, 
+                newLines[targetIdx] = {
+                  ...newLines[targetIdx],
+                  ItemCode: item.ItemCode,
                   ItemDescription: desc,
                   ItemName: desc,
                   Dscription: desc,
@@ -9333,16 +9972,16 @@ function SalesOrdersView({
         }}
         searchFn={sapService.getItems}
         renderItem={(item: any) => (
-          <div className="flex justify-between items-center w-full">
-            <span className="font-black text-xs">{item.ItemCode}</span>
-            <span className="text-[10px] font-bold text-evo-dark/40 uppercase">{item.ItemName}</span>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 w-full">
+            <span className="font-black text-xs text-evo-teal shrink-0">{item.ItemCode}</span>
+            <span className="text-[11px] font-bold text-evo-dark uppercase whitespace-normal break-words leading-snug sm:text-right">{item.ItemName}</span>
           </div>
         )}
       />
 
       {/* Personnel Cost Sub-Modal */}
-      <PersonnelCostModal 
-        isOpen={isPersCostModalOpen} 
+      <PersonnelCostModal
+        isOpen={isPersCostModalOpen}
         onClose={() => setIsPersCostModalOpen(false)}
         docEntry={selectedOrder?.DocEntry}
         lineIndex={activeLineIndex}
@@ -9525,9 +10164,9 @@ function LookupDialog({ isOpen, onClose, title, placeholder, onSelect, searchFn,
                 >
                   <div className="flex-1 min-w-0">
                     {renderItem ? renderItem(item) : (
-                      <div className="flex justify-between items-center w-full">
-                        <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal">{item.CardCode || item.ItemCode}</span>
-                        <span className="text-[11px] font-bold text-evo-dark/60 uppercase truncate max-w-[280px]">{item.CardName || item.ItemName}</span>
+                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 w-full">
+                        <span className="font-black text-xs text-evo-dark group-hover:text-evo-teal shrink-0">{item.CardCode || item.ItemCode}</span>
+                        <span className="text-[11px] font-bold text-evo-dark/80 uppercase whitespace-normal break-words leading-snug sm:text-right">{item.CardName || item.ItemName}</span>
                       </div>
                     )}
                   </div>

@@ -10,7 +10,7 @@
 
 [functions]
   node_bundler = "esbuild"
-  included_files = ["config.ts", "serverApp.ts"]
+  included_files = ["config.ts", "serverApp.ts", "serverApprovalEngine.ts", "artefatos/**"]
 
 [[redirects]]
   from = "/api/*"
