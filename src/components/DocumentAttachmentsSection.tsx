@@ -60,6 +60,7 @@ export function DocumentAttachmentsSection({
   const [fileList, setFileList] = useState<StoredAttachment[]>(() => {
     return loadStoredAttachments(documentType, docId);
   });
+  const [isDragging, setIsDragging] = useState(false);
 
   // Re-load when docId changes
   useEffect(() => {
@@ -83,11 +84,8 @@ export function DocumentAttachmentsSection({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const filesArray: File[] = Array.from(files);
+  const processFilesArray = (filesArray: File[]) => {
+    if (!filesArray || filesArray.length === 0) return;
     let loadedCount = 0;
     const newItems: StoredAttachment[] = [];
 
@@ -118,8 +116,24 @@ export function DocumentAttachmentsSection({
 
       reader.readAsDataURL(file);
     });
+  };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    processFilesArray(Array.from(files));
     e.target.value = '';
+  };
+
+  const handleDropFiles = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (readOnly) return;
+    const dropped = e.dataTransfer?.files;
+    if (dropped && dropped.length > 0) {
+      processFilesArray(Array.from(dropped));
+    }
   };
 
   const handleRemove = (indexToRemove: number, fileName: string) => {
@@ -196,7 +210,22 @@ export function DocumentAttachmentsSection({
           />
           <label 
             htmlFor={inputId}
-            className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-evo-dark/20 hover:border-evo-teal bg-slate-50 hover:bg-slate-100/80 cursor-pointer transition-all group"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!isDragging) setIsDragging(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+            }}
+            onDrop={handleDropFiles}
+            className={`w-full flex flex-col items-center justify-center p-6 border-2 border-dashed cursor-pointer transition-all group ${
+              isDragging
+                ? 'border-evo-teal bg-evo-teal/10 scale-[1.01]'
+                : 'border-evo-dark/20 hover:border-evo-teal bg-slate-50 hover:bg-slate-100/80'
+            }`}
           >
             <div className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
               <Upload className="w-5 h-5 text-evo-teal" />

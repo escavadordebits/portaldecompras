@@ -337,9 +337,13 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
         : (line.CommisionPercent ?? line.CommissionPercent ?? line.Commission);
       const taxaVal = parseTaxaVal(rawTaxa);
       const hasTaxa = taxaVal > 0;
-      const baseCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+      const baseAmount = unitPrice * qty;
+      const valTaxaCalc = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
+      const baseCalc = baseAmount + valTaxaCalc;
       const lineDiscPct = Number(line.DiscountPercent) || 0;
-      const lineTotal = Number(line.LineTotal) || (baseCalc * (1 - lineDiscPct / 100));
+      const lineTotal = hasTaxa
+        ? (baseCalc * (1 - lineDiscPct / 100))
+        : (Number(line.LineTotal) || (baseCalc * (1 - lineDiscPct / 100)));
 
       if (isRental) {
         const itemLocKey = String(line.U_ItemLoc ?? line.U_ITEMLOC ?? '').trim();
@@ -451,7 +455,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
           taxaDobText = `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
         }
 
-        const totalTaxasVal = (custoPessoal?.U_TotalGeral !== undefined && Number(custoPessoal.U_TotalGeral) >= 0)
+        const totalTaxasVal = (custoPessoal?.U_TotalGeral !== undefined && Number(custoPessoal.U_TotalGeral) > 0)
           ? Number(custoPessoal.U_TotalGeral)
           : totalTaxasLinha;
 
@@ -459,9 +463,11 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
           ? totalTaxasVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : '0,00';
 
-        const lineTotalFinal = (custoPessoal?.U_Total !== undefined && Number(custoPessoal.U_Total) > 0)
-          ? Number(custoPessoal.U_Total)
-          : lineTotal;
+        const lineTotalFinal = hasTaxa
+          ? lineTotal
+          : (custoPessoal?.U_Total !== undefined && Number(custoPessoal.U_Total) > 0)
+            ? Number(custoPessoal.U_Total)
+            : lineTotal;
 
         const qtdDiariasNormal = custoPessoal?.U_QtdDiarias !== undefined ? Number(custoPessoal.U_QtdDiarias) : qty;
         const qtdDiariasStandBy = custoPessoal?.U_QtdDiariasSt !== undefined ? Number(custoPessoal.U_QtdDiariasSt) : 0;
@@ -487,7 +493,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
             noturnoNorDob: '-',
             hrExtrasDiurNot: '-',
             taxaDobDiurNot: '-',
-            totalTaxas: '-',
+            totalTaxas: totalTaxasVal > 0 ? totalTaxasStr : '-',
             totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           });
         } else {
@@ -613,9 +619,12 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
       disc = (calcServ + calcRent) * ((Number(currentDoc.DiscountPercent) || 0) / 100);
     }
 
-    const total = (currentDoc.DocTotal && Number(currentDoc.DocTotal) > 0)
-      ? Number(currentDoc.DocTotal)
-      : Math.max(0, calcServ + calcRent - disc);
+    const hasCalculatedRows = (calcServ + calcRent) > 0;
+    const total = hasCalculatedRows
+      ? Math.max(0, calcServ + calcRent - disc)
+      : (currentDoc.DocTotal && Number(currentDoc.DocTotal) > 0)
+        ? Number(currentDoc.DocTotal)
+        : Math.max(0, calcServ + calcRent - disc);
 
     return {
       serviceLines: services,
@@ -1693,7 +1702,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
-                                <div className="flex items-baseline font-black tracking-tight text-2xl">
+                                <div className="flex items-baseline font-black tracking-tight text-2xl notranslate" translate="no">
                                   <span className="text-[#0C3559]">Quali</span>
                                   <span className="text-[#0088D1]">tech</span>
                                 </div>
@@ -1823,7 +1832,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
-                                <div className="flex items-baseline font-black tracking-tight text-xl">
+                                <div className="flex items-baseline font-black tracking-tight text-xl notranslate" translate="no">
                                   <span className="text-[#0C3559]">Quali</span>
                                   <span className="text-[#0088D1]">tech</span>
                                 </div>

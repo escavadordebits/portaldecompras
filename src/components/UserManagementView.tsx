@@ -151,6 +151,48 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Global Inactivity Timeout State (Default 15 minutes)
+  const [globalTimeoutMinutes, setGlobalTimeoutMinutes] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('sap_portal_global_timeout_minutes'));
+    return !isNaN(saved) && saved >= 1 ? saved : 15;
+  });
+
+  // Global Require Client for WO Search State
+  const [globalRequireClientForWo, setGlobalRequireClientForWo] = useState<boolean>(() => {
+    return localStorage.getItem('sap_portal_global_require_client_for_wo') === 'true';
+  });
+
+  const handleSaveGlobalTimeout = async (mins: number) => {
+    const validMins = Math.max(1, Math.min(480, Number(mins) || 15));
+    setGlobalTimeoutMinutes(validMins);
+    localStorage.setItem('sap_portal_global_timeout_minutes', String(validMins));
+    try {
+      await setDoc(doc(db, 'settings', 'global_config'), {
+        inactivityTimeoutMinutes: validMins,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch {}
+    window.dispatchEvent(new CustomEvent('sap_timeout_config_updated', { detail: { globalTimeoutMinutes: validMins } }));
+    toast.success(`Tempo global de fechamento por inatividade atualizado para ${validMins} minutos!`);
+  };
+
+  const handleSaveGlobalRequireClientForWo = async (requireClient: boolean) => {
+    setGlobalRequireClientForWo(requireClient);
+    localStorage.setItem('sap_portal_global_require_client_for_wo', String(requireClient));
+    try {
+      await setDoc(doc(db, 'settings', 'global_config'), {
+        requireClientForWo: requireClient,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch {}
+    window.dispatchEvent(new CustomEvent('sap_timeout_config_updated', { detail: { globalRequireClientForWo: requireClient } }));
+    toast.success(
+      requireClient
+        ? 'Regra Global atualizada: Cliente OBRIGATÓRIO ao pesquisar por WO.'
+        : 'Regra Global atualizada: Busca LIVRE por WO (Cliente não obrigatório).'
+    );
+  };
+
   useEffect(() => {
     fetchUsers();
   }, []);
@@ -207,6 +249,15 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
         ? normalizeSapCompany(selectedUser.sapCompany.trim()) 
         : 'SBO_QUALITECH';
 
+      const userTimeoutVal = Number(selectedUser.inactivityTimeoutMinutes);
+      const validUserTimeout = !isNaN(userTimeoutVal) && userTimeoutVal > 0 ? userTimeoutVal : null;
+      const validUserRequireClientWo: boolean | null =
+        selectedUser.requireClientForWo === true || selectedUser.requireClientForWo === 'true'
+          ? true
+          : selectedUser.requireClientForWo === false || selectedUser.requireClientForWo === 'false'
+          ? false
+          : null;
+
       const updateData: any = {
         role: selectedUser.role,
         status: selectedUser.status,
@@ -214,9 +265,32 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
         sapEmail: selectedUser.sapEmail?.trim() || '',
         sapCompany: companyVal,
         password: selectedUser.password || '',
+        inactivityTimeoutMinutes: validUserTimeout,
+        requireClientForWo: validUserRequireClientWo,
         modules: selectedUser.modules || { ...DEFAULT_MODULES },
         updatedAt: serverTimestamp()
       };
+
+      const emailKey = (selectedUser.email || '').toLowerCase().trim();
+      if (emailKey) {
+        if (validUserTimeout) {
+          localStorage.setItem(`sap_portal_user_timeout_${emailKey}`, String(validUserTimeout));
+        } else {
+          localStorage.removeItem(`sap_portal_user_timeout_${emailKey}`);
+        }
+        if (validUserRequireClientWo !== null) {
+          localStorage.setItem(`sap_portal_user_require_client_wo_${emailKey}`, String(validUserRequireClientWo));
+        } else {
+          localStorage.removeItem(`sap_portal_user_require_client_wo_${emailKey}`);
+        }
+      }
+      window.dispatchEvent(new CustomEvent('sap_timeout_config_updated', {
+        detail: {
+          email: emailKey,
+          userTimeoutMinutes: validUserTimeout,
+          userRequireClientForWo: validUserRequireClientWo
+        }
+      }));
 
       await setDoc(userRef, updateData, { merge: true });
 
@@ -826,6 +900,75 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
         </div>
       </div>
 
+      {/* Global Session Timeout & WO Client Requirement Configuration Card */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white p-5 border border-evo-bg shadow-sm flex flex-col justify-between gap-4">
+          <div>
+            <h3 className="text-xs font-black uppercase tracking-widest text-evo-dark flex items-center gap-2">
+              Configuração Global de Sessão (Fechamento por Inatividade)
+            </h3>
+            <p className="text-[10px] font-bold text-evo-dark/50 mt-0.5">
+              Tempo padrão global (Padrão: 15 min). Quando definido no cadastro do usuário, a configuração individual prevalece e ignora o tempo global.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="number"
+                min={1}
+                max={480}
+                value={globalTimeoutMinutes}
+                onChange={(e) => setGlobalTimeoutMinutes(Number(e.target.value) || 15)}
+                className="w-24 h-10 rounded-none border-evo-bg text-xs font-black text-center"
+              />
+              <span className="text-[10px] font-black uppercase tracking-wider text-evo-dark/60">Minutos</span>
+            </div>
+            <Button
+              type="button"
+              onClick={() => handleSaveGlobalTimeout(globalTimeoutMinutes)}
+              className="h-10 rounded-none bg-evo-teal hover:bg-evo-teal-dark text-white uppercase text-[10px] font-black tracking-widest px-4"
+            >
+              Salvar Global
+            </Button>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 border border-evo-bg shadow-sm flex flex-col justify-between gap-4">
+          <div>
+            <h3 className="text-xs font-black uppercase tracking-widest text-evo-dark flex items-center gap-2">
+              Configuração Global — Exigir Cliente ao Pesquisar WO
+            </h3>
+            <p className="text-[10px] font-bold text-evo-dark/50 mt-0.5">
+              Define se o preenchimento do Cliente/Razão Social é obrigatório ao filtrar por WO. Se definido no cadastro do usuário, ignora esta configuração global.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              onClick={() => handleSaveGlobalRequireClientForWo(false)}
+              className={`h-10 rounded-none uppercase text-[10px] font-black tracking-widest px-4 ${
+                !globalRequireClientForWo
+                  ? 'bg-evo-teal text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Não Obrigatório (Busca Livre por WO)
+            </Button>
+            <Button
+              type="button"
+              onClick={() => handleSaveGlobalRequireClientForWo(true)}
+              className={`h-10 rounded-none uppercase text-[10px] font-black tracking-widest px-4 ${
+                globalRequireClientForWo
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Exigir Cliente (Obrigatório)
+            </Button>
+          </div>
+        </div>
+      </div>
+
       {/* Filter and Search Bar */}
       <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-evo-bg shadow-sm">
         <div className="relative flex-1">
@@ -1184,6 +1327,23 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
               </div>
             </div>
 
+            <div className="pt-3 border-t border-evo-bg">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">
+                  Tempo de Fechamento por Inatividade do Usuário (Minutos) — Opcional (Ignora Global)
+                </Label>
+                <Input 
+                  type="number"
+                  min={0}
+                  max={480}
+                  value={newUser.inactivityTimeoutMinutes || ''}
+                  onChange={(e) => setNewUser({ ...newUser, inactivityTimeoutMinutes: e.target.value ? Number(e.target.value) : null })}
+                  placeholder={`Deixe em branco para usar o Global (${globalTimeoutMinutes} min)`}
+                  className="rounded-none border-evo-bg h-10 text-xs font-bold"
+                />
+              </div>
+            </div>
+
             {/* Modules Checkboxes */}
             <div className="space-y-3 pt-4 border-t border-evo-bg">
               <div className="flex items-center justify-between">
@@ -1407,6 +1567,52 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                   list="sap-company-options"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-evo-bg grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">
+                  Tempo de Fechamento por Inatividade (Min) — Ignora Global
+                </Label>
+                <Input 
+                  type="number"
+                  min={0}
+                  max={480}
+                  value={selectedUser?.inactivityTimeoutMinutes || ''}
+                  onChange={(e) => setSelectedUser({ ...selectedUser, inactivityTimeoutMinutes: e.target.value ? Number(e.target.value) : null })}
+                  placeholder={`Deixe em branco para usar o Global (${globalTimeoutMinutes} min)`}
+                  className="rounded-none border-evo-bg h-10 text-xs font-bold"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-black uppercase text-evo-dark/60 tracking-widest">
+                  Exigir Cliente ao Pesquisar por WO — Ignora Global
+                </Label>
+                <select
+                  value={
+                    selectedUser?.requireClientForWo === true || selectedUser?.requireClientForWo === 'true'
+                      ? 'true'
+                      : selectedUser?.requireClientForWo === false || selectedUser?.requireClientForWo === 'false'
+                      ? 'false'
+                      : 'inherit'
+                  }
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSelectedUser({
+                      ...selectedUser,
+                      requireClientForWo: v === 'true' ? true : v === 'false' ? false : null
+                    });
+                  }}
+                  className="w-full h-10 px-3 border border-evo-bg bg-white text-xs font-bold uppercase text-evo-dark"
+                >
+                  <option value="inherit">
+                    Seguir Global ({globalRequireClientForWo ? 'Obrigatório' : 'Não Obrigatório'})
+                  </option>
+                  <option value="false">Não Obrigatório — Busca Livre por WO (Ignora Global)</option>
+                  <option value="true">Obrigatório — Exigir Cliente com WO (Ignora Global)</option>
+                </select>
               </div>
             </div>
 

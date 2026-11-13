@@ -84,14 +84,34 @@ export const ApprovalsCenterView: React.FC<ApprovalsCenterViewProps> = ({
 
   const getObjectTypeName = (type: string | number) => {
     const types: Record<string, string> = {
-      '18': 'Nota Fiscal de Entrada',
-      '22': 'Pedido de Compra',
-      '112': 'Esboço (Draft)',
-      '204': 'Adiantamento a Fornecedor',
-      '1470000113': 'Solicitação de Compra',
-      '540000006': 'Oferta de Compra'
+      '1470000113': 'Solicitação de compra (OPRQ - 1470000113)',
+      '540000006': 'Oferta de compra / Cotação (OPQT - 540000006)',
+      '22': 'Pedido de compra (OPOR - 22)',
+      '20': 'Recebimento de mercadorias (OPDN - 20)',
+      '21': 'Devolução de mercadorias (ORPD - 21)',
+      '18': 'Nota fiscal de entrada (OPCH - 18)',
+      '19': 'Dev. nota fiscal de entrada (ORPC - 19)',
+      '204': 'Solicitação / Adiantamento p/ fornecedor (ODPO - 204)',
+      '69': 'Despesas de importação (OIPF - 69)',
+      '112': 'Esboço de documento (ODRF - 112)'
     };
     return types[String(type)] || `Documento (${type})`;
+  };
+
+  const getTargetTableName = (type: string | number) => {
+    const tables: Record<string, string> = {
+      '1470000113': 'OPRQ',
+      '540000006': 'OPQT',
+      '22': 'OPOR',
+      '20': 'OPDN',
+      '21': 'ORPD',
+      '18': 'OPCH',
+      '19': 'ORPC',
+      '204': 'ODPO',
+      '69': 'OIPF',
+      '112': 'ODRF'
+    };
+    return tables[String(type)] || 'ODRF';
   };
 
   const fetchUnifiedData = async () => {
@@ -616,11 +636,17 @@ export const ApprovalsCenterView: React.FC<ApprovalsCenterViewProps> = ({
                       onChange={e => setDocTypeFilter(e.target.value)}
                       className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded font-semibold text-slate-700"
                     >
-                      <option value="ALL">Todos os Tipos</option>
-                      <option value="1470000113">Solicitação de Compra</option>
-                      <option value="22">Pedido de Compra</option>
-                      <option value="204">Adiantamento a Fornecedor</option>
-                      <option value="18">Nota Fiscal de Entrada</option>
+                      <option value="ALL">Todos os Tipos (ObjType)</option>
+                      <option value="1470000113">1470000113 - Solicitação de compra (OPRQ)</option>
+                      <option value="540000006">540000006 - Oferta de compra / Cotação (OPQT)</option>
+                      <option value="22">22 - Pedido de compra (OPOR)</option>
+                      <option value="20">20 - Recebimento de mercadorias (OPDN)</option>
+                      <option value="21">21 - Devolução de mercadorias (ORPD)</option>
+                      <option value="18">18 - Nota fiscal de entrada (OPCH)</option>
+                      <option value="19">19 - Dev. nota fiscal de entrada (ORPC)</option>
+                      <option value="204">204 - Adiantamento para fornecedor (ODPO)</option>
+                      <option value="69">69 - Despesas de importação (OIPF)</option>
+                      <option value="112">112 - Esboço de documento (ODRF)</option>
                     </select>
                   </div>
                 </div>
@@ -907,11 +933,18 @@ export const ApprovalsCenterView: React.FC<ApprovalsCenterViewProps> = ({
                       <td className="px-5 py-4">
                         <div className="flex flex-col gap-1">
                           <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 rounded text-[10px] font-bold text-amber-800 w-fit">
-                            Esboço (ODRF): #{item.draftDocEntry || 'N/A'}
+                            Esboço ODRF (112): #{item.draftDocEntry || 'N/A'}
+                          </span>
+                          <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[9px] font-bold text-slate-700 w-fit">
+                            Destino: {item.targetTable || getTargetTableName(item.objectType)} (ObjType {item.objectType})
                           </span>
                           {item.convertedDocEntry ? (
                             <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 rounded text-[10px] font-bold text-emerald-800 w-fit flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3" /> Doc. Efetivo: #{item.convertedDocNum || item.convertedDocEntry}
+                              <CheckCircle2 className="w-3 h-3" /> Efetivo ({item.targetTable || getTargetTableName(item.objectType)}): #{item.convertedDocNum || item.convertedDocEntry}
+                            </span>
+                          ) : item.status === 'N' ? (
+                            <span className="text-[10px] text-rose-500 font-semibold">
+                              Esboço recusado / cancelado
                             </span>
                           ) : (
                             <span className="text-[10px] text-slate-400 italic">

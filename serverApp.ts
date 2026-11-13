@@ -13,6 +13,10 @@ import {
   readPortalApprovalsStore,
   writePortalApprovalsStore,
   registerPortalDraftApproval,
+  updatePortalDraftApproval,
+  cancelPortalDraftApproval,
+  resolveMarketingObjectMeta,
+  SAP_MARKETING_OBJECTS_CATALOG,
   acquireConversionLock,
   releaseConversionLock,
   isEmailAuthorizedForStage,
@@ -671,7 +675,7 @@ apiRouter.post('/sap/Attachments2', upload.array('files'), async (req, res) => {
 
 // Unified Approvals Center Endpoints
 
-// 1. Get Approval Rules Catalog (models, authors, approvers)
+// 1. Get Approval Rules Catalog (models, authors, approvers, and marketing object types)
 apiRouter.get('/approvals/catalog', (req, res) => {
   try {
     const catalog = loadApprovalRulesCatalog();
@@ -679,7 +683,8 @@ apiRouter.get('/approvals/catalog', (req, res) => {
       success: true,
       models: catalog.modelsList,
       authors: catalog.authorsList,
-      approvers: catalog.approversList
+      approvers: catalog.approversList,
+      objectTypes: SAP_MARKETING_OBJECTS_CATALOG
     });
   } catch (err: any) {
     console.error('Error fetching approvals catalog:', err);
@@ -687,26 +692,61 @@ apiRouter.get('/approvals/catalog', (req, res) => {
   }
 });
 
-// 2. Create Draft in SAP and register for line-by-line portal approval
+// 2. Create Draft in SAP (ODRF - ObjType 112) and register for line-by-line portal approval with exact target ObjType
 apiRouter.post('/approvals/create-draft', async (req, res) => {
-  const { docObjectCode, objectType = '22', payload, userEmail, userName } = req.body;
-  if (!payload || !docObjectCode) {
-    return res.status(400).json({ error: 'Parâmetros "payload" e "docObjectCode" são obrigatórios.' });
+  const { docObjectCode, objectType, payload, userEmail, userName } = req.body;
+  if (!payload || (!docObjectCode && !objectType)) {
+    return res.status(400).json({ error: 'Parâmetros "payload" e ("docObjectCode" ou "objectType") são obrigatórios.' });
   }
 
   try {
+    const meta = resolveMarketingObjectMeta(objectType, docObjectCode || payload.DocObjectCode || payload.ObjectType);
+
     // Authenticate with SAP
     const auth = await doSapLogin(req, res);
     const sapConfig = getSapConfig(req);
 
-    // Format Draft payload
-    const draftPayload = {
-      ...payload,
-      DocObjectCode: docObjectCode,
-      Comments: payload.Comments ? (payload.Comments.includes('[PORTAL DE COMPRAS]') ? payload.Comments : `[PORTAL DE COMPRAS] ${payload.Comments}`) : '[PORTAL DE COMPRAS]'
-    };
+    // Format Draft payload and guarantee RequriedDate / RequiredDate for Purchase Requests & Quotations
+    const now = new Date();
+    const fallbackToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const resolvedReqDate = String(
+      payload.RequriedDate || payload.RequiredDate || payload.ReqDate || payload.DocDueDate || payload.DocDate || fallbackToday
+    ).split('T')[0];
 
-    console.log(`Creating Draft in SAP (${docObjectCode})...`);
+    const draftPayload: any = {
+      ...payload,
+      DocObjectCode: meta.docObjectCode,
+      DocDate: String(payload.DocDate || fallbackToday).split('T')[0],
+      DocDueDate: String(payload.DocDueDate || resolvedReqDate).split('T')[0],
+      TaxDate: String(payload.TaxDate || payload.DocDate || fallbackToday).split('T')[0],
+      RequriedDate: resolvedReqDate,
+      Comments: payload.Comments
+        ? (payload.Comments.includes('[PORTAL DE COMPRAS]') ? payload.Comments : `[PORTAL DE COMPRAS] ${payload.Comments}`)
+        : '[PORTAL DE COMPRAS]'
+    };
+    delete draftPayload.ReqDate;
+    delete draftPayload.RequiredDate;
+    delete draftPayload.Project;
+    delete draftPayload.ProjectCode;
+    delete draftPayload.ObjectType;
+
+    if (Array.isArray(draftPayload.DocumentLines)) {
+      draftPayload.DocumentLines = draftPayload.DocumentLines.map((line: any) => {
+        if (!line) return line;
+        const copy = { ...line };
+        delete copy.ProjectCode;
+        const lineReqDate = String(copy.RequiredDate || copy.RequriedDate || copy.ShipDate || resolvedReqDate).split('T')[0];
+        copy.RequiredDate = lineReqDate;
+        copy.ShipDate = String(copy.ShipDate || lineReqDate).split('T')[0];
+        delete copy.RequriedDate;
+        if (!copy.CostingCode) copy.CostingCode = 'BR';
+        if (!copy.CostingCode2) copy.CostingCode2 = 'MATRIZ';
+        if (!copy.CostingCode3) copy.CostingCode3 = 'OPER_OFF';
+        return copy;
+      });
+    }
+
+    console.log(`Creating Draft in SAP ODRF (112) -> Target ObjType=${meta.objType} (${meta.tableName} / ${meta.docObjectCode})...`);
     const sapResponse = await axios.post(`${sapConfig.baseUrl}/Drafts`, draftPayload, {
       httpsAgent: new https.Agent({ rejectUnauthorized: false }),
       headers: {
@@ -720,23 +760,28 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
     const draftData = sapResponse.data;
     const draftDocEntry = Number(draftData.DocEntry);
 
-    // Register line-by-line approval record
+    // Register line-by-line approval record with exact target ObjType and DocObjectCode
     const record = registerPortalDraftApproval({
       draftDocEntry,
       draftDocNum: draftData.DocNum || draftDocEntry,
-      objectType: String(objectType),
-      docObjectCode: String(docObjectCode),
+      objectType: meta.objType,
+      docObjectCode: meta.docObjectCode,
       authorEmail: userEmail || payload.RequesterEmail || '',
       authorName: userName || payload.RequesterName || '',
-      headerData: { ...draftData, ...payload },
+      headerData: { ...draftData, ...payload, DocObjectCode: meta.docObjectCode, ObjectType: meta.objType },
       rawLines: Array.isArray(draftData.DocumentLines) && draftData.DocumentLines.length > 0 ? draftData.DocumentLines : payload.DocumentLines || [],
-      draftPayload
+      draftPayload: { ...draftPayload, ...draftData, DocObjectCode: meta.docObjectCode, ObjectType: meta.objType }
     });
 
     res.json({
       success: true,
       draftDocEntry,
       draftDocNum: record.draftDocNum,
+      draftObjectType: '112',
+      draftTable: 'ODRF',
+      objectType: meta.objType,
+      targetTable: meta.tableName,
+      docObjectCode: meta.docObjectCode,
       approvalRecord: record,
       sapDraft: draftData
     });
@@ -748,6 +793,161 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
       error: 'Erro ao criar esboço (Draft) no SAP.',
       details: sapErrorMessage,
       raw: errorData
+    });
+  }
+});
+
+// 2b. Update Draft in SAP (ODRF - 112) and synchronize Portal Approval Record
+apiRouter.patch('/approvals/draft/:draftEntry', async (req, res) => {
+  const draftEntry = Number(req.params.draftEntry);
+  const { payload, objectType, docObjectCode, userEmail } = req.body || {};
+  if (isNaN(draftEntry) || !payload) {
+    return res.status(400).json({ error: 'draftEntry e payload são obrigatórios para alteração do esboço.' });
+  }
+
+  try {
+    const store = readPortalApprovalsStore();
+    const existing = store.find(r => r.draftDocEntry === draftEntry);
+    const meta = resolveMarketingObjectMeta(
+      objectType || payload.ObjectType || existing?.objectType,
+      docObjectCode || payload.DocObjectCode || existing?.docObjectCode
+    );
+
+    const auth = await doSapLogin(req, res);
+    const sapConfig = getSapConfig(req);
+
+    const patchBody: any = {
+      ...payload,
+      DocObjectCode: meta.docObjectCode
+    };
+    delete patchBody.ObjectType;
+    delete patchBody.Project;
+    delete patchBody.ProjectCode;
+
+    await axios.post(`${sapConfig.baseUrl}/Drafts(${draftEntry})`, patchBody, {
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      headers: {
+        'Cookie': auth.cookieHeader,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-HTTP-Method-Override': 'PATCH',
+        'B1S-ReplaceCollectionsOnPatch': 'true'
+      },
+      timeout: 25000
+    });
+
+    const updatedRecord = updatePortalDraftApproval(
+      draftEntry,
+      { ...patchBody, ObjectType: meta.objType, DocObjectCode: meta.docObjectCode },
+      userEmail
+    );
+
+    res.json({
+      success: true,
+      draftDocEntry: draftEntry,
+      draftObjectType: '112',
+      draftTable: 'ODRF',
+      objectType: meta.objType,
+      targetTable: meta.tableName,
+      docObjectCode: meta.docObjectCode,
+      approvalRecord: updatedRecord
+    });
+  } catch (err: any) {
+    const sapErrorMessage = err.response?.data?.error?.message?.value || err.message;
+    res.status(err.response?.status || 500).json({
+      error: `Erro ao atualizar o esboço #${draftEntry} no SAP.`,
+      details: sapErrorMessage
+    });
+  }
+});
+
+// 2c. Cancel / Delete Draft (ODRF - 112) or Effective Marketing Document (OPRQ, OPQT, OPOR, OPDN, ORPD, OPCH, ORPC, ODPO, OIPF)
+apiRouter.post('/approvals/cancel-document', async (req, res) => {
+  const { docEntry, objectType, docObjectCode, isDraft = false, reason, userEmail } = req.body || {};
+  const entryNum = Number(docEntry);
+  if (isNaN(entryNum)) {
+    return res.status(400).json({ error: 'docEntry inválido para cancelamento/exclusão.' });
+  }
+
+  try {
+    const auth = await doSapLogin(req, res);
+    const sapConfig = getSapConfig(req);
+    const store = readPortalApprovalsStore();
+    const portalDraft = store.find(r => r.draftDocEntry === entryNum);
+    const treatAsDraft = Boolean(isDraft || objectType === '112' || docObjectCode === 'oDrafts' || (portalDraft && !portalDraft.convertedDocEntry));
+    const meta = resolveMarketingObjectMeta(
+      objectType || portalDraft?.objectType,
+      docObjectCode || portalDraft?.docObjectCode
+    );
+
+    if (treatAsDraft) {
+      // Cancel or Delete Draft in ODRF (112)
+      try {
+        await axios.post(`${sapConfig.baseUrl}/Drafts(${entryNum})/Cancel`, {}, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: { 'Cookie': auth.cookieHeader },
+          timeout: 15000
+        });
+      } catch {
+        // Fallback to DELETE /Drafts(docEntry)
+        await axios.post(`${sapConfig.baseUrl}/Drafts(${entryNum})`, {}, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: {
+            'Cookie': auth.cookieHeader,
+            'X-HTTP-Method-Override': 'DELETE'
+          },
+          timeout: 15000
+        });
+      }
+
+      const cancelledRecord = cancelPortalDraftApproval(
+        entryNum,
+        reason || `Esboço (${meta.labelPt}) cancelado/excluído no Portal`,
+        userEmail || ''
+      );
+
+      return res.json({
+        success: true,
+        message: `Esboço #${entryNum} (ODRF 112 -> ${meta.tableName} ObjType ${meta.objType}) cancelado/excluído com sucesso.`,
+        docEntry: entryNum,
+        isDraft: true,
+        draftObjectType: '112',
+        objectType: meta.objType,
+        targetTable: meta.tableName,
+        approvalRecord: cancelledRecord
+      });
+    } else {
+      // Cancel / Close Effective Marketing Document
+      const endpoint = meta.serviceLayerEndpoint;
+      try {
+        await axios.post(`${sapConfig.baseUrl}/${endpoint}(${entryNum})/Cancel`, {}, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: { 'Cookie': auth.cookieHeader },
+          timeout: 20000
+        });
+      } catch (cancelErr: any) {
+        // Fallback to /Close for documents like PurchaseRequests or PurchaseQuotations if /Cancel is not allowed
+        await axios.post(`${sapConfig.baseUrl}/${endpoint}(${entryNum})/Close`, {}, {
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: { 'Cookie': auth.cookieHeader },
+          timeout: 20000
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: `${meta.labelPt} #${entryNum} (${meta.tableName} - ObjType ${meta.objType}) cancelado/encerrado com sucesso no SAP.`,
+        docEntry: entryNum,
+        isDraft: false,
+        objectType: meta.objType,
+        targetTable: meta.tableName
+      });
+    }
+  } catch (err: any) {
+    const sapErrorMessage = err.response?.data?.error?.message?.value || err.message;
+    res.status(err.response?.status || 500).json({
+      error: `Erro ao cancelar/excluir documento #${entryNum} no SAP.`,
+      details: sapErrorMessage
     });
   }
 });
@@ -778,7 +978,7 @@ apiRouter.get('/approvals/unified', async (req, res) => {
       console.warn('Could not fetch SAP ApprovalRequests (will return local portal records):', sapErr.message);
     }
 
-    // Enrich SAP Desktop ApprovalRequests with metadata from catalog
+    // Enrich SAP Desktop ApprovalRequests with metadata from catalog and SAP_MARKETING_OBJECTS_CATALOG
     const sapUnified = sapRequests.map((reqItem: any) => {
       const templateId = Number(reqItem.ApprovalTemplatesID);
       const matchedModel = catalog.modelsByCode.get(templateId);
@@ -786,8 +986,15 @@ apiRouter.get('/approvals/unified', async (req, res) => {
       const matchedAuthor = catalog.authorsById.get(originatorId);
 
       // Check if this SAP request was generated from Portal
-      const isFromPortal = portalRecords.some(p => p.draftDocEntry === Number(reqItem.DraftEntry)) ||
+      const matchedPortalRecord = portalRecords.find(p => p.draftDocEntry === Number(reqItem.DraftEntry));
+      const isFromPortal = Boolean(matchedPortalRecord) ||
         String(reqItem.Remarks || '').includes('[PORTAL DE COMPRAS]');
+
+      // Resolve exact Marketing Object Type (1470000113, 540000006, 22, 20, 21, 18, 19, 204, 69)
+      const meta = resolveMarketingObjectMeta(
+        matchedPortalRecord?.objectType || reqItem.ObjectType,
+        matchedPortalRecord?.docObjectCode
+      );
 
       // Map status: arsPending -> 'W', arsApproved -> 'Y', arsNotApproved -> 'N'
       const statusMap: Record<string, 'W' | 'Y' | 'N'> = {
@@ -802,8 +1009,12 @@ apiRouter.get('/approvals/unified', async (req, res) => {
         code: reqItem.Code,
         draftDocEntry: reqItem.DraftEntry,
         draftDocNum: reqItem.DraftEntry,
-        objectType: String(reqItem.ObjectType || '22'),
-        docObjectCode: reqItem.ObjectType === '1470000113' ? 'oPurchaseRequests' : reqItem.ObjectType === '204' ? 'oPurchaseDownPayments' : 'oPurchaseOrders',
+        draftObjectType: '112',
+        draftTable: 'ODRF',
+        objectType: meta.objType,
+        targetTable: meta.tableName,
+        docObjectCode: meta.docObjectCode,
+        objectTypeLabel: meta.labelPt,
         origin: isFromPortal ? 'PORTAL' : 'SAP_DESKTOP',
         status,
         creationDate: reqItem.CreationDate || '',
@@ -824,9 +1035,16 @@ apiRouter.get('/approvals/unified', async (req, res) => {
       };
     });
 
-    // Merge: Portal records take precedence if matching draftDocEntry
+    // Merge: Portal records take precedence if matching draftDocEntry, enriched with canonical ObjType metadata
     const combinedMap = new Map<number, any>();
     for (const p of portalRecords) {
+      const pMeta = resolveMarketingObjectMeta(p.objectType, p.docObjectCode || p.draftPayload?.DocObjectCode);
+      p.objectType = pMeta.objType;
+      p.docObjectCode = pMeta.docObjectCode;
+      p.targetTable = pMeta.tableName;
+      p.objectTypeLabel = pMeta.labelPt;
+      p.draftObjectType = '112';
+      p.draftTable = 'ODRF';
       combinedMap.set(p.draftDocEntry, p);
     }
     for (const s of sapUnified) {
@@ -854,7 +1072,8 @@ apiRouter.get('/approvals/unified', async (req, res) => {
       catalog: {
         models: catalog.modelsList,
         authors: catalog.authorsList,
-        approvers: catalog.approversList
+        approvers: catalog.approversList,
+        objectTypes: SAP_MARKETING_OBJECTS_CATALOG
       }
     });
   } catch (err: any) {
@@ -887,7 +1106,20 @@ apiRouter.get('/approvals/draft-detail/:draftEntry', async (req, res) => {
     });
 
     const draftData = draftRes.data;
+    const meta = resolveMarketingObjectMeta(
+      existing?.objectType || draftData.ObjectType,
+       draftData.DocObjectCode || existing?.docObjectCode
+    );
+
     if (existing) {
+      existing.objectType = meta.objType;
+      existing.docObjectCode = meta.docObjectCode;
+      existing.targetTable = meta.tableName;
+      existing.objectTypeLabel = meta.labelPt;
+      existing.draftObjectType = '112';
+      existing.draftTable = 'ODRF';
+      writePortalApprovalsStore(store);
+
       return res.json({
         success: true,
         approvalRecord: existing,
@@ -895,13 +1127,12 @@ apiRouter.get('/approvals/draft-detail/:draftEntry', async (req, res) => {
       });
     }
 
-    // If not already registered in portal store, register it dynamically
-    const objectType = draftData.DocObjectCode === 'oPurchaseRequests' ? '1470000113' : draftData.DocObjectCode === 'oPurchaseDownPayments' ? '204' : '22';
+    // If not already registered in portal store, register it dynamically with exact resolved ObjType
     const record = registerPortalDraftApproval({
       draftDocEntry: draftEntry,
       draftDocNum: draftData.DocNum || draftEntry,
-      objectType,
-      docObjectCode: draftData.DocObjectCode || 'oPurchaseOrders',
+      objectType: meta.objType,
+      docObjectCode: meta.docObjectCode,
       authorEmail: draftData.RequesterEmail || '',
       authorName: draftData.RequesterName || '',
       headerData: draftData,
@@ -956,12 +1187,12 @@ apiRouter.post('/approvals/decide', async (req, res) => {
         timeout: 15000
       });
       const draftData = draftRes.data;
-      const objectType = draftData.DocObjectCode === 'oPurchaseRequests' ? '1470000113' : draftData.DocObjectCode === 'oPurchaseDownPayments' ? '204' : '22';
+      const meta = resolveMarketingObjectMeta(draftData.ObjectType, draftData.DocObjectCode);
       record = registerPortalDraftApproval({
         draftDocEntry: docEntry,
         draftDocNum: draftData.DocNum || docEntry,
-        objectType,
-        docObjectCode: draftData.DocObjectCode || 'oPurchaseOrders',
+        objectType: meta.objType,
+        docObjectCode: meta.docObjectCode,
         authorEmail: draftData.RequesterEmail || '',
         authorName: draftData.RequesterName || '',
         headerData: draftData,
@@ -971,6 +1202,14 @@ apiRouter.post('/approvals/decide', async (req, res) => {
     } catch (e: any) {
       return res.status(404).json({ error: `Rascunho/Esboço ${docEntry} não encontrado no sistema.` });
     }
+  } else {
+    const meta = resolveMarketingObjectMeta(record.objectType, record.docObjectCode || record.draftPayload?.DocObjectCode);
+    record.objectType = meta.objType;
+    record.docObjectCode = meta.docObjectCode;
+    record.targetTable = meta.tableName;
+    record.objectTypeLabel = meta.labelPt;
+    record.draftObjectType = '112';
+    record.draftTable = 'ODRF';
   }
 
   const nowIso = new Date().toISOString();
@@ -1139,7 +1378,7 @@ apiRouter.post('/approvals/decide', async (req, res) => {
       } catch (saveDraftErr: any) {
         console.warn(`[CONVERSION METHOD 1 FAILED] DraftsService_SaveDraftToDocument failed: ${saveDraftErr.message}. Trying Fallback Method 2...`);
 
-        // Fallback Method 2: Read Draft, POST to target collection (PurchaseOrders / PurchaseRequests / PurchaseDownPayments), and close Draft
+        // Fallback Method 2: Read Draft, POST to target collection (OPRQ, OPQT, OPOR, OPDN, ORPD, OPCH, ORPC, ODPO, OIPF), and close Draft
         conversionMethod = 'Draft_Clone_And_Post';
         const draftGetRes = await axios.get(`${sapConfig.baseUrl}/Drafts(${docEntry})`, {
           httpsAgent: new https.Agent({ rejectUnauthorized: false }),
@@ -1148,16 +1387,15 @@ apiRouter.post('/approvals/decide', async (req, res) => {
         });
 
         const draftObj = draftGetRes.data;
-        const targetEndpoint =
-          draftObj.DocObjectCode === 'oPurchaseRequests' ? 'PurchaseRequests' :
-          draftObj.DocObjectCode === 'oPurchaseDownPayments' ? 'PurchaseDownPayments' :
-          'PurchaseOrders';
+        const targetMeta = resolveMarketingObjectMeta(record.objectType, draftObj.DocObjectCode);
+        const targetEndpoint = targetMeta.serviceLayerEndpoint;
 
         // Sanitize object for creation
         const finalDocPayload = { ...draftObj };
         delete finalDocPayload.DocEntry;
         delete finalDocPayload.DocNum;
         delete finalDocPayload.DocObjectCode;
+        delete finalDocPayload.ObjectType;
         delete finalDocPayload.ApprovalTemplatesID;
 
         const postDocRes = await axios.post(`${sapConfig.baseUrl}/${targetEndpoint}`, finalDocPayload, {
@@ -1191,7 +1429,7 @@ apiRouter.post('/approvals/decide', async (req, res) => {
 
       return res.json({
         success: true,
-        message: `Todas as linhas aprovadas! Esboço ${docEntry} convertido com sucesso em documento definitivo.`,
+        message: `Todas as linhas aprovadas! Esboço ${docEntry} (ODRF 112) convertido com sucesso em ${record.objectTypeLabel || 'documento definitivo'} (${record.targetTable || 'SAP'} - ObjType ${record.objectType}).`,
         convertedDocEntry,
         convertedDocNum,
         conversionMethod,
@@ -1269,30 +1507,61 @@ apiRouter.all('/sap/*', async (req, res) => {
     delete body.U_HENob;
   }
 
-  // Sanitize body for Purchase documents: ensure MainUsage in header (and TaxExtension) and replicate to lines if missing
+  // Sanitize body for Purchase Marketing Documents (OPRQ 1470000113, OPQT 540000006, OPOR 22, OPDN 20, ORPD 21, OPCH 18, ORPC 19, ODPO 204, OIPF 69, ODRF 112)
   if (
     (endpoint.startsWith('PurchaseOrders') ||
       endpoint.startsWith('PurchaseRequests') ||
       endpoint.startsWith('PurchaseQuotations') ||
       endpoint.startsWith('PurchaseDownPayments') ||
+      endpoint.startsWith('PurchaseDeliveryNotes') ||
+      endpoint.startsWith('PurchaseReturns') ||
+      endpoint.startsWith('PurchaseInvoices') ||
+      endpoint.startsWith('PurchaseCreditNotes') ||
+      endpoint.startsWith('LandedCosts') ||
       endpoint.startsWith('Drafts')) &&
+    (method === 'POST' || method === 'PATCH' || method === 'PUT') &&
     body &&
-    typeof body === 'object'
+    typeof body === 'object' &&
+    !endpoint.endsWith('/Cancel') &&
+    !endpoint.endsWith('/Close')
   ) {
     body = { ...body };
     delete body.Project;
     delete body.ProjectCode;
+    if (endpoint.startsWith('Drafts') && (body.DocObjectCode || body.ObjectType)) {
+      const resolvedDraftMeta = resolveMarketingObjectMeta(body.ObjectType, body.DocObjectCode);
+      body.DocObjectCode = resolvedDraftMeta.docObjectCode;
+    }
+    delete body.ObjectType;
     if (!body.U_DataPgto && body.U_dataPgto) {
       body.U_DataPgto = body.U_dataPgto;
     }
     delete body.U_dataPgto;
-    if (!body.U_DataPgto) {
+    if (method === 'POST' && !body.U_DataPgto) {
       const now = new Date();
       const yyyy = now.getFullYear();
       const mm = String(now.getMonth() + 1).padStart(2, '0');
       const dd = String(now.getDate()).padStart(2, '0');
       body.U_DataPgto = body.DocDate ? String(body.DocDate).split('T')[0] : `${yyyy}-${mm}-${dd}`;
     }
+    if (method === 'POST' || body.RequriedDate || body.RequiredDate || body.ReqDate || body.DocDueDate) {
+      const now = new Date();
+      const fallbackToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const resolvedHeaderReqDate = String(
+        body.RequriedDate || body.RequiredDate || body.ReqDate || body.DocDueDate || body.DocDate || body.U_DataPgto || fallbackToday
+      ).split('T')[0];
+      if (
+        endpoint.startsWith('PurchaseRequests') ||
+        endpoint.startsWith('PurchaseQuotations') ||
+        endpoint.startsWith('Drafts')
+      ) {
+        body.RequriedDate = resolvedHeaderReqDate;
+        if (method === 'POST' && !body.DocDueDate) body.DocDueDate = resolvedHeaderReqDate;
+      }
+    }
+    delete body.ReqDate;
+    delete body.RequiredDate;
+
     const rawMainUsage =
       body.MainUsage ??
       body.TaxExtension?.MainUsage ??
@@ -1306,10 +1575,17 @@ apiRouter.all('/sap/*', async (req, res) => {
       body.TaxExtension.MainUsage = parsedMainUsage;
     }
     if (Array.isArray(body.DocumentLines)) {
+      const now = new Date();
+      const fallbackToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const fallbackLineDate = String(body.RequriedDate || body.DocDueDate || body.DocDate || fallbackToday).split('T')[0];
       body.DocumentLines = body.DocumentLines.map((line: any) => {
         if (!line) return line;
         const copy = { ...line };
         delete copy.ProjectCode;
+        const lineReqDate = String(copy.RequiredDate || copy.RequriedDate || copy.ShipDate || fallbackLineDate).split('T')[0];
+        copy.RequiredDate = lineReqDate;
+        copy.ShipDate = String(copy.ShipDate || lineReqDate).split('T')[0];
+        delete copy.RequriedDate;
         if ((copy.Usage === undefined || copy.Usage === null) && parsedMainUsage && !isNaN(parsedMainUsage)) {
           copy.Usage = parsedMainUsage;
         }
@@ -1372,7 +1648,9 @@ apiRouter.all('/sap/*', async (req, res) => {
     'Cookie': cookieHeader,
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'SAP-Portal-Client/1.0'
+    'User-Agent': 'SAP-Portal-Client/1.0',
+    'Prefer': 'odata.maxpagesize=1000',
+    'B1S-CaseInsensitive': 'true'
   };
 
   if (method === 'PATCH') {
@@ -1385,7 +1663,8 @@ apiRouter.all('/sap/*', async (req, res) => {
   }
 
   Object.keys(req.headers).forEach(key => {
-    if (key.toLowerCase().startsWith('b1s-')) {
+    const lower = key.toLowerCase();
+    if (lower.startsWith('b1s-') || lower === 'prefer') {
       finalHeaders[key] = req.headers[key];
     }
   });
@@ -1435,6 +1714,17 @@ apiRouter.all('/sap/*', async (req, res) => {
 
   try {
     const response: any = await executeWithRetry();
+    // Synchronize local Portal Approvals store when a Draft (ODRF - 112) is updated or cancelled/deleted via /sap/Drafts(...)
+    const draftMatch = endpoint.match(/^Drafts\((\d+)\)(?:\/(Cancel|Close))?$/i);
+    if (draftMatch) {
+      const matchedDraftEntry = Number(draftMatch[1]);
+      const actionSuffix = (draftMatch[2] || '').toUpperCase();
+      if (method === 'DELETE' || actionSuffix === 'CANCEL' || actionSuffix === 'CLOSE') {
+        cancelPortalDraftApproval(matchedDraftEntry, 'Esboço cancelado/excluído via Service Layer');
+      } else if (method === 'PATCH' || method === 'PUT') {
+        updatePortalDraftApproval(matchedDraftEntry, body);
+      }
+    }
     res.json(response.data);
   } catch (error: any) {
     const errorData = error.response?.data;

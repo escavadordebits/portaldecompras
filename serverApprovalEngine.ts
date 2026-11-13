@@ -53,13 +53,163 @@ export interface PortalApprovalLine {
   requiredApprovers: LineApproverDecision[];
 }
 
+export interface SapMarketingObjectMeta {
+  objType: string;               // '1470000113' | '540000006' | '22' | '20' | '21' | '18' | '19' | '204' | '69' | '112'
+  tableName: string;             // 'OPRQ' | 'OPQT' | 'OPOR' | 'OPDN' | 'ORPD' | 'OPCH' | 'ORPC' | 'ODPO' | 'OIPF' | 'ODRF'
+  linesTableName: string;        // 'PRQ1' | 'PQT1' | 'POR1' | 'PDN1' | 'RPD1' | 'PCH1' | 'RPC1' | 'DPO1' | 'IPF1' | 'DRF1'
+  docObjectCode: string;         // 'oPurchaseRequests' | 'oPurchaseQuotations' | 'oPurchaseOrders' | ...
+  serviceLayerEndpoint: string;  // 'PurchaseRequests' | 'PurchaseQuotations' | 'PurchaseOrders' | ...
+  labelPt: string;               // Documento em Português
+}
+
+export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
+  {
+    objType: '1470000113',
+    tableName: 'OPRQ',
+    linesTableName: 'PRQ1',
+    docObjectCode: 'oPurchaseRequests',
+    serviceLayerEndpoint: 'PurchaseRequests',
+    labelPt: 'Solicitação de compra'
+  },
+  {
+    objType: '540000006',
+    tableName: 'OPQT',
+    linesTableName: 'PQT1',
+    docObjectCode: 'oPurchaseQuotations',
+    serviceLayerEndpoint: 'PurchaseQuotations',
+    labelPt: 'Oferta de compra (Cotação)'
+  },
+  {
+    objType: '22',
+    tableName: 'OPOR',
+    linesTableName: 'POR1',
+    docObjectCode: 'oPurchaseOrders',
+    serviceLayerEndpoint: 'PurchaseOrders',
+    labelPt: 'Pedido de compra'
+  },
+  {
+    objType: '20',
+    tableName: 'OPDN',
+    linesTableName: 'PDN1',
+    docObjectCode: 'oPurchaseDeliveryNotes',
+    serviceLayerEndpoint: 'PurchaseDeliveryNotes',
+    labelPt: 'Recebimento de mercadorias'
+  },
+  {
+    objType: '21',
+    tableName: 'ORPD',
+    linesTableName: 'RPD1',
+    docObjectCode: 'oPurchaseReturns',
+    serviceLayerEndpoint: 'PurchaseReturns',
+    labelPt: 'Devolução de mercadorias'
+  },
+  {
+    objType: '18',
+    tableName: 'OPCH',
+    linesTableName: 'PCH1',
+    docObjectCode: 'oPurchaseInvoices',
+    serviceLayerEndpoint: 'PurchaseInvoices',
+    labelPt: 'Nota fiscal de entrada'
+  },
+  {
+    objType: '19',
+    tableName: 'ORPC',
+    linesTableName: 'RPC1',
+    docObjectCode: 'oPurchaseCreditNotes',
+    serviceLayerEndpoint: 'PurchaseCreditNotes',
+    labelPt: 'Dev. nota fiscal de entrada'
+  },
+  {
+    objType: '204',
+    tableName: 'ODPO',
+    linesTableName: 'DPO1',
+    docObjectCode: 'oPurchaseDownPayments',
+    serviceLayerEndpoint: 'PurchaseDownPayments',
+    labelPt: 'Solicitação de adiantamento para fornecedor / Adiantamento para fornecedor'
+  },
+  {
+    objType: '69',
+    tableName: 'OIPF',
+    linesTableName: 'IPF1',
+    docObjectCode: 'oLandedCosts',
+    serviceLayerEndpoint: 'LandedCosts',
+    labelPt: 'Despesas de importação'
+  },
+  {
+    objType: '112',
+    tableName: 'ODRF',
+    linesTableName: 'DRF1',
+    docObjectCode: 'oDrafts',
+    serviceLayerEndpoint: 'Drafts',
+    labelPt: 'Esboço de documento'
+  }
+];
+
+export function resolveMarketingObjectMeta(input?: string | number | null, fallbackInput?: string | number | null): SapMarketingObjectMeta {
+  const candidates = [input, fallbackInput]
+    .map(v => String(v ?? '').trim())
+    .filter(Boolean);
+
+  for (const raw of candidates) {
+    const upper = raw.toUpperCase();
+    // Do not resolve to 112 (oDrafts) if a more specific target object code is available in fallbackInput
+    if ((upper === '112' || upper === 'ODRF' || upper === 'ODRAFTS' || upper === 'DRAFTS') && candidates.length > 1 && raw === candidates[0]) {
+      continue;
+    }
+    const exact = SAP_MARKETING_OBJECTS_CATALOG.find(
+      m =>
+        m.objType.toUpperCase() === upper ||
+        m.docObjectCode.toUpperCase() === upper ||
+        m.tableName.toUpperCase() === upper ||
+        m.linesTableName.toUpperCase() === upper ||
+        m.serviceLayerEndpoint.toUpperCase() === upper
+    );
+    if (exact) return exact;
+
+    if (upper.includes('PURCHASEREQUEST') || upper.includes('OPRQ') || upper.includes('SOLICIT')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[0]; // 1470000113
+    }
+    if (upper.includes('PURCHASEQUOTATION') || upper.includes('OPQT') || upper.includes('OFERTA') || upper.includes('COTAC')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[1]; // 540000006
+    }
+    if (upper.includes('PURCHASEORDER') || upper.includes('OPOR')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[2]; // 22
+    }
+    if (upper.includes('DELIVERYNOTE') || upper.includes('OPDN') || upper.includes('RECEBIMENTO')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[3]; // 20
+    }
+    if (upper.includes('PURCHASERETURN') || upper.includes('ORPD') || (upper.includes('DEVOLU') && !upper.includes('NOTA'))) {
+      return SAP_MARKETING_OBJECTS_CATALOG[4]; // 21
+    }
+    if (upper.includes('PURCHASEINVOICE') || upper.includes('OPCH') || upper.includes('NOTA FISCAL DE ENTRADA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[5]; // 18
+    }
+    if (upper.includes('CREDITNOTE') || upper.includes('ORPC') || upper.includes('DEV. NOTA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[6]; // 19
+    }
+    if (upper.includes('DOWNPAYMENT') || upper.includes('ODPO') || upper.includes('ADIANTAMENTO')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[7]; // 204
+    }
+    if (upper.includes('LANDEDCOST') || upper.includes('OIPF') || upper.includes('IMPORTA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[8]; // 69
+    }
+  }
+
+  // Default to Purchase Order (22 - OPOR) if unspecified
+  return SAP_MARKETING_OBJECTS_CATALOG[2];
+}
+
 export interface PortalApprovalRecord {
   id: string; // U_ExternalApprovalId, e.g. PORTAL-APR-46861
   code: number; // Numeric workflow ID for UI display
   draftDocEntry: number;
   draftDocNum?: number | null;
-  objectType: string; // '22' (PO), '1470000113' (PR), '204' (DownPayment)
-  docObjectCode: string; // 'oPurchaseOrders', 'oPurchaseRequests', 'oPurchaseDownPayments'
+  draftObjectType?: string; // '112' (ODRF - Esboço de documento)
+  draftTable?: string; // 'ODRF'
+  objectType: string; // '1470000113' | '540000006' | '22' | '20' | '21' | '18' | '19' | '204' | '69'
+  targetTable?: string; // 'OPRQ' | 'OPQT' | 'OPOR' | 'OPDN' | 'ORPD' | 'OPCH' | 'ORPC' | 'ODPO' | 'OIPF'
+  docObjectCode: string; // 'oPurchaseRequests' | 'oPurchaseQuotations' | 'oPurchaseOrders' | ...
+  objectTypeLabel?: string; // Nome em Português
   origin: 'PORTAL' | 'SAP_DESKTOP';
   status: 'W' | 'Y' | 'N';
   creationDate: string;
@@ -287,21 +437,23 @@ function normalizeCostCenterKey(rawCostCenter: string): string {
   return clean;
 }
 
-// Match a single line to the exact model in regrasdeaprovacao.xlsx based on DocType, Cost Center, Branch, and Value
+// Match a single line to the exact model in regrasdeaprovacao.xlsx based on DocType, Cost Center, Branch, Value, and Author Email
 export function resolveApprovalModelForLine(
   objectType: string,
   costCenterRaw: string,
   branchRaw: string,
-  amountForBracket: number
+  amountForBracket: number,
+  authorEmail?: string
 ): ApprovalModelRule {
   const catalog = loadApprovalRulesCatalog();
+  const meta = resolveMarketingObjectMeta(objectType);
   const cc = normalizeCostCenterKey(costCenterRaw);
   const isMacae = String(branchRaw || '').toUpperCase().includes('MACA') || String(branchRaw) === '3';
   const bracket: '0_10' | '10_100' | 'OVER_100' =
     amountForBracket <= 10000 ? '0_10' : amountForBracket <= 100000 ? '10_100' : 'OVER_100';
 
-  const isDownPayment = objectType === '204' || objectType === 'oPurchaseDownPayments';
-  const isInvoice = objectType === '18' || objectType === 'oPurchaseInvoices';
+  const isDownPayment = meta.objType === '204';
+  const isInvoice = meta.objType === '18' || meta.objType === '19';
 
   const candidates = catalog.modelsList.filter(m => {
     const upperName = m.name.toUpperCase();
@@ -340,16 +492,23 @@ export function resolveApprovalModelForLine(
 
   const bracketPool = bracketMatches.length > 0 ? bracketMatches : pool;
 
-  // Prefer branch [F] when Macaé
-  if (isMacae) {
-    const macaeMatch = bracketPool.find(m => m.name.toUpperCase().includes('[F]') || m.name.toUpperCase().endsWith(' F'));
-    if (macaeMatch) return macaeMatch;
-  } else {
-    const matrizMatch = bracketPool.find(m => !m.name.toUpperCase().includes('[F]') && !m.name.toUpperCase().endsWith(' F'));
-    if (matrizMatch) return matrizMatch;
+  // Filter by Branch ([F] when Macaé, non-[F] when Matriz)
+  const branchMatches = bracketPool.filter(m => {
+    const isModelMacae = m.name.toUpperCase().includes('[F]') || m.name.toUpperCase().endsWith(' F');
+    return isMacae ? isModelMacae : !isModelMacae;
+  });
+  const branchPool = branchMatches.length > 0 ? branchMatches : bracketPool;
+
+  // Prioritize model where the logged-in author's email is explicitly registered in model.authors
+  const cleanAuthorEmail = String(authorEmail || '').trim().toLowerCase();
+  if (cleanAuthorEmail) {
+    const authorMatch = branchPool.find(m =>
+      m.authors.some(a => isEmailAuthorizedForStage(cleanAuthorEmail, a.email))
+    );
+    if (authorMatch) return authorMatch;
   }
 
-  if (bracketPool.length > 0) return bracketPool[0];
+  if (branchPool.length > 0) return branchPool[0];
 
   // Fallback default rule if none matched
   return (
@@ -374,7 +533,8 @@ export function resolveApprovalModelForLine(
 export function buildPortalApprovalLines(
   objectType: string,
   headerData: any,
-  rawLines: any[]
+  rawLines: any[],
+  authorEmail?: string
 ): { lines: PortalApprovalLine[]; docTotal: number } {
   let docTotal = 0;
   const computedLines = (rawLines || []).map((l: any, idx: number) => {
@@ -386,6 +546,7 @@ export function buildPortalApprovalLines(
   });
 
   const effectiveDocTotal = Number(headerData?.DocTotal) || docTotal;
+  const effectiveAuthorEmail = authorEmail || headerData?.RequesterEmail || '';
 
   const lines: PortalApprovalLine[] = computedLines.map(({ raw, idx, qty, price, lineTotal }) => {
     const costCenter = String(raw.CostingCode3 || raw.CostingCode4 || headerData?.CostingCode3 || 'OPER_OFF').trim();
@@ -397,7 +558,7 @@ export function buildPortalApprovalLines(
 
     // Evaluate bracket using line total (or document total if line has same cost center)
     const bracketAmount = Math.max(lineTotal, effectiveDocTotal);
-    const matchedModel = resolveApprovalModelForLine(objectType, costCenter, branch, bracketAmount);
+    const matchedModel = resolveApprovalModelForLine(objectType, costCenter, branch, bracketAmount, effectiveAuthorEmail);
 
     const requiredApprovers: LineApproverDecision[] = matchedModel.stages.map(st => {
       const primaryApprover = st.approvers[0] || {
@@ -485,20 +646,47 @@ export function registerPortalDraftApproval(params: {
 }): PortalApprovalRecord {
   const catalog = loadApprovalRulesCatalog();
   const store = readPortalApprovalsStore();
+  const meta = resolveMarketingObjectMeta(params.objectType, params.docObjectCode || params.headerData?.DocObjectCode);
 
-  // Check if already exists for this draftDocEntry
-  const existingIdx = store.findIndex(r => r.draftDocEntry === params.draftDocEntry);
-  if (existingIdx !== -1) {
-    return store[existingIdx];
-  }
-
-  const { lines, docTotal } = buildPortalApprovalLines(params.objectType, params.headerData, params.rawLines);
-
-  // Match author in catalog by email or name if possible
   const emailLower = String(params.authorEmail || params.headerData?.RequesterEmail || '').toLowerCase().trim();
   const matchedAuthor = catalog.authorsList.find(
-    a => (emailLower && a.email.toLowerCase() === emailLower) ||
+    a => (emailLower && isEmailAuthorizedForStage(emailLower, a.email)) ||
       (params.authorName && a.name.toLowerCase().includes(params.authorName.toLowerCase()))
+  );
+
+  // Check if already exists for this draftDocEntry
+  const existingIdx = store.findIndex(r => r.draftDocEntry === Number(params.draftDocEntry));
+  if (existingIdx !== -1) {
+    const existing = store[existingIdx];
+    let updated = false;
+    // Repair or enrich metadata if existing record had generic/wrong objectType or missing author
+    if (existing.objectType !== meta.objType || existing.docObjectCode !== meta.docObjectCode || !existing.targetTable) {
+      existing.objectType = meta.objType;
+      existing.docObjectCode = meta.docObjectCode;
+      existing.targetTable = meta.tableName;
+      existing.objectTypeLabel = meta.labelPt;
+      existing.draftObjectType = '112';
+      existing.draftTable = 'ODRF';
+      updated = true;
+    }
+    if (!existing.authorEmail && (emailLower || matchedAuthor?.email)) {
+      existing.authorEmail = emailLower || matchedAuthor?.email || '';
+      existing.authorName = matchedAuthor?.name || params.authorName || existing.authorName;
+      existing.authorCode = matchedAuthor?.code || existing.authorCode;
+      existing.authorId = matchedAuthor?.id ?? existing.authorId;
+      updated = true;
+    }
+    if (updated) {
+      writePortalApprovalsStore(store);
+    }
+    return existing;
+  }
+
+  const { lines, docTotal } = buildPortalApprovalLines(
+    meta.objType,
+    params.headerData,
+    params.rawLines,
+    emailLower || matchedAuthor?.email
   );
 
   const now = new Date();
@@ -510,8 +698,12 @@ export function registerPortalDraftApproval(params: {
     code: 900000 + Number(params.draftDocEntry),
     draftDocEntry: Number(params.draftDocEntry),
     draftDocNum: params.draftDocNum || Number(params.draftDocEntry),
-    objectType: params.objectType,
-    docObjectCode: params.docObjectCode,
+    draftObjectType: '112',
+    draftTable: 'ODRF',
+    objectType: meta.objType,
+    targetTable: meta.tableName,
+    docObjectCode: meta.docObjectCode,
+    objectTypeLabel: meta.labelPt,
     origin: 'PORTAL',
     status: 'W',
     creationDate: isoDate,
@@ -519,7 +711,7 @@ export function registerPortalDraftApproval(params: {
     authorId: matchedAuthor?.id,
     authorCode: matchedAuthor?.code || 'PORTAL_USER',
     authorName: matchedAuthor?.name || params.authorName || params.authorEmail || 'Usuário Portal de Compras',
-    authorEmail: params.authorEmail || matchedAuthor?.email || '',
+    authorEmail: emailLower || matchedAuthor?.email || '',
     cardCode: params.headerData?.CardCode || '',
     cardName: params.headerData?.CardName || params.headerData?.RequesterName || params.headerData?.CardCode || 'Solicitação Interna',
     docTotal,
@@ -531,10 +723,89 @@ export function registerPortalDraftApproval(params: {
     convertedDocNum: null,
     convertedAt: null,
     conversionMethod: null,
-    draftPayload: params.draftPayload
+    draftPayload: {
+      ...(params.draftPayload || {}),
+      DocObjectCode: meta.docObjectCode,
+      ObjectType: meta.objType
+    }
   };
 
   store.unshift(record);
+  writePortalApprovalsStore(store);
+  return record;
+}
+
+export function updatePortalDraftApproval(
+  draftDocEntry: number,
+  updatedPatch: any,
+  userEmail?: string
+): PortalApprovalRecord | null {
+  const store = readPortalApprovalsStore();
+  const idx = store.findIndex(r => r.draftDocEntry === Number(draftDocEntry));
+  if (idx === -1) return null;
+
+  const existing = store[idx];
+  const meta = resolveMarketingObjectMeta(
+    updatedPatch?.ObjectType || updatedPatch?.DocObjectCode || existing.objectType,
+    existing.docObjectCode
+  );
+  const mergedPayload = {
+    ...(existing.draftPayload || {}),
+    ...(updatedPatch || {}),
+    DocObjectCode: meta.docObjectCode,
+    ObjectType: meta.objType
+  };
+
+  existing.objectType = meta.objType;
+  existing.docObjectCode = meta.docObjectCode;
+  existing.targetTable = meta.tableName;
+  existing.objectTypeLabel = meta.labelPt;
+  existing.draftObjectType = '112';
+  existing.draftTable = 'ODRF';
+
+  if (updatedPatch?.CardCode !== undefined) existing.cardCode = updatedPatch.CardCode;
+  if (updatedPatch?.CardName !== undefined) existing.cardName = updatedPatch.CardName;
+  if (updatedPatch?.Comments !== undefined) existing.comments = updatedPatch.Comments;
+
+  if (Array.isArray(updatedPatch?.DocumentLines) && updatedPatch.DocumentLines.length > 0) {
+    const { lines, docTotal } = buildPortalApprovalLines(
+      meta.objType,
+      mergedPayload,
+      updatedPatch.DocumentLines,
+      userEmail || existing.authorEmail
+    );
+    existing.lines = lines;
+    existing.docTotal = docTotal;
+  }
+
+  existing.draftPayload = mergedPayload;
+  writePortalApprovalsStore(store);
+  return existing;
+}
+
+export function cancelPortalDraftApproval(
+  draftDocEntry: number,
+  reason = 'Esboço cancelado/excluído no Portal de Compras',
+  actorEmail = ''
+): PortalApprovalRecord | null {
+  const store = readPortalApprovalsStore();
+  const idx = store.findIndex(r => r.draftDocEntry === Number(draftDocEntry));
+  if (idx === -1) return null;
+
+  const record = store[idx];
+  record.status = 'N';
+  const nowIso = new Date().toISOString();
+  record.lines.forEach(l => {
+    l.requiredApprovers.forEach(a => {
+      if (a.status === 'W') {
+        a.status = 'N';
+        a.approvedBy = actorEmail ? `Cancelado (${actorEmail})` : 'Cancelado';
+        a.approvedAt = nowIso;
+        a.remarks = reason;
+      }
+    });
+  });
+
   writePortalApprovalsStore(store);
   return record;
 }

@@ -64,6 +64,8 @@ export function PurchaseOrderPrintModal({ isOpen, onClose, order, userEmail }: P
   const [zoom, setZoom] = useState<number>(100);
   const [fullOrder, setFullOrder] = useState<any>(null);
   const [supplierBP, setSupplierBP] = useState<any>(null);
+  const [buyersList, setBuyersList] = useState<any[]>([]);
+  const [paymentTermsList, setPaymentTermsList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
@@ -126,6 +128,19 @@ export function PurchaseOrderPrintModal({ isOpen, onClose, order, userEmail }: P
             console.warn('Erro ao carregar dados do fornecedor:', e);
           }
         }
+
+        try {
+          const [bList, ptList] = await Promise.all([
+            sapService.getBuyers(),
+            sapService.getPaymentTerms()
+          ]);
+          if (isMounted) {
+            setBuyersList(Array.isArray(bList) ? bList : []);
+            setPaymentTermsList(Array.isArray(ptList) ? ptList : []);
+          }
+        } catch (e) {
+          console.warn('Erro ao carregar compradores/condições de pagamento:', e);
+        }
       } catch (err) {
         console.error('Erro ao preparar layout do pedido de compra:', err);
       } finally {
@@ -170,17 +185,55 @@ export function PurchaseOrderPrintModal({ isOpen, onClose, order, userEmail }: P
     '23/11/2026'
   );
 
-  // Contact & Sales Person
+  // Buyer (Compradora) & Contact resolution from SAP B1 OSLP / OUSR
+  const matchedBuyer = useMemo(() => {
+    const spCode = Number(currentDoc.SalesPersonCode ?? currentDoc.SlpCode ?? -1);
+    if (!isNaN(spCode) && spCode !== -1) {
+      const byCode = buyersList.find(b => Number(b.SalesEmployeeCode) === spCode);
+      if (byCode) return byCode;
+    }
+    const docMail = String(currentDoc.RequesterEmail || userEmail || '').trim().toLowerCase();
+    if (docMail) {
+      const byMail = buyersList.find(b => String(b.Email || '').trim().toLowerCase() === docMail);
+      if (byMail) return byMail;
+    }
+    return null;
+  }, [currentDoc, buyersList, userEmail]);
+
   const contactName = String(
-    currentDoc.Requester || 
-    currentDoc.ContactPerson || 
-    (currentDoc.UserSign ? `Usuário SAP ${currentDoc.UserSign}` : '') || 
-    '-Nenhum vendedor / compra'
+    matchedBuyer?.SalesEmployeeName ||
+    currentDoc.RequesterName ||
+    currentDoc.Requester ||
+    currentDoc.ContactPerson ||
+    (currentDoc.UserSign ? `Usuário SAP ${currentDoc.UserSign}` : '') ||
+    '-Nenhum comprador'
   );
-  const contactPhone = String(currentDoc.Phone || supplierBP?.Phone1 || supplierBP?.Cellular || '');
+  const contactEmail = String(
+    matchedBuyer?.Email ||
+    currentDoc.RequesterEmail ||
+    userEmail ||
+    ''
+  );
+  const contactPhone = String(
+    matchedBuyer?.Phone ||
+    matchedBuyer?.Telephone ||
+    matchedBuyer?.Mobile ||
+    currentDoc.Phone ||
+    supplierBP?.Phone1 ||
+    supplierBP?.Cellular ||
+    ''
+  );
 
   // Payment terms & method
-  const paymentCondition = String(currentDoc.PaymentGroupCode ?? currentDoc.GroupNumber ?? currentDoc.U_CondicaoPG ?? '--');
+  const paymentCondition = useMemo(() => {
+    const rawCode = currentDoc.PaymentGroupCode ?? currentDoc.GroupNumber ?? currentDoc.U_CondicaoPG;
+    if (rawCode !== undefined && rawCode !== null) {
+      const found = paymentTermsList.find(pt => Number(pt.GroupNumber ?? pt.GroupNum) === Number(rawCode));
+      if (found) return String(found.PaymentTermsGroupName || found.PymntGroup || rawCode);
+      return String(rawCode);
+    }
+    return '--';
+  }, [currentDoc, paymentTermsList]);
   const paymentMethodCode = String(currentDoc.PaymentMethod || currentDoc.PeyMethod || currentDoc.U_FormaPG || 'P-TRF-ITA-43410');
   const paymentMethodDesc = String(currentDoc.PaymentMethodDesc || currentDoc.U_FormaPGDesc || 'Pagamento Transferência Itaú Ag. 3032 Cc. 43410-6');
 
@@ -366,18 +419,25 @@ export function PurchaseOrderPrintModal({ isOpen, onClose, order, userEmail }: P
       docInstance.text(docDateFormatted, 205, 37.5);
       docInstance.text(docDueDateFormatted, 255, 37.5);
 
-      // Seu Contato & Telefone
+      // Seu Contato (Compradora), E-mail & Telefone
       docInstance.setFont('helvetica', 'normal');
       docInstance.setFontSize(7);
       docInstance.setTextColor(100, 116, 139);
-      docInstance.text('Seu Contato', 205, 42);
-      docInstance.text('Telefone', 265, 42);
+      docInstance.text('Comprador(a) / Contato', 205, 42);
+      docInstance.text('Telefone', 260, 42);
 
       docInstance.setFont('helvetica', 'bold');
       docInstance.setFontSize(7.5);
       docInstance.setTextColor(15, 23, 42);
-      docInstance.text(contactName.slice(0, 32), 205, 46.5);
-      docInstance.text(contactPhone || '-', 265, 46.5);
+      docInstance.text(contactName.slice(0, 30), 205, 46);
+      docInstance.text(contactPhone || '-', 260, 46);
+
+      if (contactEmail) {
+        docInstance.setFont('helvetica', 'normal');
+        docInstance.setFontSize(6.8);
+        docInstance.setTextColor(3, 105, 161);
+        docInstance.text(`E-mail: ${contactEmail}`, 205, 49.2);
+      }
 
       // Left Company Header (Qualitech Shell Logo + Text)
       try {
@@ -993,16 +1053,21 @@ QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA`;
                     <div className="flex justify-between items-start pb-4">
                       {/* Left Company Header */}
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2 mb-2">
+                        <div className="flex items-center gap-2 mb-2 notranslate" translate="no">
                           <img 
-                            src={QUALITECH_LOGO_PNG} 
+                            src="/qualitech-shell.png" 
                             alt="Qualitech Shell" 
-                            className="h-10 w-10 object-contain" 
+                            className="h-9 w-9 object-contain"
+                            onError={(e) => {
+                              e.currentTarget.src = QUALITECH_LOGO_PNG;
+                            }}
                           />
-                          <div className="flex items-baseline font-black tracking-tight text-2xl">
-                            <span className="text-[#0C3559]">Quali</span>
-                            <span className="text-[#0088D1]">tech</span>
-                          </div>
+                          <svg width="118" height="28" viewBox="0 0 118 28" className="notranslate select-none" aria-label="Qualitech">
+                            <text x="0" y="22" fontFamily="Arial, Helvetica, sans-serif" fontWeight="900" fontSize="24" letterSpacing="-0.5">
+                              <tspan fill="#0C3559">Quali</tspan>
+                              <tspan fill="#0088D1">tech</tspan>
+                            </text>
+                          </svg>
                         </div>
                         <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                           QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA
@@ -1047,13 +1112,19 @@ QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA`;
                           </div>
 
                           <div className="flex justify-between text-[11px] text-slate-500 pt-1">
-                            <span>Seu Contato</span>
+                            <span>Comprador(a) / Contato</span>
                             <span>Telefone</span>
                           </div>
                           <div className="flex justify-between text-[11px] text-slate-900 font-bold">
                             <span className="truncate max-w-[200px]">{contactName}</span>
                             <span>{contactPhone || '-'}</span>
                           </div>
+                          {contactEmail && (
+                            <div className="flex justify-between text-[10px] text-[#0284c7] font-bold">
+                              <span>E-mail Comprador(a):</span>
+                              <span className="truncate max-w-[200px]">{contactEmail}</span>
+                            </div>
+                          )}
 
                           <div className="flex justify-between text-[11px] text-slate-500 pt-1">
                             <span>Condição de PG</span>
@@ -1179,16 +1250,21 @@ QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA`;
                     <div className="flex justify-between items-start pb-4">
                       {/* Left Company Header */}
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2 mb-2">
+                        <div className="flex items-center gap-2 mb-2 notranslate" translate="no">
                           <img 
-                            src={QUALITECH_LOGO_PNG} 
+                            src="/qualitech-shell.png" 
                             alt="Qualitech Shell" 
-                            className="h-10 w-10 object-contain" 
+                            className="h-9 w-9 object-contain"
+                            onError={(e) => {
+                              e.currentTarget.src = QUALITECH_LOGO_PNG;
+                            }}
                           />
-                          <div className="flex items-baseline font-black tracking-tight text-2xl">
-                            <span className="text-[#0C3559]">Quali</span>
-                            <span className="text-[#0088D1]">tech</span>
-                          </div>
+                          <svg width="118" height="28" viewBox="0 0 118 28" className="notranslate select-none" aria-label="Qualitech">
+                            <text x="0" y="22" fontFamily="Arial, Helvetica, sans-serif" fontWeight="900" fontSize="24" letterSpacing="-0.5">
+                              <tspan fill="#0C3559">Quali</tspan>
+                              <tspan fill="#0088D1">tech</tspan>
+                            </text>
+                          </svg>
                         </div>
                         <h2 className="text-xs font-black uppercase text-slate-900 tracking-tight">
                           QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA
@@ -1233,13 +1309,19 @@ QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA`;
                           </div>
 
                           <div className="flex justify-between text-[11px] text-slate-500 pt-1">
-                            <span>Seu Contato</span>
+                            <span>Comprador(a) / Contato</span>
                             <span>Telefone</span>
                           </div>
                           <div className="flex justify-between text-[11px] text-slate-900 font-bold">
                             <span className="truncate max-w-[200px]">{contactName}</span>
                             <span>{contactPhone || '-'}</span>
                           </div>
+                          {contactEmail && (
+                            <div className="flex justify-between text-[10px] text-[#0284c7] font-bold">
+                              <span>E-mail Comprador(a):</span>
+                              <span className="truncate max-w-[200px]">{contactEmail}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

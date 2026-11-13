@@ -7,9 +7,24 @@ const api = axios.create({
   timeout: 65000 // Slightly longer than server timeout
 });
 
-// In-memory cache for customers
+// In-memory cache for customers, suppliers, active branches (OBPL), buyers, usages, payment terms, payment methods, and accounting lookups
 let _cachedCustomers: any[] | null = null;
 let _cachedCustomersPromise: Promise<any[]> | null = null;
+let _cachedSuppliers: any[] | null = null;
+let _cachedSuppliersPromise: Promise<any[]> | null = null;
+let _cachedBusinessPlaces: any[] | null = null;
+let _cachedBuyers: any[] | null = null;
+let _cachedBuyersPromise: Promise<any[]> | null = null;
+let _cachedUsages: any[] | null = null;
+let _cachedUsagesPromise: Promise<any[]> | null = null;
+let _cachedPaymentTerms: any[] | null = null;
+let _cachedPaymentTermsPromise: Promise<any[]> | null = null;
+let _cachedPaymentMethods: any[] | null = null;
+let _cachedDimensions: any[] | null = null;
+let _cachedDistributionRules: any[] | null = null;
+let _cachedDistributionRulesPromise: Promise<any[]> | null = null;
+let _cachedProjects: any[] | null = null;
+let _cachedProjectsPromise: Promise<any[]> | null = null;
 
 // In-memory & local cache for personnel costs (@CUSTOSPESSOAL)
 const _personnelCostsCache: Record<string, any> = {};
@@ -126,6 +141,7 @@ export interface ODataQueryOptions {
   skip?: number;
   top?: number;
   search?: string;
+  wo?: string;
   filter?: string;
   orderby?: string;
 }
@@ -312,8 +328,217 @@ export function calculateUDataPgtoFromPymntGroup(pymntGroup?: string | number | 
   return `${yyyy}-${mm}-${dd}`;
 }
 
+export interface SapMarketingObjectMeta {
+  objType: string;
+  tableName: string;
+  linesTableName: string;
+  docObjectCode: string;
+  serviceLayerEndpoint: string;
+  labelPt: string;
+}
+
+export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
+  {
+    objType: '1470000113',
+    tableName: 'OPRQ',
+    linesTableName: 'PRQ1',
+    docObjectCode: 'oPurchaseRequests',
+    serviceLayerEndpoint: 'PurchaseRequests',
+    labelPt: 'Solicitação de compra'
+  },
+  {
+    objType: '540000006',
+    tableName: 'OPQT',
+    linesTableName: 'PQT1',
+    docObjectCode: 'oPurchaseQuotations',
+    serviceLayerEndpoint: 'PurchaseQuotations',
+    labelPt: 'Oferta de compra (Cotação)'
+  },
+  {
+    objType: '22',
+    tableName: 'OPOR',
+    linesTableName: 'POR1',
+    docObjectCode: 'oPurchaseOrders',
+    serviceLayerEndpoint: 'PurchaseOrders',
+    labelPt: 'Pedido de compra'
+  },
+  {
+    objType: '20',
+    tableName: 'OPDN',
+    linesTableName: 'PDN1',
+    docObjectCode: 'oPurchaseDeliveryNotes',
+    serviceLayerEndpoint: 'PurchaseDeliveryNotes',
+    labelPt: 'Recebimento de mercadorias'
+  },
+  {
+    objType: '21',
+    tableName: 'ORPD',
+    linesTableName: 'RPD1',
+    docObjectCode: 'oPurchaseReturns',
+    serviceLayerEndpoint: 'PurchaseReturns',
+    labelPt: 'Devolução de mercadorias'
+  },
+  {
+    objType: '18',
+    tableName: 'OPCH',
+    linesTableName: 'PCH1',
+    docObjectCode: 'oPurchaseInvoices',
+    serviceLayerEndpoint: 'PurchaseInvoices',
+    labelPt: 'Nota fiscal de entrada'
+  },
+  {
+    objType: '19',
+    tableName: 'ORPC',
+    linesTableName: 'RPC1',
+    docObjectCode: 'oPurchaseCreditNotes',
+    serviceLayerEndpoint: 'PurchaseCreditNotes',
+    labelPt: 'Dev. nota fiscal de entrada'
+  },
+  {
+    objType: '204',
+    tableName: 'ODPO',
+    linesTableName: 'DPO1',
+    docObjectCode: 'oPurchaseDownPayments',
+    serviceLayerEndpoint: 'PurchaseDownPayments',
+    labelPt: 'Solicitação de adiantamento para fornecedor / Adiantamento para fornecedor'
+  },
+  {
+    objType: '69',
+    tableName: 'OIPF',
+    linesTableName: 'IPF1',
+    docObjectCode: 'oLandedCosts',
+    serviceLayerEndpoint: 'LandedCosts',
+    labelPt: 'Despesas de importação'
+  },
+  {
+    objType: '112',
+    tableName: 'ODRF',
+    linesTableName: 'DRF1',
+    docObjectCode: 'oDrafts',
+    serviceLayerEndpoint: 'Drafts',
+    labelPt: 'Esboço de documento'
+  }
+];
+
+export function resolveMarketingObjectMeta(input?: string | number | null, fallbackInput?: string | number | null): SapMarketingObjectMeta {
+  const candidates = [input, fallbackInput]
+    .map(v => String(v ?? '').trim())
+    .filter(Boolean);
+
+  for (const raw of candidates) {
+    const upper = raw.toUpperCase();
+    if ((upper === '112' || upper === 'ODRF' || upper === 'ODRAFTS' || upper === 'DRAFTS') && candidates.length > 1 && raw === candidates[0]) {
+      continue;
+    }
+    const exact = SAP_MARKETING_OBJECTS_CATALOG.find(
+      m =>
+        m.objType.toUpperCase() === upper ||
+        m.docObjectCode.toUpperCase() === upper ||
+        m.tableName.toUpperCase() === upper ||
+        m.linesTableName.toUpperCase() === upper ||
+        m.serviceLayerEndpoint.toUpperCase() === upper
+    );
+    if (exact) return exact;
+
+    if (upper.includes('PURCHASEREQUEST') || upper.includes('OPRQ') || upper.includes('SOLICIT')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[0]; // 1470000113
+    }
+    if (upper.includes('PURCHASEQUOTATION') || upper.includes('OPQT') || upper.includes('OFERTA') || upper.includes('COTAC')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[1]; // 540000006
+    }
+    if (upper.includes('PURCHASEORDER') || upper.includes('OPOR')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[2]; // 22
+    }
+    if (upper.includes('DELIVERYNOTE') || upper.includes('OPDN') || upper.includes('RECEBIMENTO')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[3]; // 20
+    }
+    if (upper.includes('PURCHASERETURN') || upper.includes('ORPD') || (upper.includes('DEVOLU') && !upper.includes('NOTA'))) {
+      return SAP_MARKETING_OBJECTS_CATALOG[4]; // 21
+    }
+    if (upper.includes('PURCHASEINVOICE') || upper.includes('OPCH') || upper.includes('NOTA FISCAL DE ENTRADA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[5]; // 18
+    }
+    if (upper.includes('CREDITNOTE') || upper.includes('ORPC') || upper.includes('DEV. NOTA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[6]; // 19
+    }
+    if (upper.includes('DOWNPAYMENT') || upper.includes('ODPO') || upper.includes('ADIANTAMENTO')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[7]; // 204
+    }
+    if (upper.includes('LANDEDCOST') || upper.includes('OIPF') || upper.includes('IMPORTA')) {
+      return SAP_MARKETING_OBJECTS_CATALOG[8]; // 69
+    }
+  }
+
+  return SAP_MARKETING_OBJECTS_CATALOG[2]; // 22 - OPOR
+}
+
+async function mergePendingPortalDraftsForObjectType(effectiveDocs: any[], targetObjType: string): Promise<any[]> {
+  try {
+    const meta = resolveMarketingObjectMeta(targetObjType);
+    const unifiedRes = await api.get('/approvals/unified');
+    const approvals = Array.isArray(unifiedRes.data?.approvals) ? unifiedRes.data.approvals : [];
+    const matchingDrafts = approvals.filter((rec: any) => {
+      const recMeta = resolveMarketingObjectMeta(rec.objectType, rec.docObjectCode);
+      const isPending = rec.status === 'W' && !rec.convertedDocEntry;
+      return recMeta.objType === meta.objType && isPending && rec.draftDocEntry;
+    });
+
+    if (matchingDrafts.length === 0) return effectiveDocs;
+
+    const existingEntries = new Set(effectiveDocs.map((d: any) => Number(d.DocEntry)));
+    const draftItems = matchingDrafts
+      .filter((rec: any) => !existingEntries.has(Number(rec.draftDocEntry)))
+      .map((rec: any) => {
+        const payload = rec.draftPayload || {};
+        return {
+          ...payload,
+          DocEntry: Number(rec.draftDocEntry),
+          DocNum: rec.draftDocNum || rec.draftDocEntry,
+          CardCode: rec.cardCode || payload.CardCode || '',
+          CardName: rec.cardName || payload.CardName || rec.authorName || '',
+          RequesterName: payload.RequesterName || rec.authorName || '',
+          RequesterEmail: payload.RequesterEmail || rec.authorEmail || '',
+          DocDate: payload.DocDate || rec.creationDate || new Date().toISOString(),
+          DocTotal: rec.docTotal ?? payload.DocTotal ?? 0,
+          BPL_IDAssignedToInvoice: rec.bplId ?? payload.BPL_IDAssignedToInvoice,
+          BPLID: rec.bplId ?? payload.BPLID,
+          BPLName: rec.bplName || payload.BPLName,
+          Comments: rec.comments || payload.Comments || '',
+          DocumentStatus: 'bost_Open',
+          DocObjectCode: meta.docObjectCode,
+          ObjectType: meta.objType,
+          TargetTable: meta.tableName,
+          DraftObjectType: '112',
+          DraftTable: 'ODRF',
+          _isDraft: true,
+          _approvalStatus: rec.status || 'W',
+          DocumentLines: Array.isArray(payload.DocumentLines) && payload.DocumentLines.length > 0
+            ? payload.DocumentLines
+            : (rec.lines || []).map((l: any) => ({
+                LineNum: l.lineNum,
+                ItemCode: l.itemCode,
+                ItemDescription: l.itemDescription,
+                Quantity: l.quantity,
+                Price: l.unitPrice,
+                UnitPrice: l.unitPrice,
+                LineTotal: l.lineTotal,
+                CostingCode2: l.branch,
+                CostingCode3: l.costCenter,
+                CostingCode4: l.project
+              }))
+        };
+      });
+
+    return [...draftItems, ...effectiveDocs];
+  } catch {
+    return effectiveDocs;
+  }
+}
+
 export const sapService = {
   isServiceOrder,
+  SAP_MARKETING_OBJECTS_CATALOG,
+  resolveMarketingObjectMeta,
   login: async (email: string, companyDB?: string) => {
     try {
       const normalizedCompany = normalizeSapCompany(companyDB);
@@ -343,13 +568,14 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/PurchaseOrders', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const list = response.data.value || [];
+      return await mergePendingPortalDraftsForObjectType(list, '22');
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
         try {
           const fallbackUrl = `/sap/PurchaseOrders?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
           const response2 = await api.get(fallbackUrl);
-          return response2.data.value || [];
+          return await mergePendingPortalDraftsForObjectType(response2.data.value || [], '22');
         } catch {
           return handleApiError(error, 'getPurchaseOrders');
         }
@@ -362,13 +588,14 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/PurchaseRequests', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const list = response.data.value || [];
+      return await mergePendingPortalDraftsForObjectType(list, '1470000113');
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
         try {
           const fallbackUrl = `/sap/PurchaseRequests?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
           const response2 = await api.get(fallbackUrl);
-          return response2.data.value || [];
+          return await mergePendingPortalDraftsForObjectType(response2.data.value || [], '1470000113');
         } catch {
           return handleApiError(error, 'getPurchaseRequests');
         }
@@ -381,13 +608,14 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/PurchaseQuotations', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const list = response.data.value || [];
+      return await mergePendingPortalDraftsForObjectType(list, '540000006');
     } catch (error) {
       if (typeof options === 'object' && options?.search) {
         try {
           const fallbackUrl = `/sap/PurchaseQuotations?$orderby=DocEntry desc&$top=${options.top || 50}&$skip=${options.skip || 0}`;
           const response2 = await api.get(fallbackUrl);
-          return response2.data.value || [];
+          return await mergePendingPortalDraftsForObjectType(response2.data.value || [], '540000006');
         } catch {
           return handleApiError(error, 'getPurchaseQuotations');
         }
@@ -400,7 +628,8 @@ export const sapService = {
     try {
       const url = buildODataQuery('/sap/PurchaseDownPayments', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      return response.data.value || [];
+      const list = response.data.value || [];
+      return await mergePendingPortalDraftsForObjectType(list, '204');
     } catch (error) {
       return handleApiError(error, 'getPurchaseDownPayments');
     }
@@ -408,27 +637,81 @@ export const sapService = {
 
   getPurchaseOrder: async (docEntry: number) => {
     try {
+      try {
+        const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
+        if (draftCheck.data?.approvalRecord?.objectType === '22' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
+          return {
+            ...draftCheck.data.draftData,
+            DocEntry: docEntry,
+            ObjectType: '22',
+            TargetTable: 'OPOR',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true
+          };
+        }
+      } catch {}
       const response = await api.get(`/sap/PurchaseOrders(${docEntry})`);
       return response.data;
     } catch (error) {
+      try {
+        const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+        if (draftRes.data) return { ...draftRes.data, _isDraft: true, DraftObjectType: '112', DraftTable: 'ODRF' };
+      } catch {}
       return handleApiError(error, 'getPurchaseOrder');
     }
   },
 
   getPurchaseRequest: async (docEntry: number) => {
     try {
+      try {
+        const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
+        if (draftCheck.data?.approvalRecord?.objectType === '1470000113' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
+          return {
+            ...draftCheck.data.draftData,
+            DocEntry: docEntry,
+            ObjectType: '1470000113',
+            TargetTable: 'OPRQ',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true
+          };
+        }
+      } catch {}
       const response = await api.get(`/sap/PurchaseRequests(${docEntry})`);
       return response.data;
     } catch (error) {
+      try {
+        const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+        if (draftRes.data) return { ...draftRes.data, _isDraft: true, DraftObjectType: '112', DraftTable: 'ODRF' };
+      } catch {}
       return handleApiError(error, 'getPurchaseRequest');
     }
   },
 
   getPurchaseDownPayment: async (docEntry: number) => {
     try {
+      try {
+        const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
+        if (draftCheck.data?.approvalRecord?.objectType === '204' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
+          return {
+            ...draftCheck.data.draftData,
+            DocEntry: docEntry,
+            ObjectType: '204',
+            TargetTable: 'ODPO',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true
+          };
+        }
+      } catch {}
       const response = await api.get(`/sap/PurchaseDownPayments(${docEntry})`);
       return response.data;
     } catch (error) {
+      try {
+        const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+        if (draftRes.data) return { ...draftRes.data, _isDraft: true, DraftObjectType: '112', DraftTable: 'ODRF' };
+      } catch {}
       return handleApiError(error, 'getPurchaseDownPayment');
     }
   },
@@ -456,10 +739,12 @@ export const sapService = {
           uDataPgto = data.DocDate || today;
         }
       }
+      const docCurrency = data.DocCurrency || 'R$';
       const formattedData: any = {
         ...data,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
+        DocCurrency: docCurrency,
         U_DataPgto: uDataPgto,
         ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
         ...(headerUsage ? {
@@ -472,17 +757,24 @@ export const sapService = {
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
           const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
+          const lineCurrency = line.Currency || docCurrency;
           return {
             ItemCode: line.ItemCode,
             ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            Currency: lineCurrency,
             CostingCode: line.CostingCode || 'BR',
             CostingCode2: line.CostingCode2 || 'MATRIZ',
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: lineUsage || undefined
+            Usage: lineUsage || undefined,
+            ...(line.BaseType !== undefined ? {
+              BaseType: line.BaseType,
+              BaseEntry: line.BaseEntry,
+              BaseLine: line.BaseLine
+            } : {})
           };
         })
       };
@@ -548,11 +840,13 @@ export const sapService = {
           uDataPgto = data.DocDate || today;
         }
       }
+      const reqDateStr = String(data.RequriedDate || data.RequiredDate || data.ReqDate || data.DocDueDate || today).split('T')[0];
       const formattedData: any = {
         ...data,
-        DocDate: data.DocDate || today,
-        TaxDate: data.TaxDate || today,
-        ReqDate: data.DocDueDate || today,
+        DocDate: String(data.DocDate || today).split('T')[0],
+        TaxDate: String(data.TaxDate || today).split('T')[0],
+        DocDueDate: String(data.DocDueDate || reqDateStr).split('T')[0],
+        RequriedDate: reqDateStr,
         RequesterEmail: userEmail,
         U_DataPgto: uDataPgto,
         ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
@@ -566,12 +860,14 @@ export const sapService = {
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
           const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
+          const lineReqDate = String(line.RequiredDate || line.RequriedDate || reqDateStr).split('T')[0];
           return {
             ItemCode: line.ItemCode,
             ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
-            RequiredDate: line.RequiredDate || data.DocDueDate || today,
+            RequiredDate: lineReqDate,
+            ShipDate: lineReqDate,
             CostingCode: line.CostingCode || 'BR',
             CostingCode2: line.CostingCode2 || 'MATRIZ',
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -581,6 +877,8 @@ export const sapService = {
           };
         })
       };
+      delete formattedData.ReqDate;
+      delete formattedData.RequiredDate;
       delete formattedData.Project;
       delete formattedData.ProjectCode;
       if (headerProject) formattedData.U_Projeto = headerProject;
@@ -619,24 +917,75 @@ export const sapService = {
 
   getPurchaseQuotation: async (docEntry: number) => {
     try {
+      try {
+        const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
+        if (draftCheck.data?.approvalRecord?.objectType === '540000006' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
+          return {
+            ...draftCheck.data.draftData,
+            DocEntry: docEntry,
+            ObjectType: '540000006',
+            TargetTable: 'OPQT',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true
+          };
+        }
+      } catch {}
       const response = await api.get(`/sap/PurchaseQuotations(${docEntry})`);
       return response.data;
     } catch (error) {
+      try {
+        const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+        if (draftRes.data) {
+          return {
+            ...draftRes.data,
+            DocEntry: docEntry,
+            ObjectType: '540000006',
+            TargetTable: 'OPQT',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true
+          };
+        }
+      } catch {}
       return handleApiError(error, 'getPurchaseQuotation');
     }
   },
 
-  updatePurchaseQuotation: async (docEntry: number, data: any) => {
+  updatePurchaseQuotation: async (docEntry: number, data: any, isDraft = false, userEmail?: string) => {
     try {
-      // Typically updates to price and delivery dates on lines
-      const response = await api.patch(`/sap/PurchaseQuotations(${docEntry})`, data);
-      return response.data;
+      if (isDraft || data?._isDraft) {
+        const cleanData = { ...data };
+        delete cleanData._isDraft;
+        const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+          objectType: '540000006',
+          docObjectCode: 'oPurchaseQuotations',
+          payload: cleanData,
+          userEmail
+        });
+        return draftRes.data;
+      }
+      try {
+        const response = await api.patch(`/sap/PurchaseQuotations(${docEntry})`, data);
+        return response.data;
+      } catch (err: any) {
+        if (err?.response?.status === 404 || err?.response?.status === 400) {
+          const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+            objectType: '540000006',
+            docObjectCode: 'oPurchaseQuotations',
+            payload: data,
+            userEmail
+          });
+          return draftRes.data;
+        }
+        throw err;
+      }
     } catch (error) {
       return handleApiError(error, 'updatePurchaseQuotation');
     }
   },
 
-  createPurchaseQuotation: async (data: any) => {
+  createPurchaseQuotation: async (data: any, userEmail?: string) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
@@ -659,11 +1008,16 @@ export const sapService = {
           uDataPgto = data.DocDate || today;
         }
       }
+      const reqDateStr = String(data.RequriedDate || data.RequiredDate || data.ReqDate || data.DocDueDate || today).split('T')[0];
+      const docCurrency = data.DocCurrency || 'R$';
       const formattedData: any = {
         ...data,
-        DocDate: data.DocDate || today,
-        TaxDate: data.TaxDate || today,
-        ReqDate: data.DocDueDate || today,
+        DocDate: String(data.DocDate || today).split('T')[0],
+        TaxDate: String(data.TaxDate || today).split('T')[0],
+        DocDueDate: String(data.DocDueDate || reqDateStr).split('T')[0],
+        RequriedDate: reqDateStr,
+        DocCurrency: docCurrency,
+        RequesterEmail: userEmail || data.RequesterEmail,
         U_DataPgto: uDataPgto,
         ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
         ...(headerUsage ? {
@@ -676,37 +1030,81 @@ export const sapService = {
         DocumentLines: (data.DocumentLines || []).map((line: any) => {
           const lineProject = line.CostingCode4 || line.ProjectCode || line.Project || headerProject || 'BASE';
           const lineUsage = line.Usage ? parseInt(String(line.Usage), 10) : headerUsage;
+          const lineReqDate = String(line.RequiredDate || line.RequriedDate || reqDateStr).split('T')[0];
+          const lineCurrency = line.Currency || docCurrency;
           return {
             ItemCode: line.ItemCode,
             ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
-            RequiredDate: line.RequiredDate || data.DocDueDate || today,
+            Currency: lineCurrency,
+            RequiredDate: lineReqDate,
+            ShipDate: lineReqDate,
             CostingCode: line.CostingCode || 'BR',
             CostingCode2: line.CostingCode2 || 'MATRIZ',
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
             CostingCode5: line.CostingCode5 || undefined,
-            Usage: lineUsage || undefined
+            Usage: lineUsage || undefined,
+            ...(line.BaseType !== undefined ? {
+              BaseType: line.BaseType,
+              BaseEntry: line.BaseEntry,
+              BaseLine: line.BaseLine
+            } : {})
           };
         })
       };
+      delete formattedData.ReqDate;
+      delete formattedData.RequiredDate;
       delete formattedData.Project;
       delete formattedData.ProjectCode;
       if (headerProject) formattedData.U_Projeto = headerProject;
 
-      const response = await api.post('/sap/PurchaseQuotations', formattedData, {
-        headers: {
-          'B1S-EnableApprovalWorkflow': 'true'
+      // Save as Draft in SAP ODRF (112) with target ObjType 540000006 (OPQT / oPurchaseQuotations) and register for line-by-line approval
+      try {
+        const draftRes = await api.post('/approvals/create-draft', {
+          docObjectCode: 'oPurchaseQuotations',
+          objectType: '540000006',
+          payload: formattedData,
+          userEmail: userEmail || data.RequesterEmail,
+          userName: data.RequesterName
+        });
+        if (draftRes.data && draftRes.data.draftDocEntry) {
+          return {
+            ...draftRes.data.sapDraft,
+            DocEntry: draftRes.data.draftDocEntry,
+            DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            ObjectType: '540000006',
+            TargetTable: 'OPQT',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
+            _isDraft: true,
+            _portalApproval: draftRes.data.approvalRecord
+          };
         }
+      } catch (draftErr: any) {
+        console.warn('Draft endpoint error for PurchaseQuotation (540000006), falling back to direct /sap/Drafts:', draftErr?.message);
+      }
+
+      const response = await api.post('/sap/Drafts', {
+        ...formattedData,
+        DocObjectCode: 'oPurchaseQuotations',
+        ObjectType: '540000006'
       });
-      return response.data;
+      return {
+        ...response.data,
+        ObjectType: '540000006',
+        TargetTable: 'OPQT',
+        DraftObjectType: '112',
+        DraftTable: 'ODRF',
+        _isDraft: true
+      };
     } catch (error) {
       return handleApiError(error, 'createPurchaseQuotation');
     }
   },
 
-  createPurchaseDownPayment: async (data: any) => {
+  createPurchaseDownPayment: async (data: any, userEmail?: string) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
@@ -735,6 +1133,7 @@ export const sapService = {
         TaxDate: data.TaxDate || today,
         DocType: 'dDocument_Items',
         DownPaymentType: 'dptInvoice',
+        RequesterEmail: userEmail || data.RequesterEmail,
         U_DataPgto: uDataPgto,
         ...(paymentGroupCode !== undefined && !isNaN(paymentGroupCode) ? { PaymentGroupCode: paymentGroupCode } : {}),
         ...(headerUsage ? {
@@ -765,18 +1164,24 @@ export const sapService = {
       delete formattedData.ProjectCode;
       if (headerProject) formattedData.U_Projeto = headerProject;
 
-      // Save as Draft in SAP and register for line-by-line approval
+      // Save as Draft in SAP ODRF (112) with target ObjType 204 (ODPO / oPurchaseDownPayments) and register for line-by-line approval
       try {
         const draftRes = await api.post('/approvals/create-draft', {
           docObjectCode: 'oPurchaseDownPayments',
           objectType: '204',
-          payload: formattedData
+          payload: formattedData,
+          userEmail: userEmail || data.RequesterEmail,
+          userName: data.RequesterName
         });
         if (draftRes.data && draftRes.data.draftDocEntry) {
           return {
             ...draftRes.data.sapDraft,
             DocEntry: draftRes.data.draftDocEntry,
             DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            ObjectType: '204',
+            TargetTable: 'ODPO',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
             _isDraft: true,
             _portalApproval: draftRes.data.approvalRecord
           };
@@ -787,9 +1192,17 @@ export const sapService = {
 
       const response = await api.post('/sap/Drafts', {
         ...formattedData,
-        DocObjectCode: 'oPurchaseDownPayments'
+        DocObjectCode: 'oPurchaseDownPayments',
+        ObjectType: '204'
       });
-      return response.data;
+      return {
+        ...response.data,
+        ObjectType: '204',
+        TargetTable: 'ODPO',
+        DraftObjectType: '112',
+        DraftTable: 'ODRF',
+        _isDraft: true
+      };
     } catch (error) {
       return handleApiError(error, 'createPurchaseDownPayment');
     }
@@ -810,8 +1223,19 @@ export const sapService = {
     }
   },
 
-  updatePurchaseOrder: async (docEntry: number, data: any) => {
+  updatePurchaseOrder: async (docEntry: number, data: any, isDraft = false, userEmail?: string) => {
     try {
+      if (isDraft || data?._isDraft) {
+        const cleanData = { ...data };
+        delete cleanData._isDraft;
+        const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+          objectType: '22',
+          docObjectCode: 'oPurchaseOrders',
+          payload: cleanData,
+          userEmail
+        });
+        return draftRes.data;
+      }
       const response = await api.patch(`/sap/PurchaseOrders(${docEntry})`, data);
       return response.data;
     } catch (error) {
@@ -819,22 +1243,138 @@ export const sapService = {
     }
   },
 
+  updatePurchaseRequest: async (docEntry: number, data: any, isDraft = false, userEmail?: string) => {
+    try {
+      if (isDraft || data?._isDraft) {
+        const cleanData = { ...data };
+        delete cleanData._isDraft;
+        const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+          objectType: '1470000113',
+          docObjectCode: 'oPurchaseRequests',
+          payload: cleanData,
+          userEmail
+        });
+        return draftRes.data;
+      }
+      const response = await api.patch(`/sap/PurchaseRequests(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updatePurchaseRequest');
+    }
+  },
+
+  updatePurchaseDownPayment: async (docEntry: number, data: any, isDraft = false, userEmail?: string) => {
+    try {
+      if (isDraft || data?._isDraft) {
+        const cleanData = { ...data };
+        delete cleanData._isDraft;
+        const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+          objectType: '204',
+          docObjectCode: 'oPurchaseDownPayments',
+          payload: cleanData,
+          userEmail
+        });
+        return draftRes.data;
+      }
+      const response = await api.patch(`/sap/PurchaseDownPayments(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updatePurchaseDownPayment');
+    }
+  },
+
+  /**
+   * Generic Marketing Document Creation as Draft (ODRF - ObjType 112) for all 10 SAP Object Types:
+   * 1470000113 (OPRQ), 540000006 (OPQT), 22 (OPOR), 20 (OPDN), 21 (ORPD), 18 (OPCH), 19 (ORPC), 204 (ODPO), 69 (OIPF), 112 (ODRF)
+   */
+  createMarketingDocumentDraft: async (objectTypeOrCode: string | number, data: any, userEmail?: string) => {
+    try {
+      const meta = resolveMarketingObjectMeta(objectTypeOrCode, data?.DocObjectCode);
+      const draftRes = await api.post('/approvals/create-draft', {
+        docObjectCode: meta.docObjectCode,
+        objectType: meta.objType,
+        payload: data,
+        userEmail: userEmail || data?.RequesterEmail,
+        userName: data?.RequesterName
+      });
+      return draftRes.data;
+    } catch (error) {
+      return handleApiError(error, 'createMarketingDocumentDraft');
+    }
+  },
+
+  /**
+   * Generic Marketing Document Update (PATCH) for both Drafts (ODRF - 112) and Effective Documents
+   */
+  updateMarketingDocument: async (
+    objectTypeOrCode: string | number,
+    docEntry: number,
+    data: any,
+    isDraft = false,
+    userEmail?: string
+  ) => {
+    try {
+      const meta = resolveMarketingObjectMeta(objectTypeOrCode, data?.DocObjectCode);
+      if (isDraft || data?._isDraft || meta.objType === '112') {
+        const cleanData = { ...data };
+        delete cleanData._isDraft;
+        const draftRes = await api.patch(`/approvals/draft/${docEntry}`, {
+          objectType: meta.objType,
+          docObjectCode: meta.docObjectCode,
+          payload: cleanData,
+          userEmail
+        });
+        return draftRes.data;
+      }
+      const response = await api.patch(`/sap/${meta.serviceLayerEndpoint}(${docEntry})`, data);
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'updateMarketingDocument');
+    }
+  },
+
+  /**
+   * Generic Marketing Document Cancellation / Deletion for both Drafts (ODRF - 112) and Effective Documents
+   */
+  cancelMarketingDocument: async (
+    objectTypeOrCode: string | number,
+    docEntry: number,
+    isDraft = false,
+    reason?: string,
+    userEmail?: string
+  ) => {
+    try {
+      const meta = resolveMarketingObjectMeta(objectTypeOrCode);
+      const response = await api.post('/approvals/cancel-document', {
+        docEntry,
+        objectType: meta.objType,
+        docObjectCode: meta.docObjectCode,
+        isDraft,
+        reason,
+        userEmail
+      });
+      return response.data;
+    } catch (error) {
+      return handleApiError(error, 'cancelMarketingDocument');
+    }
+  },
+
   getBusinessPartners: async (name?: string) => {
     try {
-      // Include BPFiscalTaxIDCollection, EmailAddress, and PayTermsGrpCode
-      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,EmailAddress,PayTermsGrpCode,BPFiscalTaxIDCollection&$top=50";
-      let filter = "(CardType eq 'cSupplier' or CardType eq 'S')";
-      if (name) {
-        filter += ` and (contains(CardName, '${name}') or contains(CardCode, '${name}'))`;
+      // Include BPFiscalTaxIDCollection, EmailAddress, Currency, and PayTermsGrpCode
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,EmailAddress,PayTermsGrpCode,Currency,DefaultCurrency,BPCurrenciesCollection,BPFiscalTaxIDCollection&$top=100";
+      let filter = "(CardType eq 'cSupplier' or CardType eq 'S') and startswith(CardCode, 'F')";
+      if (name && name.trim()) {
+        const safe = name.trim().replace(/'/g, "''");
+        const upper = safe.toUpperCase();
+        filter += ` and (contains(CardName, '${safe}') or contains(CardName, '${upper}') or contains(CardCode, '${upper}'))`;
       }
       const response = await api.get(`${url}&$filter=${filter}`);
       
       // Map to extract CNPJ/CPF from BPFiscalTaxIDCollection if FederalTaxID is empty
-      const partners = response.data.value.map((bp: any) => {
+      const partners = (response.data.value || []).map((bp: any) => {
         let taxId = bp.FederalTaxID;
-        // In Brazilian localization, CNPJ is in TaxId0 and CPF is in TaxId4
         if (!taxId && bp.BPFiscalTaxIDCollection && bp.BPFiscalTaxIDCollection.length > 0) {
-          // Find the first entry that has either TaxId0 or TaxId4
           const fiscalEntry = bp.BPFiscalTaxIDCollection.find((f: any) => f.TaxId0 || f.TaxId4);
           if (fiscalEntry) {
             taxId = fiscalEntry.TaxId0 || fiscalEntry.TaxId4;
@@ -843,8 +1383,13 @@ export const sapService = {
         return { ...bp, FederalTaxID: taxId };
       });
 
-      // Filter active suppliers in memory for maximum compatibility
-      return partners.filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+      // Strictly filter active suppliers whose CardCode starts with 'F' (excluding 'CO')
+      return partners.filter((bp: any) => {
+        const codeUpper = String(bp.CardCode || '').trim().toUpperCase();
+        const isF = codeUpper.startsWith('F') && !codeUpper.startsWith('CO');
+        const isActive = bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen;
+        return isF && isActive;
+      });
     } catch (error) {
       return handleApiError(error, 'getBusinessPartners');
     }
@@ -1026,10 +1571,10 @@ export const sapService = {
       }
 
       // 2. For suppliers or all partners, query SAP Service Layer with multi-case search
-      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,BPFiscalTaxIDCollection&$top=100";
+      let url = "/sap/BusinessPartners?$select=CardCode,CardName,FederalTaxID,Frozen,CardType,EmailAddress,PayTermsGrpCode,Currency,DefaultCurrency,BPCurrenciesCollection,BPFiscalTaxIDCollection&$top=100";
       let filter = "";
       if (partnerType === 'supplier') {
-        filter = "(CardType eq 'cSupplier' or CardType eq 'S')";
+        filter = "(CardType eq 'cSupplier' or CardType eq 'S') and startswith(CardCode, 'F')";
       }
 
       if (query && query.trim()) {
@@ -1074,7 +1619,15 @@ export const sapService = {
           }
           return { ...bp, FederalTaxID: taxId };
         });
-        const activeList = list.filter((bp: any) => bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen);
+        const activeList = list.filter((bp: any) => {
+          const isActive = bp.Frozen === 'tNO' || bp.Frozen === 'N' || !bp.Frozen;
+          if (!isActive) return false;
+          if (partnerType === 'supplier') {
+            const codeUpper = String(bp.CardCode || '').trim().toUpperCase();
+            if (!codeUpper.startsWith('F') || codeUpper.startsWith('CO')) return false;
+          }
+          return true;
+        });
         if (query && query.trim()) {
           return activeList.filter((bp: any) => matchPartnerQuery(bp, query));
         }
@@ -1084,7 +1637,12 @@ export const sapService = {
         const list = fallbackRes.data?.value || [];
         return list.filter((bp: any) => {
           if (bp.Frozen === 'tYES' || bp.Frozen === 'Y') return false;
-          if (partnerType === 'supplier' && bp.CardType !== 'cSupplier' && bp.CardType !== 'S') return false;
+          if (partnerType === 'supplier') {
+            const codeUpper = String(bp.CardCode || '').trim().toUpperCase();
+            if ((bp.CardType !== 'cSupplier' && bp.CardType !== 'S') || !codeUpper.startsWith('F') || codeUpper.startsWith('CO')) {
+              return false;
+            }
+          }
           return matchPartnerQuery(bp, query);
         });
       }
@@ -1357,248 +1915,677 @@ export const sapService = {
     }
   },
 
-  getBusinessPlaces: async () => {
+  getBusinessPlaces: async (forceRefresh = false) => {
+    const defaultActiveBranches = [
+      {
+        BPLID: 1,
+        BPLName: 'QUALITECH INSPECAO, REPARO E MANUTENCAO LTDA',
+        AliasName: 'MATRIZ',
+        FederalTaxID: '17.417.147/0001-84',
+        Disabled: 'tNO'
+      },
+      {
+        BPLID: 3,
+        BPLName: 'QUALITECH MACAE',
+        AliasName: 'MACAÉ',
+        FederalTaxID: '17.417.147/0003-46',
+        Disabled: 'tNO'
+      },
+      {
+        BPLID: 4,
+        BPLName: 'QUALITECH MAGE',
+        AliasName: 'MAGÉ',
+        FederalTaxID: '17.417.147/0002-65',
+        Disabled: 'tNO'
+      }
+    ];
+
+    if (!forceRefresh && _cachedBusinessPlaces && _cachedBusinessPlaces.length > 0) {
+      return _cachedBusinessPlaces;
+    }
+
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_active_bpl_v2');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedBusinessPlaces = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+
     try {
-      // Fetch without $select to avoid "Property invalid" errors across different SL versions
-      const response = await api.get("/sap/BusinessPlaces?$top=100");
-      // Filter active branches in memory
-      return (response.data.value || []).filter((b: any) => b.Disabled === 'tNO' || b.Disabled === 'N' || !b.Disabled);
+      // Query OBPL (BusinessPlaces) filtering only active branches (Disabled eq 'tNO')
+      const response = await api.get("/sap/BusinessPlaces?$filter=Disabled eq 'tNO'&$select=BPLID,BPLName,AliasName,FederalTaxID,Disabled&$top=100");
+      const activeBranches = (response.data?.value || []).filter(
+        (b: any) => b.Disabled === 'tNO' || b.Disabled === 'N' || !b.Disabled
+      );
+      const finalBranches = activeBranches.length > 0 ? activeBranches : defaultActiveBranches;
+      _cachedBusinessPlaces = finalBranches;
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem('sap_cached_active_bpl_v2', JSON.stringify(finalBranches));
+        } catch {}
+      }
+      return finalBranches;
     } catch (error) {
-      console.warn('Error fetching BusinessPlaces, returning empty array');
-      return [];
+      try {
+        const fallbackRes = await api.get("/sap/BusinessPlaces?$top=100");
+        const active = (fallbackRes.data?.value || []).filter(
+          (b: any) => b.Disabled === 'tNO' || b.Disabled === 'N' || !b.Disabled
+        );
+        const finalBranches = active.length > 0 ? active : defaultActiveBranches;
+        _cachedBusinessPlaces = finalBranches;
+        return finalBranches;
+      } catch {
+        return defaultActiveBranches;
+      }
     }
   },
 
-  getDistributionRules: async () => {
-    try {
-      // User specifically requested to use ProfitCenters for dimensions/costing rules
-      let results: any[] = [];
-      let nextLink: string | null = "/sap/ProfitCenters?$filter=Active eq 'tYES'&$select=CenterCode,CenterName,InWhichDimension&$top=1000";
-      
-      while (nextLink) {
-        try {
-          const response: any = await api.get(nextLink);
-          const data = response.data;
-          if (data && data.value) {
-            results = [...results, ...data.value];
+  getDistributionRules: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedDistributionRules && _cachedDistributionRules.length > 0) {
+      return _cachedDistributionRules;
+    }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_dist_rules_v2');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedDistributionRules = parsed;
+            return parsed;
           }
-          
-          const next = data['odata.nextLink'];
-          if (next) {
-            // nextLink from SAP usually looks like "ProfitCenters?$skip=1000"
-            // We need to ensure it's prefixed with our /sap/ base
-            nextLink = next.startsWith('/sap/') ? next : `/sap/${next}`;
-          } else {
+        }
+      } catch {}
+    }
+    if (!forceRefresh && _cachedDistributionRulesPromise) {
+      return _cachedDistributionRulesPromise;
+    }
+
+    _cachedDistributionRulesPromise = (async () => {
+      try {
+        // User specifically requested to use ProfitCenters for dimensions/costing rules
+        let results: any[] = [];
+        let nextLink: string | null = "/sap/ProfitCenters?$filter=Active eq 'tYES'&$select=CenterCode,CenterName,InWhichDimension&$top=1000";
+        
+        while (nextLink) {
+          try {
+            const response: any = await api.get(nextLink);
+            const data = response.data;
+            if (data && data.value) {
+              results = [...results, ...data.value];
+            }
+            
+            const next = data['odata.nextLink'];
+            if (next) {
+              nextLink = next.startsWith('/sap/') ? next : `/sap/${next}`;
+            } else {
+              nextLink = null;
+            }
+          } catch (e) {
+            console.error('Error fetching ProfitCenters page:', e);
             nextLink = null;
           }
-        } catch (e) {
-          console.error('Error fetching ProfitCenters page:', e);
-          nextLink = null;
+          
+          // Safety break
+          if (results.length > 5000) break;
         }
         
-        // Safety break
-        if (results.length > 5000) break;
-      }
-      
-      return results.map((r: any) => ({
-        FactorCode: r.CenterCode || r.OcrCode,
-        FactorDescription: r.CenterName || r.OcrName,
-        InWhichDimension: r.InWhichDimension || r.DimCode
-      }));
-    } catch (error: any) {
-      console.warn('ProfitCenters failed, falling back to DistributionRules...');
-      try {
-        const response = await api.get("/sap/DistributionRules?$select=FactorCode,FactorDescription,InWhichDimension&$top=1000");
-        return (response.data.value || []).map((r: any) => ({
-          FactorCode: r.FactorCode || r.OcrCode,
-          FactorDescription: r.FactorDescription || r.OcrName,
+        const mapped = results.map((r: any) => ({
+          FactorCode: r.CenterCode || r.OcrCode,
+          FactorDescription: r.CenterName || r.OcrName,
           InWhichDimension: r.InWhichDimension || r.DimCode
         }));
-      } catch (e) {
+        if (mapped.length > 0) {
+          _cachedDistributionRules = mapped;
+          try { sessionStorage.setItem('sap_cached_dist_rules_v2', JSON.stringify(mapped)); } catch {}
+        }
+        return mapped;
+      } catch (error: any) {
+        console.warn('ProfitCenters failed, falling back to DistributionRules...');
         try {
-          const response = await api.get("/sap/DistributionRules?$top=1000");
-          return (response.data.value || []).map((r: any) => ({
+          const response = await api.get("/sap/DistributionRules?$select=FactorCode,FactorDescription,InWhichDimension&$top=1000");
+          const mapped = (response.data.value || []).map((r: any) => ({
             FactorCode: r.FactorCode || r.OcrCode,
             FactorDescription: r.FactorDescription || r.OcrName,
             InWhichDimension: r.InWhichDimension || r.DimCode
           }));
-        } catch (e2) {
-          return [];
+          if (mapped.length > 0) {
+            _cachedDistributionRules = mapped;
+            try { sessionStorage.setItem('sap_cached_dist_rules_v2', JSON.stringify(mapped)); } catch {}
+          }
+          return mapped;
+        } catch (e) {
+          try {
+            const response = await api.get("/sap/DistributionRules?$top=1000");
+            const mapped = (response.data.value || []).map((r: any) => ({
+              FactorCode: r.FactorCode || r.OcrCode,
+              FactorDescription: r.FactorDescription || r.OcrName,
+              InWhichDimension: r.InWhichDimension || r.DimCode
+            }));
+            if (mapped.length > 0) {
+              _cachedDistributionRules = mapped;
+              try { sessionStorage.setItem('sap_cached_dist_rules_v2', JSON.stringify(mapped)); } catch {}
+            }
+            return mapped;
+          } catch (e2) {
+            return _cachedDistributionRules || [];
+          }
         }
+      } finally {
+        _cachedDistributionRulesPromise = null;
       }
-    }
+    })();
+
+    return _cachedDistributionRulesPromise;
   },
 
-  getDimensions: async () => {
+  getDimensions: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedDimensions && _cachedDimensions.length > 0) {
+      return _cachedDimensions;
+    }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_dimensions_v2');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedDimensions = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+
     try {
       // Try with filter first
       const response = await api.get("/sap/Dimensions?$filter=IsActive eq 'tYES'&$top=100");
-      return (response.data.value || []).map((d: any) => ({
+      const mapped = (response.data.value || []).map((d: any) => ({
         ...d,
         DimensionCode: d.DimensionCode || d.DimensionNumber || d.Number || d.Code
       }));
+      if (mapped.length > 0) {
+        _cachedDimensions = mapped;
+        try { sessionStorage.setItem('sap_cached_dimensions_v2', JSON.stringify(mapped)); } catch {}
+      }
+      return mapped;
     } catch (error: any) {
       try {
         // Try without filter if tYES/IsActive fails
         const response = await api.get("/sap/Dimensions?$top=100");
-        return (response.data.value || [])
+        const mapped = (response.data.value || [])
           .filter((d: any) => d.IsActive === 'tYES' || d.IsActive === 'Y' || d.Active === 'tYES')
           .map((d: any) => ({
             ...d,
             DimensionCode: d.DimensionCode || d.DimensionNumber || d.Number || d.Code
           }));
+        if (mapped.length > 0) {
+          _cachedDimensions = mapped;
+          try { sessionStorage.setItem('sap_cached_dimensions_v2', JSON.stringify(mapped)); } catch {}
+        }
+        return mapped;
       } catch (e) {
-        return [];
+        return _cachedDimensions || [];
       }
     }
   },
 
-  getProjects: async () => {
-    try {
-      const [distRules, profitCenters, sapProjects] = await Promise.all([
-        api.get("/sap/DistributionRules?$filter=Active eq 'tYES' and InWhichDimension eq 4&$select=FactorCode,FactorDescription&$top=1000").catch(() => ({ data: { value: [] } })),
-        api.get("/sap/ProfitCenters?$filter=Active eq 'tYES' and InWhichDimension eq 4&$select=CenterCode,CenterName&$top=1000").catch(() => ({ data: { value: [] } })),
-        api.get("/sap/Projects?$select=Code,Name&$top=1000").catch(() => ({ data: { value: [] } }))
-      ]);
-
-      const map = new Map<string, { Code: string; Name: string }>();
-      
-      const dList = distRules.data?.value || [];
-      for (const d of dList) {
-        const code = String(d.FactorCode || '').trim();
-        if (code) map.set(code, { Code: code, Name: d.FactorDescription ? `${code} - ${d.FactorDescription}` : code });
-      }
-
-      const pList = profitCenters.data?.value || [];
-      for (const p of pList) {
-        const code = String(p.CenterCode || '').trim();
-        if (code && !map.has(code)) {
-          map.set(code, { Code: code, Name: p.CenterName ? `${code} - ${p.CenterName}` : code });
-        }
-      }
-
-      const sList = sapProjects.data?.value || [];
-      for (const s of sList) {
-        const code = String(s.Code || '').trim();
-        if (code && !map.has(code)) {
-          map.set(code, { Code: code, Name: s.Name ? `${code} - ${s.Name}` : code });
-        }
-      }
-
-      // Ensure 'BASE' is always available as fallback project
-      if (!map.has('BASE')) {
-        map.set('BASE', { Code: 'BASE', Name: 'BASE' });
-      }
-
-      return Array.from(map.values());
-    } catch (error: any) {
-      return [{ Code: 'BASE', Name: 'BASE' }];
+  getProjects: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedProjects && _cachedProjects.length > 0) {
+      return _cachedProjects;
     }
-  },
-
-  getBuyers: async () => {
-    try {
-      const allBuyers: any[] = [];
-      const seenCodes = new Set<number>();
-      for (let skip = 0; skip < 100; skip += 20) {
-        const response = await api.get(`/sap/SalesPersons?$skip=${skip}&$top=20&$select=SalesEmployeeCode,SalesEmployeeName,Active`);
-        const list = response.data?.value || [];
-        if (list.length === 0) break;
-        for (const item of list) {
-          const code = Number(item.SalesEmployeeCode);
-          if (!isNaN(code) && !seenCodes.has(code) && (item.Active === 'tYES' || item.Active === 'Y' || !item.Active)) {
-            seenCodes.add(code);
-            allBuyers.push({
-              SalesEmployeeCode: code,
-              SalesEmployeeName: item.SalesEmployeeName || String(code)
-            });
-          }
-        }
-        if (list.length < 20) break;
-      }
-      return allBuyers;
-    } catch (error) {
-      console.error('Erro ao buscar compradores (OSLP):', error);
-      return [];
-    }
-  },
-
-  getPaymentTerms: async () => {
-    try {
-      const allTerms: any[] = [];
-      const seenGroups = new Set<number>();
-      for (let skip = 0; skip < 120; skip += 20) {
-        const response = await api.get(`/sap/PaymentTermsTypes?$skip=${skip}&$top=20`);
-        const list = response.data?.value || [];
-        if (list.length === 0) break;
-        for (const item of list) {
-          const grpNum = Number(item.GroupNumber ?? item.GroupNum);
-          if (!isNaN(grpNum) && !seenGroups.has(grpNum)) {
-            seenGroups.add(grpNum);
-            allTerms.push({
-              GroupNumber: grpNum,
-              GroupNum: grpNum,
-              PaymentTermsGroupName: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
-              PymntGroup: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
-              U_DiasPC: item.U_DiasPC
-            });
-          }
-        }
-        if (list.length < 20) break;
-      }
-      return allTerms;
-    } catch (error) {
-      console.error('Erro ao buscar condições de pagamento (OCTG):', error);
-      return [];
-    }
-  },
-
-  getUsages: async () => {
-    try {
-      // 1. Try NotaFiscalUsage first as requested
-      const response = await api.get("/sap/NotaFiscalUsage?$select=ID,Usage&$top=1000");
-      return response.data.value || [];
-    } catch (error: any) {
-      console.warn('Retrying getUsages with Usages (plural)...');
+    if (!forceRefresh && typeof window !== 'undefined') {
       try {
-        // 2. Try plural form
-        const response = await api.get("/sap/Usages?$select=ID,Usage&$top=1000");
-        return response.data.value || [];
-      } catch (err1) {
-        try {
-          // 3. Try singular form
-          const response = await api.get("/sap/Usage?$select=ID,Usage&$top=1000");
-          return response.data.value || [];
-        } catch (err2) {
-          try {
-            // 4. Try FiscalInventoryUsages (Common in newer Brazilian localizations)
-            const response = await api.get("/sap/FiscalInventoryUsages?$select=AbsEntry,Usage&$top=1000");
-            return response.data.value?.map((u: any) => ({
-              ID: u.AbsEntry,
-              Usage: u.Usage
-            })) || [];
-          } catch (err3) {
+        const cachedStr = sessionStorage.getItem('sap_cached_projects_v2');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 1) {
+            _cachedProjects = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    if (!forceRefresh && _cachedProjectsPromise) {
+      return _cachedProjectsPromise;
+    }
+
+    _cachedProjectsPromise = (async () => {
+      try {
+        const [distRules, profitCenters, sapProjects] = await Promise.all([
+          api.get("/sap/DistributionRules?$filter=Active eq 'tYES' and InWhichDimension eq 4&$select=FactorCode,FactorDescription&$top=1000").catch(() => ({ data: { value: [] } })),
+          api.get("/sap/ProfitCenters?$filter=Active eq 'tYES' and InWhichDimension eq 4&$select=CenterCode,CenterName&$top=1000").catch(() => ({ data: { value: [] } })),
+          api.get("/sap/Projects?$select=Code,Name&$top=1000").catch(() => ({ data: { value: [] } }))
+        ]);
+
+        const map = new Map<string, { Code: string; Name: string }>();
+        
+        const dList = distRules.data?.value || [];
+        for (const d of dList) {
+          const code = String(d.FactorCode || '').trim();
+          if (code) map.set(code, { Code: code, Name: d.FactorDescription ? `${code} - ${d.FactorDescription}` : code });
+        }
+
+        const pList = profitCenters.data?.value || [];
+        for (const p of pList) {
+          const code = String(p.CenterCode || '').trim();
+          if (code && !map.has(code)) {
+            map.set(code, { Code: code, Name: p.CenterName ? `${code} - ${p.CenterName}` : code });
+          }
+        }
+
+        const sList = sapProjects.data?.value || [];
+        for (const s of sList) {
+          const code = String(s.Code || '').trim();
+          if (code && !map.has(code)) {
+            map.set(code, { Code: code, Name: s.Name ? `${code} - ${s.Name}` : code });
+          }
+        }
+
+        // Ensure 'BASE' is always available as fallback project
+        if (!map.has('BASE')) {
+          map.set('BASE', { Code: 'BASE', Name: 'BASE' });
+        }
+
+        const finalProjects = Array.from(map.values());
+        if (finalProjects.length > 1) {
+          _cachedProjects = finalProjects;
+          try { sessionStorage.setItem('sap_cached_projects_v2', JSON.stringify(finalProjects)); } catch {}
+        }
+        return finalProjects;
+      } catch (error: any) {
+        return _cachedProjects || [{ Code: 'BASE', Name: 'BASE' }];
+      } finally {
+        _cachedProjectsPromise = null;
+      }
+    })();
+
+    return _cachedProjectsPromise;
+  },
+
+  getBuyers: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedBuyers && _cachedBuyers.length > 0) {
+      return _cachedBuyers;
+    }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_buyers_v3');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedBuyers = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    if (!forceRefresh && _cachedBuyersPromise) {
+      return _cachedBuyersPromise;
+    }
+
+    _cachedBuyersPromise = (async () => {
+      try {
+        // Helper to fetch all pages if server/SAP returns pages of 20
+        const fetchAllPages = async (initialUrl: string, fallbackUrl?: string, maxPages = 15): Promise<any[]> => {
+          const collected: any[] = [];
+          let currentUrl: string | null = initialUrl;
+          let pageCount = 0;
+
+          while (currentUrl && pageCount < maxPages) {
+            pageCount++;
+            let res: any;
             try {
-              // 5. Try without select on Usages
-              const response = await api.get("/sap/Usages?$top=1000");
-              return response.data.value || [];
-            } catch (err4) {
-              // 6. Try NCMCodes fallback
-              try {
-                const response = await api.get("/sap/NCMCodes?$select=AbsEntry,NcmCode&$top=1000");
-                return response.data.value?.map((n: any) => ({
-                  ID: n.AbsEntry,
-                  Usage: n.NcmCode
-                })) || [];
-              } catch (err5) {
-                console.error('All getUsages fallbacks failed.');
-                return [];
+              res = await api.get(currentUrl);
+            } catch (err) {
+              if (pageCount === 1 && fallbackUrl) {
+                res = await api.get(fallbackUrl);
+              } else {
+                break;
               }
             }
+            const data = res?.data;
+            const list = data?.value || [];
+            if (Array.isArray(list) && list.length > 0) {
+              collected.push(...list);
+            }
+            const next = data?.['odata.nextLink'];
+            if (next) {
+              currentUrl = next.startsWith('/sap/') ? next : `/sap/${next}`;
+            } else if (list.length === 20 && pageCount === 1 && !currentUrl.includes('$skip=')) {
+              // In case nextLink was omitted on a 20-item page
+              const sep = initialUrl.includes('?') ? '&' : '?';
+              currentUrl = `${initialUrl}${sep}$skip=${collected.length}`;
+            } else if (list.length === 20 && currentUrl.includes('$skip=')) {
+              currentUrl = currentUrl.replace(/\$skip=\d+/, `$skip=${collected.length}`);
+            } else {
+              currentUrl = null;
+            }
+          }
+          return collected;
+        };
+
+        const [spList, sapUsers] = await Promise.all([
+          fetchAllPages(
+            '/sap/SalesPersons?$top=500&$select=SalesEmployeeCode,SalesEmployeeName,Active,Email,Telephone,Mobile',
+            '/sap/SalesPersons?$top=500'
+          ),
+          fetchAllPages(
+            '/sap/Users?$top=500&$select=InternalKey,UserCode,UserName,eMail,MobilePhoneNumber',
+            '/sap/Users?$top=500'
+          ).catch(() => [])
+        ]);
+
+        const allBuyers: any[] = [];
+        const seenCodes = new Set<number>();
+
+        for (const item of spList) {
+          const code = Number(item.SalesEmployeeCode);
+          if (code === -1) continue; // -1 ("-Nenhum comprador-") is rendered as default option in UI
+          const isActive = item.Active === 'tYES' || item.Active === 'Y' || !item.Active;
+          if (!isNaN(code) && !seenCodes.has(code) && isActive) {
+            seenCodes.add(code);
+            const rawName = String(item.SalesEmployeeName || '').trim();
+            if (!rawName || rawName.toLowerCase().includes('nenhum comprador') || rawName.toLowerCase().includes('nenhum vendedor')) {
+              continue;
+            }
+            const nameNorm = rawName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const matchedUser = sapUsers.find((u: any) => {
+              const uName = String(u.UserName || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              const uCode = String(u.UserCode || '').trim().toLowerCase();
+              const uMail = String(u.eMail || '').trim().toLowerCase();
+              const iMail = String(item.Email || '').trim().toLowerCase();
+              return (
+                (iMail && uMail && iMail === uMail) ||
+                (uName && nameNorm && (uName === nameNorm || uName.includes(nameNorm) || nameNorm.includes(uName))) ||
+                (uCode && nameNorm && uCode === nameNorm)
+              );
+            });
+
+            const email = String(item.Email || matchedUser?.eMail || '').trim();
+            const phone = String(item.Telephone || item.Mobile || matchedUser?.MobilePhoneNumber || '').trim();
+            const mobile = String(item.Mobile || matchedUser?.MobilePhoneNumber || phone || '').trim();
+
+            allBuyers.push({
+              SalesEmployeeCode: code,
+              SalesEmployeeName: rawName,
+              Email: email,
+              Telephone: phone,
+              Mobile: mobile,
+              Phone: phone,
+              // Aliases used by ListOrdersView & Solicitações de Compra
+              code: code,
+              name: rawName,
+              contactEmail: email,
+              contactPhone: phone
+            });
           }
         }
+
+        // Sort alphabetically by buyer name
+        allBuyers.sort((a, b) => String(a.SalesEmployeeName || '').localeCompare(String(b.SalesEmployeeName || ''), 'pt-BR'));
+
+        if (allBuyers.length > 0) {
+          _cachedBuyers = allBuyers;
+          try { sessionStorage.setItem('sap_cached_buyers_v3', JSON.stringify(allBuyers)); } catch {}
+        }
+        return allBuyers;
+      } catch (error) {
+        console.error('Erro ao buscar compradores (OSLP/OUSR):', error);
+        return _cachedBuyers || [];
+      } finally {
+        _cachedBuyersPromise = null;
       }
+    })();
+
+    return _cachedBuyersPromise;
+  },
+
+  getPaymentTerms: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedPaymentTerms && _cachedPaymentTerms.length > 0) {
+      return _cachedPaymentTerms;
     }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_payment_terms_v3');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedPaymentTerms = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    if (!forceRefresh && _cachedPaymentTermsPromise) {
+      return _cachedPaymentTermsPromise;
+    }
+
+    _cachedPaymentTermsPromise = (async () => {
+      try {
+        const allTerms: any[] = [];
+        const seenGroups = new Set<number>();
+
+        const addItems = (list: any[]) => {
+          for (const item of list) {
+            const grpNum = Number(item.GroupNumber ?? item.GroupNum);
+            if (!isNaN(grpNum) && !seenGroups.has(grpNum)) {
+              seenGroups.add(grpNum);
+              allTerms.push({
+                GroupNumber: grpNum,
+                GroupNum: grpNum,
+                PaymentTermsGroupName: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
+                PymntGroup: item.PaymentTermsGroupName ?? item.PymntGroup ?? String(grpNum),
+                U_DiasPC: item.U_DiasPC
+              });
+            }
+          }
+        };
+
+        // Fetch in a single request using Prefer: odata.maxpagesize=1000
+        const firstRes = await api.get('/sap/PaymentTermsTypes?$top=500');
+        const firstList = firstRes.data?.value || [];
+        addItems(firstList);
+
+        // Fallback pagination only if server returned exactly 20 items (in case a proxy stripped Prefer header)
+        if (firstList.length === 20) {
+          for (let skip = 20; skip < 200; skip += 20) {
+            const response = await api.get(`/sap/PaymentTermsTypes?$skip=${skip}&$top=20`);
+            const list = response.data?.value || [];
+            if (list.length === 0) break;
+            addItems(list);
+            if (list.length < 20) break;
+          }
+        }
+
+        if (allTerms.length > 0) {
+          _cachedPaymentTerms = allTerms;
+          try { sessionStorage.setItem('sap_cached_payment_terms_v3', JSON.stringify(allTerms)); } catch {}
+        }
+        return allTerms;
+      } catch (error) {
+        console.error('Erro ao buscar condições de pagamento (OCTG):', error);
+        return _cachedPaymentTerms || [];
+      } finally {
+        _cachedPaymentTermsPromise = null;
+      }
+    })();
+
+    return _cachedPaymentTermsPromise;
+  },
+
+  getPaymentMethods: async (forceRefresh = false) => {
+    const defaultMethods = [
+      { PaymentMethodCode: 'P-TRF-ITA-43410', Description: 'P-TRF-ITA-43410 - Transferência Itaú' },
+      { PaymentMethodCode: 'P-BOL-ITA-43410', Description: 'P-BOL-ITA-43410 - Boleto Itaú' },
+      { PaymentMethodCode: 'PIX', Description: 'PIX Bancário' },
+      { PaymentMethodCode: 'CARTAO', Description: 'Cartão Corporativo' }
+    ];
+
+    if (!forceRefresh && _cachedPaymentMethods && _cachedPaymentMethods.length > 0) {
+      return _cachedPaymentMethods;
+    }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_payment_methods_v3');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _cachedPaymentMethods = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+
+    try {
+      const response = await api.get('/sap/WizardPaymentMethods?$select=PaymentMethodCode,Description,Type&$top=500');
+      const rawList = response.data?.value || [];
+      const map = new Map<string, { PaymentMethodCode: string; Description: string }>();
+
+      // Always seed default Qualitech methods first
+      for (const dm of defaultMethods) {
+        map.set(dm.PaymentMethodCode, dm);
+      }
+
+      for (const item of rawList) {
+        const code = String(item.PaymentMethodCode || '').trim();
+        if (!code) continue;
+        // Include Outgoing (boptOutgoing / P-) or all active payment methods
+        const desc = String(item.Description || '').trim();
+        if (!map.has(code)) {
+          map.set(code, {
+            PaymentMethodCode: code,
+            Description: desc && !desc.includes(code) ? `${code} - ${desc}` : (desc || code)
+          });
+        }
+      }
+
+      const finalMethods = Array.from(map.values());
+      _cachedPaymentMethods = finalMethods;
+      try { sessionStorage.setItem('sap_cached_payment_methods_v3', JSON.stringify(finalMethods)); } catch {}
+      return finalMethods;
+    } catch {
+      _cachedPaymentMethods = defaultMethods;
+      return defaultMethods;
+    }
+  },
+
+  getUsages: async (forceRefresh = false) => {
+    if (!forceRefresh && _cachedUsages && _cachedUsages.length > 0) {
+      return _cachedUsages;
+    }
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedStr = sessionStorage.getItem('sap_cached_usages_v3');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 20) {
+            _cachedUsages = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    if (!forceRefresh && _cachedUsagesPromise) {
+      return _cachedUsagesPromise;
+    }
+
+    _cachedUsagesPromise = (async () => {
+      // Helper to fetch all pages of an usage endpoint (even if capped at 20 per page)
+      const fetchAllUsagePages = async (baseEndpoint: string, mapFn?: (u: any) => { ID: any; Usage: string; Descr?: string }): Promise<any[]> => {
+        const mapById = new Map<string, { ID: number | string; Usage: string; Descr?: string }>();
+        let nextUrl: string | null = baseEndpoint;
+        let pageCount = 0;
+
+        while (nextUrl && pageCount < 25) {
+          pageCount++;
+          const response: any = await api.get(nextUrl);
+          const data = response?.data;
+          const list = data?.value || [];
+          if (!Array.isArray(list) || list.length === 0) break;
+
+          let newItemsAdded = 0;
+          for (const rawItem of list) {
+            const mapped = mapFn
+              ? mapFn(rawItem)
+              : {
+                  ID: rawItem.ID ?? rawItem.AbsEntry ?? rawItem.Code,
+                  Usage: String(rawItem.Usage ?? rawItem.UsageDescription ?? rawItem.Descr ?? '').trim(),
+                  Descr: String(rawItem.Descr ?? rawItem.UsageDescription ?? '').trim()
+                };
+            const idKey = String(mapped.ID ?? '').trim();
+            if (idKey && mapped.Usage && !mapById.has(idKey)) {
+              mapById.set(idKey, mapped);
+              newItemsAdded++;
+            }
+          }
+
+          const odataNext = data?.['odata.nextLink'];
+          if (odataNext) {
+            nextUrl = odataNext.startsWith('/sap/') ? odataNext : `/sap/${odataNext}`;
+          } else if (list.length === 20 && newItemsAdded > 0) {
+            // If SAP returned 20 items without odata.nextLink (e.g., if Prefer header was stripped), paginate manually with $skip
+            const cleanBase = baseEndpoint.replace(/[?&]\$skip=\d+/g, '');
+            const sep = cleanBase.includes('?') ? '&' : '?';
+            nextUrl = `${cleanBase}${sep}$skip=${mapById.size}`;
+          } else {
+            nextUrl = null;
+          }
+        }
+
+        return Array.from(mapById.values()).sort((a, b) => Number(a.ID) - Number(b.ID));
+      };
+
+      const endpointsToTry: Array<{ url: string; mapFn?: (u: any) => { ID: any; Usage: string; Descr?: string } }> = [
+        { url: '/sap/NotaFiscalUsage?$select=ID,Usage&$top=1000' },
+        { url: '/sap/NotaFiscalUsage?$top=1000' },
+        { url: '/sap/Usages?$select=ID,Usage&$top=1000' },
+        { url: '/sap/Usage?$select=ID,Usage&$top=1000' },
+        {
+          url: '/sap/FiscalInventoryUsages?$select=AbsEntry,Usage&$top=1000',
+          mapFn: (u: any) => ({ ID: u.AbsEntry, Usage: String(u.Usage || '').trim() })
+        },
+        { url: '/sap/Usages?$top=1000' }
+      ];
+
+      for (const candidate of endpointsToTry) {
+        try {
+          const allUsages = await fetchAllUsagePages(candidate.url, candidate.mapFn);
+          if (allUsages.length > 0) {
+            _cachedUsages = allUsages;
+            try { sessionStorage.setItem('sap_cached_usages_v3', JSON.stringify(allUsages)); } catch {}
+            return allUsages;
+          }
+        } catch (err) {
+          // Try next endpoint
+        }
+      }
+
+      console.error('All getUsages fallbacks failed.');
+      return _cachedUsages || [];
+    })().finally(() => {
+      _cachedUsagesPromise = null;
+    });
+
+    return _cachedUsagesPromise;
+  },
+
+  prefetchPurchaseLookups: () => {
+    // Warm up all purchase dropdown caches in the background with zero blocking
+    setTimeout(() => {
+      sapService.getBusinessPlaces().catch(() => {});
+      sapService.getUsages().catch(() => {});
+      sapService.getBuyers().catch(() => {});
+      sapService.getPaymentTerms().catch(() => {});
+      sapService.getPaymentMethods().catch(() => {});
+      sapService.getDimensions().catch(() => {});
+      sapService.getDistributionRules().catch(() => {});
+      sapService.getProjects().catch(() => {});
+    }, 50);
   },
 
   getDashboardStats: async () => {
@@ -2170,29 +3157,70 @@ export const sapService = {
   // Quotations (SalesQuotations)
   getQuotations: async (options?: number | ODataQueryOptions) => {
     try {
+      const explicitWo = typeof options === 'object' && options?.wo ? options.wo.trim() : '';
       const url = buildODataQuery('/sap/Quotations', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      const items = response.data.value || [];
+      const items: any[] = response.data.value || [];
 
-      // Check if search yields WO matches in lines
-      if (typeof options === 'object' && options?.search && items.length === 0) {
-        const raw = options.search.trim();
+      // Check if explicit WO or search yields WO matches in lines/header
+      if (typeof options === 'object' && (explicitWo || (options?.search && items.length === 0))) {
+        const raw = explicitWo || (options?.search || '').trim();
         const cleanWo = raw.replace(/^(WO|PROJETO)\s*[:#-]?\s*/i, '').trim();
         const woTarget = cleanWo || raw;
+        const safeWo = woTarget.replace(/'/g, "''");
+        const mergedMap = new Map<number, any>();
+        items.forEach(it => {
+          if (it?.DocEntry) mergedMap.set(Number(it.DocEntry), it);
+        });
+
         try {
-          const woRes = await api.get(`/sap/SQLQueries('SEARCH_QUOTES_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
-          if (woRes.data?.value && woRes.data.value.length > 0) {
+          let woRes;
+          try {
+            woRes = await api.get(`/sap/SQLQueries('SEARCH_QUOTES_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+          } catch {
+            try {
+              await api.post('/sap/SQLQueries', {
+                SqlCode: 'SEARCH_QUOTES_BY_WO',
+                SqlName: 'Search Sales Quotations by WO',
+                SqlText: 'SELECT T0."DocEntry" FROM "QUT1" T0 WHERE T0."OcrCode4" = :wo GROUP BY T0."DocEntry" ORDER BY T0."DocEntry" DESC'
+              });
+              woRes = await api.get(`/sap/SQLQueries('SEARCH_QUOTES_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+            } catch {}
+          }
+          if (woRes?.data?.value && woRes.data.value.length > 0) {
             const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
             if (entries.length > 0) {
-              const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
-              const fullDocsRes = await api.get(`/sap/Quotations?$filter=${filterEntries}&$orderby=DocEntry desc`);
-              if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
-                return fullDocsRes.data.value;
-              }
+              const filterEntries = entries.slice(0, 40).map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const fullDocsRes = await api.get(`/sap/Quotations?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
+              (fullDocsRes.data?.value || []).forEach((d: any) => {
+                if (d?.DocEntry) mergedMap.set(Number(d.DocEntry), d);
+              });
             }
           }
-        } catch {
-          // ignore error and proceed
+        } catch {}
+
+        try {
+          const headerWoRes = await api.get(
+            `/sap/Quotations?$filter=${encodeURIComponent(`U_Projeto eq '${safeWo}' or contains(U_Projeto, '${safeWo}')`)}&$orderby=DocEntry desc&$top=50`
+          );
+          (headerWoRes.data?.value || []).forEach((d: any) => {
+            if (d?.DocEntry) mergedMap.set(Number(d.DocEntry), d);
+          });
+        } catch {}
+
+        if (explicitWo && mergedMap.size === 0) {
+          try {
+            const recentRes = await api.get(`/sap/Quotations?$orderby=DocEntry desc&$top=100`);
+            (recentRes.data?.value || []).forEach((d: any) => {
+              if (d?.DocEntry && getDocumentWO(d).toLowerCase().includes(woTarget.toLowerCase())) {
+                mergedMap.set(Number(d.DocEntry), d);
+              }
+            });
+          } catch {}
+        }
+
+        if (mergedMap.size > 0) {
+          return Array.from(mergedMap.values()).sort((a, b) => Number(b.DocEntry || 0) - Number(a.DocEntry || 0));
         }
       }
 
@@ -2397,29 +3425,84 @@ export const sapService = {
         }
       }
 
+      const explicitWo = typeof options === 'object' && options?.wo ? options.wo.trim() : '';
       const url = buildODataQuery('/sap/Orders', options, 20, 'DocEntry desc');
       const response = await api.get(url);
-      const items = (response.data.value || []).filter(isServiceOrder);
+      const items: any[] = (response.data.value || []).filter(isServiceOrder);
 
-      // Check if search yields WO matches in lines
-      if (typeof options === 'object' && options?.search && items.length === 0) {
-        const raw = options.search.trim();
+      // Check if explicit WO or search yields WO matches in lines/header
+      if (typeof options === 'object' && (explicitWo || (options?.search && items.length === 0))) {
+        const raw = explicitWo || (options?.search || '').trim();
         const cleanWo = raw.replace(/^(WO|PROJETO)\s*[:#-]?\s*/i, '').trim();
         const woTarget = cleanWo || raw;
+        const safeWo = woTarget.replace(/'/g, "''");
+        const mergedMap = new Map<number, any>();
+        items.forEach(it => {
+          if (it?.DocEntry) mergedMap.set(Number(it.DocEntry), it);
+        });
+
         try {
-          const woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
-          if (woRes.data?.value && woRes.data.value.length > 0) {
+          let woRes;
+          try {
+            woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+          } catch {
+            try {
+              await api.post('/sap/SQLQueries', {
+                SqlCode: 'SEARCH_ORDERS_BY_WO',
+                SqlName: 'Search Sales Orders by WO',
+                SqlText: 'SELECT T0."DocEntry" FROM "RDR1" T0 WHERE T0."OcrCode4" = :wo GROUP BY T0."DocEntry" ORDER BY T0."DocEntry" DESC'
+              });
+              woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
+            } catch {}
+          }
+          if (woRes?.data?.value && woRes.data.value.length > 0) {
             const entries = woRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
             if (entries.length > 0) {
-              const filterEntries = entries.slice(0, 20).map((e: any) => `DocEntry eq ${e}`).join(' or ');
+              const filterEntries = entries.slice(0, 40).map((e: any) => `DocEntry eq ${e}`).join(' or ');
               const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
-              if (fullDocsRes.data?.value && fullDocsRes.data.value.length > 0) {
-                return fullDocsRes.data.value.filter(isServiceOrder);
-              }
+              (fullDocsRes.data?.value || []).filter(isServiceOrder).forEach((d: any) => {
+                if (d?.DocEntry) mergedMap.set(Number(d.DocEntry), d);
+              });
             }
           }
-        } catch {
-          // ignore error and proceed
+        } catch {}
+
+        try {
+          const headerWoRes = await api.get(
+            `/sap/Orders?$filter=${encodeURIComponent(`U_Projeto eq '${safeWo}' or contains(U_Projeto, '${safeWo}')`)}&$orderby=DocEntry desc&$top=50`
+          );
+          (headerWoRes.data?.value || []).filter(isServiceOrder).forEach((d: any) => {
+            if (d?.DocEntry) mergedMap.set(Number(d.DocEntry), d);
+          });
+        } catch {}
+
+        // Fallback: scan recent service orders when searching by WO directly so partial/line-level CostingCode4 matches are always returned
+        if (explicitWo) {
+          const hasMatchingWoYet = Array.from(mergedMap.values()).some(d =>
+            getDocumentWO(d).toLowerCase().includes(woTarget.toLowerCase())
+          );
+          if (!hasMatchingWoYet) {
+            try {
+              const sqlRes = await api.get(`/sap/SQLQueries('GET_ORDERS_SERVICE_9')/List?$skip=0&$top=100`);
+              if (sqlRes.data?.value && Array.isArray(sqlRes.data.value)) {
+                const entries = sqlRes.data.value.map((r: any) => r.DocEntry).filter(Boolean);
+                for (let i = 0; i < entries.length; i += 25) {
+                  const batch = entries.slice(i, i + 25);
+                  const filterEntries = batch.map((e: any) => `DocEntry eq ${e}`).join(' or ');
+                  const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
+                  (fullDocsRes.data?.value || []).filter(isServiceOrder).forEach((d: any) => {
+                    if (d?.DocEntry && getDocumentWO(d).toLowerCase().includes(woTarget.toLowerCase())) {
+                      mergedMap.set(Number(d.DocEntry), d);
+                    }
+                  });
+                }
+              }
+            } catch {}
+          }
+        }
+
+        if (mergedMap.size > 0) {
+          return Array.from(mergedMap.values()).sort((a, b) => Number(b.DocEntry || 0) - Number(a.DocEntry || 0));
         }
       }
 
@@ -2755,5 +3838,190 @@ export const sapService = {
     } catch (error) {
       return handleApiError(error, 'decideUnifiedApproval');
     }
+  },
+
+  // Get currencies linked to a Business Partner (supports multi-currency '##' or BPCurrenciesCollection)
+  getPartnerCurrencies: async (cardCode?: string): Promise<string[]> => {
+    const standardCurrencies = ['R$', 'USD', 'EUR', 'GBP', 'CAD', 'CHF'];
+    if (!cardCode) return standardCurrencies;
+    try {
+      const bp = await sapService.getBusinessPartner(cardCode);
+      if (!bp) return standardCurrencies;
+      const set = new Set<string>(['R$']);
+      if (bp.Currency && bp.Currency !== '##') {
+        set.add(bp.Currency);
+      }
+      if (bp.DefaultCurrency && bp.DefaultCurrency !== '##') {
+        set.add(bp.DefaultCurrency);
+      }
+      if (Array.isArray(bp.BPCurrenciesCollection) && bp.BPCurrenciesCollection.length > 0) {
+        bp.BPCurrenciesCollection.forEach((c: any) => {
+          if (c.Include === 'tYES' || c.Include === 'Y' || !c.Include) {
+            if (c.CurrencyCode) set.add(c.CurrencyCode);
+          }
+        });
+      }
+      // Always include common foreign currencies so user can select one or more currencies for the PO
+      standardCurrencies.forEach(c => set.add(c));
+      return Array.from(set);
+    } catch {
+      return standardCurrencies;
+    }
+  },
+
+  // Build SAP B1 Relationship Map (Mapa de Relações: Documento Base -> Documento Atual -> Documento Destino)
+  getDocumentRelationshipMap: async (doc: any, currentTypeHint?: string) => {
+    if (!doc) return { baseDocs: [], currentDoc: null, targetDocs: [] };
+
+    const inferTypeLabel = (objCodeOrHint?: string | number) => {
+      const s = String(objCodeOrHint || '').toLowerCase();
+      if (s === '1470000113' || s.includes('request') || s.includes('solicit')) return 'Solicitação de Compra';
+      if (s === '540000006' || s.includes('quotation') || s.includes('oferta') || s.includes('cotac')) return 'Oferta de Compra (Cotação)';
+      if (s === '204' || s.includes('down')) return 'Adiantamento a Fornecedor';
+      if (s === '18' || s.includes('invoice')) return 'Nota Fiscal de Entrada';
+      return 'Pedido de Compra';
+    };
+
+    const currentDocNode = {
+      docEntry: doc.DocEntry,
+      docNum: doc.DocNum || doc.DocEntry,
+      typeLabel: inferTypeLabel(currentTypeHint || doc.DocObjectCode),
+      date: doc.DocDate || doc.CreationDate,
+      partnerName: doc.CardName || doc.RequesterName || doc.CardCode || '-',
+      total: Number(doc.DocTotal || 0),
+      currency: doc.DocCurrency || 'R$',
+      status: doc.DocumentStatus === 'bost_Close' || doc.Cancelled === 'tYES' ? 'Fechado' : 'Aberto',
+      isDraft: Boolean(doc._isDraft || doc.DocObjectCode)
+    };
+
+    const baseDocs: any[] = [];
+    const targetDocs: any[] = [];
+    const seenBaseKeys = new Set<string>();
+    const seenTargetKeys = new Set<string>();
+
+    // 1. Inspect lines for BaseType & BaseEntry
+    const lines = Array.isArray(doc.DocumentLines) ? doc.DocumentLines : [];
+    for (const line of lines) {
+      const baseType = line.BaseType !== undefined && line.BaseType !== null ? Number(line.BaseType) : -1;
+      const baseEntry = line.BaseEntry !== undefined && line.BaseEntry !== null ? Number(line.BaseEntry) : null;
+      if (baseEntry && baseEntry > 0 && baseType !== -1) {
+        const key = `${baseType}-${baseEntry}`;
+        if (!seenBaseKeys.has(key)) {
+          seenBaseKeys.add(key);
+          try {
+            let baseEndpoint = 'PurchaseOrders';
+            if (baseType === 1470000113) baseEndpoint = 'PurchaseRequests';
+            else if (baseType === 540000006) baseEndpoint = 'PurchaseQuotations';
+            const res = await api.get(`/sap/${baseEndpoint}(${baseEntry})`);
+            const bData = res.data;
+            if (bData && bData.DocEntry) {
+              baseDocs.push({
+                docEntry: bData.DocEntry,
+                docNum: bData.DocNum || bData.DocEntry,
+                typeLabel: inferTypeLabel(baseType),
+                date: bData.DocDate,
+                partnerName: bData.CardName || bData.RequesterName || bData.CardCode || '-',
+                total: Number(bData.DocTotal || 0),
+                currency: bData.DocCurrency || 'R$',
+                status: bData.DocumentStatus === 'bost_Close' ? 'Fechado' : 'Aberto'
+              });
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // 2. Also parse Comments for "Baseado em Oferta de compra XXXX" or "REQ YYYY" or "Solicitação ZZZZ"
+    const commentsStr = String(doc.Comments || '');
+    const ofertaMatches = Array.from(commentsStr.matchAll(/(?:oferta(?:\s+de\s+compra)?|cotac[aã]o)\s*(?:n[º°]?\s*|#)?(\d+)/gi));
+    for (const m of ofertaMatches) {
+      const num = Number(m[1]);
+      if (num > 0) {
+        try {
+          const qRes = await api.get(`/sap/PurchaseQuotations?$filter=DocNum eq ${num} or DocEntry eq ${num}&$top=1`);
+          const qDoc = qRes.data?.value?.[0];
+          if (qDoc && !seenBaseKeys.has(`540000006-${qDoc.DocEntry}`)) {
+            seenBaseKeys.add(`540000006-${qDoc.DocEntry}`);
+            baseDocs.push({
+              docEntry: qDoc.DocEntry,
+              docNum: qDoc.DocNum || qDoc.DocEntry,
+              typeLabel: 'Oferta de Compra (Cotação)',
+              date: qDoc.DocDate,
+              partnerName: qDoc.CardName || qDoc.CardCode || '-',
+              total: Number(qDoc.DocTotal || 0),
+              currency: qDoc.DocCurrency || 'R$',
+              status: qDoc.DocumentStatus === 'bost_Close' ? 'Fechado' : 'Aberto'
+            });
+          }
+        } catch {}
+      }
+    }
+
+    const reqMatches = Array.from(commentsStr.matchAll(/(?:req|solicita[cç][aã]o(?:\s+de\s+compra)?)\s*(?:n[º°]?\s*|#)?(\d+)/gi));
+    for (const m of reqMatches) {
+      const num = Number(m[1]);
+      if (num > 0) {
+        try {
+          const rRes = await api.get(`/sap/PurchaseRequests?$filter=DocNum eq ${num} or DocEntry eq ${num}&$top=1`);
+          const rDoc = rRes.data?.value?.[0];
+          if (rDoc && !seenBaseKeys.has(`1470000113-${rDoc.DocEntry}`)) {
+            seenBaseKeys.add(`1470000113-${rDoc.DocEntry}`);
+            baseDocs.push({
+              docEntry: rDoc.DocEntry,
+              docNum: rDoc.DocNum || rDoc.DocEntry,
+              typeLabel: 'Solicitação de Compra',
+              date: rDoc.DocDate,
+              partnerName: rDoc.RequesterName || rDoc.Requester || '-',
+              total: Number(rDoc.DocTotal || 0),
+              currency: rDoc.DocCurrency || 'R$',
+              status: rDoc.DocumentStatus === 'bost_Close' ? 'Fechado' : 'Aberto'
+            });
+          }
+        } catch {}
+      }
+    }
+
+    // 3. Look for Target Documents (downstream documents referencing this document's DocNum or DocEntry)
+    const docNum = doc.DocNum || doc.DocEntry;
+    if (docNum) {
+      const searchCollections = [
+        { endpoint: 'PurchaseQuotations', label: 'Oferta de Compra (Cotação)' },
+        { endpoint: 'PurchaseOrders', label: 'Pedido de Compra' },
+        { endpoint: 'PurchaseDownPayments', label: 'Adiantamento a Fornecedor' }
+      ];
+      await Promise.all(
+        searchCollections.map(async col => {
+          try {
+            const res = await api.get(
+              `/sap/${col.endpoint}?$filter=contains(Comments, '${docNum}')&$top=10&$orderby=DocEntry desc`
+            );
+            const list = res.data?.value || [];
+            for (const tDoc of list) {
+              if (tDoc.DocEntry === doc.DocEntry && col.label === currentDocNode.typeLabel) continue;
+              const tKey = `${col.endpoint}-${tDoc.DocEntry}`;
+              if (!seenTargetKeys.has(tKey)) {
+                seenTargetKeys.add(tKey);
+                targetDocs.push({
+                  docEntry: tDoc.DocEntry,
+                  docNum: tDoc.DocNum || tDoc.DocEntry,
+                  typeLabel: col.label,
+                  date: tDoc.DocDate,
+                  partnerName: tDoc.CardName || tDoc.RequesterName || tDoc.CardCode || '-',
+                  total: Number(tDoc.DocTotal || 0),
+                  currency: tDoc.DocCurrency || 'R$',
+                  status: tDoc.DocumentStatus === 'bost_Close' ? 'Fechado' : 'Aberto'
+                });
+              }
+            }
+          } catch {}
+        })
+      );
+    }
+
+    return {
+      baseDocs,
+      currentDoc: currentDocNode,
+      targetDocs
+    };
   }
 };

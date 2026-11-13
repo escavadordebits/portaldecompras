@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, RotateCw, X, Building2, Hash, FolderKanban, Tag, ShieldCheck, AlertCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { CustomerSelectionModal } from './CustomerSelectionModal';
 import { formatTaxId, matchPartnerQuery } from '../utils/taxUtils';
 import { sapService } from '../services/sapService';
+import { resolveEffectiveRequireClientForWo } from './SessionConfigModal';
 
 export interface DocumentFilters {
   docNum: string;
@@ -52,6 +53,22 @@ export function DocumentListFilterBar({
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [requireClientForWo, setRequireClientForWo] = useState<boolean>(() => {
+    return resolveEffectiveRequireClientForWo().effective;
+  });
+
+  useEffect(() => {
+    const syncWoConfig = () => {
+      setRequireClientForWo(resolveEffectiveRequireClientForWo().effective);
+    };
+    syncWoConfig();
+    window.addEventListener('sap_timeout_config_updated', syncWoConfig);
+    window.addEventListener('sap_user_profile_updated', syncWoConfig);
+    return () => {
+      window.removeEventListener('sap_timeout_config_updated', syncWoConfig);
+      window.removeEventListener('sap_user_profile_updated', syncWoConfig);
+    };
+  }, []);
 
   // Prefetch customers on mount
   React.useEffect(() => {
@@ -60,13 +77,13 @@ export function DocumentListFilterBar({
     }
   }, [partnerType]);
 
-  // Validation state: WO requires Cliente only for sales orders (customer)
+  // Validation state: WO requires Cliente only when configured (Global or User override)
   const isWoFilled = Boolean(filters.wo && filters.wo.trim() !== '');
   const isClientFilled = Boolean(
     (filters.clientCode && filters.clientCode.trim() !== '') ||
     (filters.clientName && filters.clientName.trim() !== '')
   );
-  const isClientMissingForWo = partnerType === 'customer' && isWoFilled && !isClientFilled;
+  const isClientMissingForWo = requireClientForWo && partnerType === 'customer' && isWoFilled && !isClientFilled;
 
   const handleFieldChange = (field: keyof DocumentFilters, value: string) => {
     onChangeFilters({
@@ -137,9 +154,9 @@ export function DocumentListFilterBar({
       (currentFilters.clientName && currentFilters.clientName.trim() !== '')
     );
 
-    // Mandatory rule: WO requires Cliente
-    if (isWoFilled && !isClientNowFilled && partnerType === 'customer') {
-      toast.error('O preenchimento do Cliente é obrigatório quando a WO é informada.');
+    // Mandatory rule: WO requires Cliente ONLY when requireClientForWo is enabled (Global or User override)
+    if (requireClientForWo && isWoFilled && !isClientNowFilled && partnerType === 'customer') {
+      toast.error('O preenchimento do Cliente é obrigatório quando a WO é informada (conforme configuração ativa).');
       setIsClientModalOpen(true);
       return;
     }
@@ -192,7 +209,7 @@ export function DocumentListFilterBar({
               <label className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
                 <Building2 className="w-3.5 h-3.5 text-evo-teal" />
                 {clientLabel}
-                {isWoFilled && partnerType === 'customer' && <span className="text-rose-500 font-black">*</span>}
+                {requireClientForWo && isWoFilled && partnerType === 'customer' && <span className="text-rose-500 font-black">*</span>}
               </label>
               {isClientMissingForWo && (
                 <span className="text-[9px] font-black uppercase text-rose-600 flex items-center gap-1 animate-pulse">
@@ -326,9 +343,15 @@ export function DocumentListFilterBar({
                 WO (Projeto)
               </label>
               {isWoFilled && partnerType === 'customer' && (
-                <span className="text-[9px] font-black uppercase text-amber-600 bg-amber-50 px-1.5 py-0.5 border border-amber-200">
-                  Exige Cliente
-                </span>
+                requireClientForWo ? (
+                  <span className="text-[9px] font-black uppercase text-amber-600 bg-amber-50 px-1.5 py-0.5 border border-amber-200">
+                    Exige Cliente
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 border border-emerald-200">
+                    Busca Livre
+                  </span>
+                )
               )}
             </div>
             <div className="relative">

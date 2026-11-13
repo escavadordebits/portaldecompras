@@ -50,9 +50,13 @@ import {
   Printer,
   ChevronDown,
   ChevronUp,
-  Building2
+  Building2,
+  GitBranch,
+  Copy
 } from 'lucide-react';
 import { BidComparativeView } from './components/BidComparativeView';
+import { RelationshipMapModal } from './components/RelationshipMapModal';
+import { SessionConfigModal } from './components/SessionConfigModal';
 import { MeasurementsSummaryModal } from './components/MeasurementsSummaryModal';
 import { DocumentAttachmentsSection } from './components/DocumentAttachmentsSection';
 import { SalesOrderPrintModal } from './components/SalesOrderPrintModal';
@@ -411,17 +415,40 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [portalDocEntry, setPortalDocEntry] = useState<number | null>(null);
 
-  // Inactivity auto-logout (5 minutes of inactivity)
+  const [isSessionConfigOpen, setIsSessionConfigOpen] = useState(false);
+  const [copiedRequestForQuotation, setCopiedRequestForQuotation] = useState<any>(null);
+  const [timeoutConfigTick, setTimeoutConfigTick] = useState(0);
+
+  useEffect(() => {
+    const onTimeoutConfigUpdated = () => setTimeoutConfigTick(t => t + 1);
+    window.addEventListener('sap_timeout_config_updated', onTimeoutConfigUpdated);
+    return () => window.removeEventListener('sap_timeout_config_updated', onTimeoutConfigUpdated);
+  }, []);
+
+  // Inactivity auto-logout (15 minutes default, per-user override ignores global)
   useEffect(() => {
     if (!activeAuthUser && !isSAPLoggedIn) return;
 
-    const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 minutos
+    const emailKey = (userProfile?.email || activeAuthUser?.email || sapUser?.email || '').toLowerCase().trim();
+    const localUserTimeout = emailKey ? Number(localStorage.getItem(`sap_portal_user_timeout_${emailKey}`)) : 0;
+    const profileUserTimeout = Number(userProfile?.inactivityTimeoutMinutes || 0);
+    const globalTimeout = Number(localStorage.getItem('sap_portal_global_timeout_minutes')) || 15;
+
+    // Once defined on the user, ignore global configuration
+    const effectiveMinutes =
+      (!isNaN(localUserTimeout) && localUserTimeout > 0)
+        ? localUserTimeout
+        : (!isNaN(profileUserTimeout) && profileUserTimeout > 0)
+        ? profileUserTimeout
+        : (!isNaN(globalTimeout) && globalTimeout >= 1 ? globalTimeout : 15);
+
+    const INACTIVITY_LIMIT_MS = effectiveMinutes * 60 * 1000;
     let inactivityTimer: NodeJS.Timeout;
 
     const resetInactivityTimer = () => {
       if (inactivityTimer) clearTimeout(inactivityTimer);
       inactivityTimer = setTimeout(() => {
-        toast.error('Sessão encerrada por inatividade. Por motivos de segurança, realize o login novamente.', { duration: 7000 });
+        toast.error(`Sessão encerrada após ${effectiveMinutes} minutos de inatividade. Por motivos de segurança, realize o login novamente.`, { duration: 7000 });
         handleLogout();
       }, INACTIVITY_LIMIT_MS);
     };
@@ -434,7 +461,7 @@ export default function App() {
       if (inactivityTimer) clearTimeout(inactivityTimer);
       trackedEvents.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
     };
-  }, [activeAuthUser, isSAPLoggedIn]);
+  }, [activeAuthUser, isSAPLoggedIn, userProfile, sapUser, timeoutConfigTick]);
 
   const validateLocalSession = async (sessionUser: any) => {
     if (isLoggingOutRef.current || isLoggedOut || (typeof window !== 'undefined' && sessionStorage.getItem('sap_portal_logged_out') === 'true')) return;
@@ -945,6 +972,12 @@ export default function App() {
 
     return () => unsubscribe();
   }, [userProfile?.id, userProfile?.uid, userProfile?.email, activeAuthUser, isLoggedOut]);
+
+  // Prefetch all purchase lookups (Usages, Buyers, Payment Terms, Payment Methods, Branches, Dimensions) for zero-delay dropdowns
+  useEffect(() => {
+    if (!activeAuthUser && !isSAPLoggedIn) return;
+    sapService.prefetchPurchaseLookups();
+  }, [activeAuthUser, isSAPLoggedIn]);
 
   // Route access guard: ensure user only accesses allowed views according to active profile & permissions
   useEffect(() => {
@@ -1557,10 +1590,21 @@ export default function App() {
       ]
     },
     {
-      title: 'Administração',
-      visible: userProfile?.role === 'admin',
+      title: 'Configurações & Administração',
+      visible: true,
       items: [
         {
+          id: 'session-config',
+          label: 'Tempo de Sessão (15 min)',
+          icon: <Clock />,
+          active: isSessionConfigOpen,
+          onClick: () => {
+            setIsSessionConfigOpen(true);
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['configuração', 'configuracao', 'tempo', 'sessão', 'sessao', 'inatividade', '15 min', 'global']
+        },
+        ...(userProfile?.role === 'admin' ? [{
           id: 'users',
           label: 'Usuários & Acessos',
           icon: <Settings />,
@@ -1570,7 +1614,7 @@ export default function App() {
             if (window.innerWidth < 1024) setSidebarOpen(false);
           },
           keywords: ['usuários', 'usuarios', 'acessos', 'admin', 'permissões', 'permissoes']
-        }
+        }] : [])
       ]
     }
   ], [activeModules, currentView, userProfile?.role]);
@@ -1862,7 +1906,7 @@ export default function App() {
             <Logo size="md" className="bg-white text-evo-teal shadow-none" />
             <div className="flex flex-col leading-none">
               <div className="flex items-center gap-2">
-                <span className="font-bold text-lg sm:text-xl tracking-tighter text-white">QUALITECH</span>
+                <span className="font-bold text-lg sm:text-xl tracking-tighter text-white notranslate" translate="no">QUALITECH</span>
                 <span className="bg-evo-teal/30 text-teal-200 border border-teal-400/40 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded tracking-wider shadow-sm">
                   {APP_VERSION_TAG}
                 </span>
@@ -2012,6 +2056,17 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Session Timeout Config Button */}
+          <button
+            type="button"
+            onClick={() => setIsSessionConfigOpen(true)}
+            className="bg-white/10 hover:bg-white/20 text-white px-2.5 py-2 rounded border border-white/15 transition-all cursor-pointer shrink-0 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider"
+            title="Configurar Tempo de Fechamento por Inatividade (Global / Usuário)"
+          >
+            <Clock className="w-3.5 h-3.5 text-evo-teal" />
+            <span className="hidden md:inline">Sessão</span>
+          </button>
 
           {/* Settings Button */}
           <button
@@ -2209,6 +2264,7 @@ export default function App() {
                 title="Nova Solicitação de Compra"
                 onSubmit={sapService.createPurchaseRequest}
                 userEmail={sapUser?.email}
+                allowAttachments={true}
               />
             )}
             {currentView === 'list-requests' && (
@@ -2221,6 +2277,20 @@ export default function App() {
                 onBack={() => setSelectedRequestEntry(null)}
                 onViewDetails={handleViewRequestDetails}
                 userEmail={sapUser?.email}
+                onCopyToQuotation={async (reqDoc: any) => {
+                  try {
+                    let fullReq = reqDoc;
+                    if (!Array.isArray(reqDoc.DocumentLines) || reqDoc.DocumentLines.length === 0) {
+                      fullReq = await sapService.getPurchaseRequest(reqDoc.DocEntry);
+                    }
+                    setCopiedRequestForQuotation(fullReq || reqDoc);
+                    setCurrentView('create-quotation');
+                    toast.success(`Solicitação #${reqDoc.DocNum || reqDoc.DocEntry} copiada para Nova Oferta de Compra! Selecione o Fornecedor.`);
+                  } catch (e) {
+                    setCopiedRequestForQuotation(reqDoc);
+                    setCurrentView('create-quotation');
+                  }
+                }}
               />
             )}
             {currentView === 'create-quotation' && (
@@ -2229,6 +2299,9 @@ export default function App() {
                 title="Nova Cotação de Compra"
                 onSubmit={sapService.createPurchaseQuotation}
                 userEmail={sapUser?.email}
+                allowAttachments={true}
+                initialFromRequest={copiedRequestForQuotation}
+                onClearInitialRequest={() => setCopiedRequestForQuotation(null)}
               />
             )}
             {currentView === 'list-quotations' && (
@@ -2312,6 +2385,14 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* Session Timeout Configuration Modal */}
+      <SessionConfigModal
+        isOpen={isSessionConfigOpen}
+        onClose={() => setIsSessionConfigOpen(false)}
+        userEmail={userProfile?.email || activeAuthUser?.email || sapUser?.email || ''}
+        userProfile={userProfile}
+      />
 
       {/* Global Measurements Summary Modal */}
       <MeasurementsSummaryModal
@@ -3110,19 +3191,25 @@ function CreateOrderView({
   title = "Novo Pedido de Compra",
   onSubmit = sapService.createPurchaseOrder,
   userEmail,
-  allowAttachments = false
+  allowAttachments = true,
+  initialFromRequest = null,
+  onClearInitialRequest
 }: {
   key?: string,
   title?: string,
   onSubmit?: (data: any, email?: string) => Promise<any>,
   userEmail?: string,
-  allowAttachments?: boolean
+  allowAttachments?: boolean,
+  initialFromRequest?: any,
+  onClearInitialRequest?: () => void
 }) {
   const [supplierSearch, setSupplierSearch] = useState('');
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
 
   const isRequest = title.includes('Solicitação');
+  const isQuotation = title.includes('Cotação') || title.includes('Oferta');
 
   const [itemSearch, setItemSearch] = useState('');
   const [items, setItems] = useState<any[]>([]);
@@ -3131,19 +3218,86 @@ function CreateOrderView({
   const [businessPlaces, setBusinessPlaces] = useState<any[]>([]);
   const [selectedBPL, setSelectedBPL] = useState<string>('');
   const [selectedUsage, setSelectedUsage] = useState<string>('');
+  const [headerUsageQuery, setHeaderUsageQuery] = useState<string>('');
+  const [showHeaderUsageDropdown, setShowHeaderUsageDropdown] = useState<boolean>(false);
+  const [lineUsageQueryMap, setLineUsageQueryMap] = useState<Record<number, string>>({});
+  const [openLineUsageIdx, setOpenLineUsageIdx] = useState<number | null>(null);
 
   const [dimensions, setDimensions] = useState<any[]>([]);
   const [distRules, setDistRules] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [usages, setUsages] = useState<any[]>([]);
   const [paymentTermsList, setPaymentTermsList] = useState<any[]>([]);
+  const [paymentMethodsList, setPaymentMethodsList] = useState<any[]>([
+    { PaymentMethodCode: 'P-TRF-ITA-43410', Description: 'P-TRF-ITA-43410 - Transferência Itaú' },
+    { PaymentMethodCode: 'P-BOL-ITA-43410', Description: 'P-BOL-ITA-43410 - Boleto Itaú' },
+    { PaymentMethodCode: 'PIX', Description: 'PIX Bancário' },
+    { PaymentMethodCode: 'CARTAO', Description: 'Cartão Corporativo' }
+  ]);
   const [selectedPaymentGroup, setSelectedPaymentGroup] = useState<string>('-1');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('P-TRF-ITA-43410');
+
+  const filterAndRankUsages = (usageList: any[], rawQuery: string) => {
+    const clean = (s: string) =>
+      String(s || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+        .replace(/[._\-/]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const expandUsageSynonyms = (usageText: string) => {
+      let expanded = clean(usageText);
+      if (/\bCONS\b/.test(expanded)) expanded += ' CONSUMIDOR FINAL CONSUMO';
+      if (/\bCOMP\b/.test(expanded)) expanded += ' COMPRA COMPRAS';
+      if (/\bAQ\b/.test(expanded)) expanded += ' AQUISICAO COMPRA';
+      if (/\b(UT|UTILZ|UTIL)\b/.test(expanded)) expanded += ' UTILIZACAO USO CONSUMO';
+      if (/\bIND\b/.test(expanded)) expanded += ' INDUSTRIALIZACAO';
+      if (/\bDEV\b/.test(expanded)) expanded += ' DEVOLUCAO';
+      if (/\bSERV\b/.test(expanded)) expanded += ' SERVICO SERVICOS';
+      if (/\b(IMOB|ATIVO)\b/.test(expanded)) expanded += ' IMOBILIZADO ATIVO FIXO';
+      return expanded;
+    };
+
+    const qNorm = clean(rawQuery);
+    if (!qNorm) return usageList;
+
+    const rawTokens = qNorm.split(' ').filter(Boolean);
+    const stopWords = new Set(['E', 'DE', 'DO', 'DA', 'PARA', 'P', 'COM', 'A', 'O']);
+    const mainTokens = rawTokens.filter((t) => !stopWords.has(t));
+    const tokens = mainTokens.length > 0 ? mainTokens : rawTokens;
+
+    return usageList
+      .filter((u: any) => {
+        const idStr = String(u.ID ?? '').trim().toUpperCase();
+        const rawUsageStr = String(u.Usage ?? '');
+        const rawDescrStr = String(u.Descr ?? '');
+        const expandedSearchable = `${idStr} ${expandUsageSynonyms(rawUsageStr)} ${expandUsageSynonyms(rawDescrStr)}`;
+        if (idStr === qNorm || expandedSearchable.includes(qNorm)) return true;
+        return tokens.every((tk) => expandedSearchable.includes(tk));
+      })
+      .sort((a: any, b: any) => {
+        const aId = String(a.ID ?? '').trim().toUpperCase();
+        const bId = String(b.ID ?? '').trim().toUpperCase();
+        if (aId === qNorm && bId !== qNorm) return -1;
+        if (bId === qNorm && aId !== qNorm) return 1;
+        const aClean = clean(a.Usage);
+        const bClean = clean(b.Usage);
+        const aStarts = aClean.startsWith(qNorm) || aId.startsWith(qNorm);
+        const bStarts = bClean.startsWith(qNorm) || bId.startsWith(qNorm);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+        return Number(a.ID) - Number(b.ID);
+      });
+  };
   const [uDataPgto, setUDataPgto] = useState<string>(() => calculateUDataPgtoFromPymntGroup(''));
   const [buyersList, setBuyersList] = useState<any[]>([]);
   const [selectedBuyer, setSelectedBuyer] = useState<string>('-1');
   const [comments, setComments] = useState<string>('');
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isDraggingAttachments, setIsDraggingAttachments] = useState<boolean>(false);
   const [docDueDate, setDocDueDate] = useState<string>(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSearchingItems, setIsSearchingItems] = useState(false);
@@ -3151,6 +3305,40 @@ function CreateOrderView({
   const [lastAddedIdx, setLastAddedIdx] = useState<number | null>(null);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [createdDocEntry, setCreatedDocEntry] = useState<number | null>(null);
+
+  // Hydrate when copying from Solicitação de Compra to Nova Cotação/Oferta de Compra (Item 15)
+  useEffect(() => {
+    if (!initialFromRequest) return;
+    const reqLines = Array.isArray(initialFromRequest.DocumentLines) ? initialFromRequest.DocumentLines : [];
+    if (reqLines.length > 0) {
+      setOrderItems(
+        reqLines.map((l: any, idx: number) => ({
+          ItemCode: l.ItemCode,
+          ItemName: l.ItemDescription || l.ItemName || l.ItemCode,
+          ItemDescription: l.ItemDescription || l.ItemName || l.ItemCode,
+          Quantity: Number(l.Quantity || 1),
+          Price: Number(l.Price || l.UnitPrice || 0),
+          CostingCode: l.CostingCode || 'BR',
+          CostingCode2: l.CostingCode2 || 'MATRIZ',
+          CostingCode3: l.CostingCode3 || 'OPER_OFF',
+          CostingCode4: l.CostingCode4 || l.ProjectCode || 'BASE',
+          ProjectCode: l.CostingCode4 || l.ProjectCode || 'BASE',
+          Usage: l.Usage ? String(l.Usage) : undefined,
+          BaseType: 1470000113,
+          BaseEntry: initialFromRequest.DocEntry,
+          BaseLine: l.LineNum !== undefined ? Number(l.LineNum) : idx
+        }))
+      );
+    }
+    if (initialFromRequest.BPL_IDAssignedToInvoice || initialFromRequest.BPLID) {
+      setSelectedBPL(String(initialFromRequest.BPL_IDAssignedToInvoice || initialFromRequest.BPLID));
+    }
+    if (initialFromRequest.SalesPersonCode && Number(initialFromRequest.SalesPersonCode) !== -1) {
+      setSelectedBuyer(String(initialFromRequest.SalesPersonCode));
+    }
+    const baseRef = `Baseado na Solicitação de Compra #${initialFromRequest.DocNum || initialFromRequest.DocEntry}`;
+    setComments(initialFromRequest.Comments ? `${baseRef}. ${initialFromRequest.Comments}` : baseRef);
+  }, [initialFromRequest]);
 
   const handlePaymentGroupChange = (groupNumStr: string, termsSource: any[] = paymentTermsList) => {
     setSelectedPaymentGroup(groupNumStr);
@@ -3194,25 +3382,16 @@ function CreateOrderView({
     return () => clearTimeout(timer);
   }, [itemSearch]);
 
-  const fetchAccountingData = async () => {
-    try {
-      const [dims, rules, projs, use, pTerms, buyers] = await Promise.all([
-        sapService.getDimensions(),
-        sapService.getDistributionRules(),
-        sapService.getProjects(),
-        sapService.getUsages(),
-        sapService.getPaymentTerms(),
-        sapService.getBuyers()
-      ]);
-      setDimensions(dims);
-      setDistRules(rules);
-      setProjects(projs);
-      setUsages(use);
-      setPaymentTermsList(pTerms || []);
-      setBuyersList(buyers || []);
-    } catch (error) {
-      console.error('Erro ao carregar dados contábeis:', error);
-    }
+  const fetchAccountingData = () => {
+    sapService.getUsages().then((use) => setUsages(use || [])).catch((e) => console.error('Erro ao carregar utilizações:', e));
+    sapService.getBuyers().then((buyers) => setBuyersList(buyers || [])).catch((e) => console.error('Erro ao carregar compradores:', e));
+    sapService.getPaymentTerms().then((pTerms) => setPaymentTermsList(pTerms || [])).catch((e) => console.error('Erro ao carregar condições de pagamento:', e));
+    sapService.getPaymentMethods().then((pMethods) => {
+      if (Array.isArray(pMethods) && pMethods.length > 0) setPaymentMethodsList(pMethods);
+    }).catch((e) => console.error('Erro ao carregar formas de pagamento:', e));
+    sapService.getDimensions().then((dims) => setDimensions(dims || [])).catch((e) => console.error('Erro ao carregar dimensões:', e));
+    sapService.getProjects().then((projs) => setProjects(projs || [])).catch((e) => console.error('Erro ao carregar projetos:', e));
+    sapService.getDistributionRules().then((rules) => setDistRules(rules || [])).catch((e) => console.error('Erro ao carregar centros de custo:', e));
   };
 
   const fetchBusinessPlaces = async () => {
@@ -3343,8 +3522,10 @@ function CreateOrderView({
       const orderData: any = {
         CardCode: selectedSupplier?.CardCode || '',
         DocDueDate: docDueDate,
+        RequriedDate: docDueDate,
         PaymentGroupCode: !isNaN(parsedPaymentGroup) ? parsedPaymentGroup : -1,
-        U_DataPgto: computedUDataPgto,
+        ...(selectedPaymentMethod ? { PaymentMethod: selectedPaymentMethod, U_FormaPG: selectedPaymentMethod } : {}),
+        ...(!isRequest && !isQuotation ? { U_DataPgto: computedUDataPgto } : {}),
         SalesPersonCode: !isNaN(parsedBuyerCode) ? parsedBuyerCode : -1,
         ...(comments.trim() ? { Comments: comments.trim() } : {}),
         ...(parsedHeaderUsage ? {
@@ -3361,12 +3542,20 @@ function CreateOrderView({
             ItemDescription: i.ItemDescription || i.ItemName,
             Quantity: i.Quantity,
             Price: i.Price,
+            RequiredDate: docDueDate,
+            ShipDate: docDueDate,
             CostingCode: i.CostingCode || 'BR',
             CostingCode2: i.CostingCode2 || 'MATRIZ',
             CostingCode3: i.CostingCode3 || 'OPER_OFF',
             CostingCode4: lineProject,
+            ProjectCode: lineProject,
             CostingCode5: i.CostingCode5 || undefined,
-            Usage: lineUsage || undefined
+            Usage: lineUsage || undefined,
+            ...(i.BaseType !== undefined && i.BaseEntry !== undefined ? {
+              BaseType: i.BaseType,
+              BaseEntry: i.BaseEntry,
+              BaseLine: i.BaseLine ?? 0
+            } : {})
           };
         })
       };
@@ -3451,31 +3640,60 @@ function CreateOrderView({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
         {/* Main Form Area */}
         <div className="lg:col-span-8 space-y-10">
+          {/* Copied From Purchase Request Banner (Item 15) */}
+          {initialFromRequest && (
+            <div className="p-4 bg-[#f0f9ff] border-l-4 border-[#0ea5e9] flex items-center justify-between shadow-sm">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-[#0f172a]">
+                  Oferta de Compra Copiada da Solicitação #{initialFromRequest.DocNum || initialFromRequest.DocEntry}
+                </p>
+                <p className="text-[11px] font-medium text-slate-600 mt-0.5">
+                  Os itens e centros de custo foram importados automaticamente. Selecione o Fornecedor ao lado para efetivar a Oferta vinculada.
+                </p>
+              </div>
+              {onClearInitialRequest && (
+                <Button variant="ghost" size="sm" onClick={onClearInitialRequest} className="text-xs font-bold text-slate-500 hover:text-rose-600">
+                  Desvincular
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Header Data Section */}
           <section className="space-y-4">
             <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Informações de Cabeçalho</h2>
             <Card className="evo-card border-none">
               <CardContent className="pt-8 pb-8 px-8">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Filial Responsável</Label>
+                  {/* Item 7: Active OBPL Branches with Full Name */}
+                  <div className="space-y-2 md:col-span-2 lg:col-span-2">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Filial Responsável (OBPL Ativas)</Label>
                     <Select value={selectedBPL} onValueChange={setSelectedBPL}>
                       <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
-                        <SelectValue placeholder="Selecione a unidade">
-                          {selectedBPL ? businessPlaces.find(b => String(b.BPLID) === selectedBPL)?.BPLName : "Selecione a unidade"}
+                        <SelectValue placeholder="Selecione a filial ativa">
+                          {(() => {
+                            const bpl = businessPlaces.find(b => String(b.BPLID) === selectedBPL);
+                            if (!bpl) return "Selecione a filial ativa";
+                            return `${bpl.BPLID} - ${bpl.BPLName}${bpl.FederalTaxID ? ` (${bpl.FederalTaxID})` : ''}`;
+                          })()}
                         </SelectValue>
                       </SelectTrigger>
-                      <SelectContent className="rounded-none border-evo-bg max-w-[300px]">
+                      <SelectContent className="rounded-none border-evo-bg min-w-[380px] max-w-[560px]">
                         {businessPlaces.map((bpl) => (
-                          <SelectItem key={bpl.BPLID} value={String(bpl.BPLID)} className="text-[10px] uppercase font-black tracking-tight">
-                            {bpl.BPLName}
+                          <SelectItem key={bpl.BPLID} value={String(bpl.BPLID)} className="text-[11px] uppercase font-black tracking-tight py-2.5 whitespace-normal">
+                            <span className="text-evo-teal mr-1.5">[{bpl.BPLID}]</span> {bpl.BPLName}
+                            {bpl.FederalTaxID ? <span className="text-[10px] font-mono text-slate-500 ml-2">({bpl.FederalTaxID})</span> : null}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Items 2, 12, 14: Dynamic Date Label per Document Type */}
                   <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Data de Vencimento</Label>
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">
+                      {isRequest ? 'Compra Necessária' : isQuotation ? 'Data de Entrega Prevista' : 'Data de Entrega'}
+                    </Label>
                     <Input
                       type="date"
                       className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold"
@@ -3483,71 +3701,161 @@ function CreateOrderView({
                       onChange={(e) => setDocDueDate(e.target.value)}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Utilização Fiscal (Cabeçalho)</Label>
-                    <Select
-                      value={selectedUsage || 'none'}
-                      onValueChange={(val) => {
-                        const usageVal = val === 'none' ? '' : val;
-                        setSelectedUsage(usageVal);
-                        setOrderItems(prev => prev.map(it => ({ ...it, Usage: usageVal || undefined })));
-                      }}
-                    >
-                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
-                        <SelectValue placeholder="Selecione a utilização">
-                          {(() => {
-                            if (!selectedUsage || selectedUsage === 'none') return 'Selecione a utilização';
-                            const matchUsage = usages.find((u: any) => u.ID?.toString() === selectedUsage.toString());
-                            return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${selectedUsage}`;
-                          })()}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent className="rounded-none border-evo-bg min-w-[300px]">
-                        <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-2.5">
-                          Nenhuma Selecionada
-                        </SelectItem>
-                        {usages.map((u: any) => (
-                          <SelectItem key={u.ID} value={u.ID.toString()} className="text-[10px] uppercase font-black tracking-tight py-2.5">
-                            <span className="text-evo-teal font-black mr-1.5">[{u.ID}]</span> {u.Usage}
+
+                  {/* Item 6: Dynamic Type-Ahead Search for Utilização (Nat. da Operação) */}
+                  <div className="space-y-2 relative">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">
+                      Nat. da Operação / Utilização (Digite p/ buscar)
+                    </Label>
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-evo-dark/40 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Input
+                        type="text"
+                        placeholder="Digite ex: uso e consumo, serviço..."
+                        className="h-11 pl-9 pr-8 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark"
+                        value={
+                          showHeaderUsageDropdown
+                            ? headerUsageQuery
+                            : (() => {
+                                if (!selectedUsage || selectedUsage === 'none') return headerUsageQuery;
+                                const matchUsage = usages.find((u: any) => String(u.ID) === String(selectedUsage));
+                                return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${selectedUsage}`;
+                              })()
+                        }
+                        onFocus={() => {
+                          setHeaderUsageQuery('');
+                          setShowHeaderUsageDropdown(true);
+                        }}
+                        onBlur={() => {
+                          setTimeout(() => setShowHeaderUsageDropdown(false), 200);
+                        }}
+                        onChange={(e) => {
+                          setHeaderUsageQuery(e.target.value);
+                          setShowHeaderUsageDropdown(true);
+                        }}
+                      />
+                      {(selectedUsage || headerUsageQuery) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedUsage('');
+                            setHeaderUsageQuery('');
+                            setOrderItems(prev => prev.map(it => ({ ...it, Usage: undefined })));
+                          }}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/40 hover:text-rose-600"
+                          title="Limpar utilização"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {showHeaderUsageDropdown && (() => {
+                        const matchedUsages = filterAndRankUsages(usages, headerUsageQuery);
+                        return (
+                          <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white border border-evo-bg shadow-2xl max-h-72 overflow-y-auto divide-y divide-evo-bg">
+                            <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500 sticky top-0 z-10 border-b border-evo-bg flex justify-between items-center">
+                              <span>Utilizações SAP (OUSG)</span>
+                              <span className="text-evo-teal">{matchedUsages.length} de {usages.length}</span>
+                            </div>
+                            {matchedUsages.length === 0 ? (
+                              <div className="px-3.5 py-4 text-[11px] font-bold text-slate-400 text-center uppercase">
+                                Nenhuma utilização localizada para "{headerUsageQuery}"
+                              </div>
+                            ) : (
+                              matchedUsages.map((u: any) => (
+                                <button
+                                  key={u.ID}
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    const usageVal = String(u.ID);
+                                    setSelectedUsage(usageVal);
+                                    setHeaderUsageQuery(`[${u.ID}] ${u.Usage}`);
+                                    setShowHeaderUsageDropdown(false);
+                                    setOrderItems(prev => prev.map(it => ({ ...it, Usage: usageVal })));
+                                  }}
+                                  className="w-full text-left px-3.5 py-2.5 hover:bg-evo-teal/10 text-[11px] font-bold uppercase tracking-tight flex items-center gap-2"
+                                >
+                                  <span className="text-evo-teal font-black shrink-0">[{u.ID}]</span>
+                                  <span className="text-evo-dark whitespace-normal leading-tight">{u.Usage}</span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Condição de Pagamento (Shown for Order & Quotation; hidden for Solicitação) */}
+                  {!isRequest && (
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Condição de Pagamento (OCTG)</Label>
+                      <Select
+                        value={selectedPaymentGroup || '-1'}
+                        onValueChange={(val) => handlePaymentGroupChange(val)}
+                      >
+                        <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
+                          <SelectValue placeholder="Selecione a condição">
+                            {(() => {
+                              const match = paymentTermsList.find((t: any) => String(t.GroupNumber ?? t.GroupNum) === String(selectedPaymentGroup));
+                              return match ? `${match.PaymentTermsGroupName ?? match.PymntGroup}` : (selectedPaymentGroup === '-1' ? '--- (À Vista / Padrão)' : `Condição ${selectedPaymentGroup}`);
+                            })()}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="rounded-none border-evo-bg min-w-[300px] max-h-72">
+                          <SelectItem value="-1" className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                            --- (À Vista / Padrão)
                           </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                          {paymentTermsList.map((pt: any) => (
+                            <SelectItem key={pt.GroupNumber} value={String(pt.GroupNumber)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                              <span className="text-evo-teal font-black mr-1.5">[{pt.GroupNumber}]</span> {pt.PaymentTermsGroupName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Item 14: Forma de Pagamento (Shown in Cotação/Oferta and Pedido) */}
+                  {!isRequest && (
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Forma de Pagamento</Label>
+                      <Select value={selectedPaymentMethod} onValueChange={setSelectedPaymentMethod}>
+                        <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
+                          <SelectValue placeholder="Selecione a forma de pagamento">
+                            {(() => {
+                              const matchPm = paymentMethodsList.find((pm: any) => pm.PaymentMethodCode === selectedPaymentMethod);
+                              return matchPm ? matchPm.Description : selectedPaymentMethod;
+                            })()}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="rounded-none border-evo-bg min-w-[300px] max-h-72">
+                          {paymentMethodsList.map((pm: any) => (
+                            <SelectItem key={pm.PaymentMethodCode} value={pm.PaymentMethodCode} className="text-[10px] uppercase font-black py-2.5">
+                              {pm.Description}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Items 12 & 14: Data Prevista de Pagamento removed from Solicitação & Cotação; kept only on Pedido */}
+                  {!isRequest && !isQuotation && (
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Data Prev. Pgto. (U_DataPgto)</Label>
+                      <Input
+                        type="date"
+                        className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold"
+                        value={uDataPgto}
+                        onChange={(e) => setUDataPgto(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {/* Item 8: Comprador with Email & Phone from SAP B1 */}
                   <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Condição de Pagamento (OCTG)</Label>
-                    <Select
-                      value={selectedPaymentGroup || '-1'}
-                      onValueChange={(val) => handlePaymentGroupChange(val)}
-                    >
-                      <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
-                        <SelectValue placeholder="Selecione a condição">
-                          {(() => {
-                            const match = paymentTermsList.find((t: any) => String(t.GroupNumber ?? t.GroupNum) === String(selectedPaymentGroup));
-                            return match ? `${match.PaymentTermsGroupName ?? match.PymntGroup}` : (selectedPaymentGroup === '-1' ? '--- (À Vista / Padrão)' : `Condição ${selectedPaymentGroup}`);
-                          })()}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent className="rounded-none border-evo-bg min-w-[300px] max-h-72">
-                        {paymentTermsList.map((pt: any) => (
-                          <SelectItem key={pt.GroupNumber} value={String(pt.GroupNumber)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
-                            <span className="text-evo-teal font-black mr-1.5">[{pt.GroupNumber}]</span> {pt.PaymentTermsGroupName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Data Prev. Pgto. (U_DataPgto)</Label>
-                    <Input
-                      type="date"
-                      className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold"
-                      value={uDataPgto}
-                      onChange={(e) => setUDataPgto(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Comprador</Label>
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Comprador(a) (SAP B1)</Label>
                     <Select
                       value={selectedBuyer || '-1'}
                       onValueChange={(val) => setSelectedBuyer(val)}
@@ -3555,19 +3863,46 @@ function CreateOrderView({
                       <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/30 text-xs font-bold text-evo-dark">
                         <SelectValue placeholder="Selecione o comprador">
                           {(() => {
-                            const match = buyersList.find((b: any) => String(b.SalesEmployeeCode) === String(selectedBuyer));
-                            return match ? match.SalesEmployeeName : (selectedBuyer === '-1' ? '-Nenhum vendedor / comprador-' : `Comprador ${selectedBuyer}`);
+                            const match = buyersList.find((b: any) => String(b.SalesEmployeeCode ?? b.code) === String(selectedBuyer));
+                            const bName = match ? (match.SalesEmployeeName || match.name) : '';
+                            return bName ? bName : (selectedBuyer === '-1' ? '-Nenhum vendedor / comprador-' : `Comprador ${selectedBuyer}`);
                           })()}
                         </SelectValue>
                       </SelectTrigger>
-                      <SelectContent className="rounded-none border-evo-bg min-w-[280px] max-h-72">
-                        {buyersList.map((buyer: any) => (
-                          <SelectItem key={buyer.SalesEmployeeCode} value={String(buyer.SalesEmployeeCode)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
-                            {buyer.SalesEmployeeName}
-                          </SelectItem>
-                        ))}
+                      <SelectContent className="rounded-none border-evo-bg min-w-[320px] max-h-72">
+                        <SelectItem value="-1" className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                          -Nenhum vendedor / comprador-
+                        </SelectItem>
+                        {buyersList.map((buyer: any) => {
+                          const bCode = buyer.SalesEmployeeCode ?? buyer.code;
+                          const bName = buyer.SalesEmployeeName || buyer.name || `Comprador #${bCode}`;
+                          const bEmail = buyer.Email || buyer.contactEmail || '';
+                          const bPhone = buyer.Phone || buyer.Telephone || buyer.Mobile || buyer.contactPhone || '';
+                          return (
+                            <SelectItem key={bCode} value={String(bCode)} className="text-[10px] uppercase font-black tracking-tight py-2.5">
+                              <div>
+                                <div>{bName}</div>
+                                {(bEmail || bPhone) && (
+                                  <div className="text-[9px] font-semibold text-slate-500 lowercase">
+                                    {bEmail} {bPhone ? `• Tel: ${bPhone}` : ''}
+                                  </div>
+                                )}
+                              </div>
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
+                    {(() => {
+                      const activeBuyer = buyersList.find((b: any) => String(b.SalesEmployeeCode ?? b.code) === String(selectedBuyer));
+                      if (!activeBuyer) return null;
+                      return (
+                        <div className="p-2 bg-slate-50 border border-slate-200 text-[10px] font-bold text-slate-700 space-y-0.5">
+                          <div><span className="text-slate-400 uppercase">E-mail SAP:</span> <span className="text-evo-teal">{activeBuyer.Email || 'Não informado no SAP'}</span></div>
+                          <div><span className="text-slate-400 uppercase">Tel SAP:</span> <span>{activeBuyer.Phone || activeBuyer.Telephone || activeBuyer.Mobile || 'Não informado no SAP'}</span></div>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="space-y-2 md:col-span-2 lg:col-span-3">
                     <Label className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/60 ml-1">Observações</Label>
@@ -3773,35 +4108,36 @@ function CreateOrderView({
 
                                 <div className="p-6">
                                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {/* Dimensions Grid Section */}
-                                    {[...dimensions].sort((a, b) => (a.DimensionCode || a.DimensionNumber || 0) - (b.DimensionCode || b.DimensionNumber || 0)).map((dim: any) => (
-                                      <div key={dim.DimensionCode || dim.DimensionNumber} className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
+                                    {/* Item 17: Dimensions 1, 2, 3 with SAP Desktop Labels (País, Empresa, Departamento) */}
+                                    {[
+                                      { code: 1, sapLabel: 'País', field: 'CostingCode', sub: 'CostingCode' },
+                                      { code: 2, sapLabel: 'Empresa', field: 'CostingCode2', sub: 'CostingCode2' },
+                                      { code: 3, sapLabel: 'Departamento', field: 'CostingCode3', sub: 'CostingCode3' }
+                                    ].map((dimMeta) => (
+                                      <div key={dimMeta.code} className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
                                         <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                          <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">
-                                            {dim.DimensionName || `Dimensão ${dim.DimensionCode || dim.DimensionNumber}`}
+                                          <Label className="text-[11px] font-black uppercase tracking-[0.15em] text-evo-teal text-left">
+                                            {dimMeta.sapLabel}
                                           </Label>
-                                          <div className="text-[9px] font-bold text-evo-dark/30">DIM {dim.DimensionCode || dim.DimensionNumber}</div>
+                                          <div className="text-[9px] font-bold text-evo-dark/30">{dimMeta.sub}</div>
                                         </div>
                                         <Select
-                                          value={item[`CostingCode${(dim.DimensionCode || dim.DimensionNumber) === 1 ? '' : (dim.DimensionCode || dim.DimensionNumber)}`] || 'none'}
+                                          value={item[dimMeta.field] || 'none'}
                                           onValueChange={(val) => {
-                                            const dimNum = Number(dim.DimensionCode || dim.DimensionNumber);
-                                            const field = `CostingCode${dimNum === 1 ? '' : dimNum}`;
                                             const cleanVal = val === 'none' ? undefined : val;
                                             setOrderItems(orderItems.map((it, i) => i === idx ? {
                                               ...it,
-                                              [field]: cleanVal,
-                                              ...(dimNum === 4 ? { ProjectCode: cleanVal } : {})
+                                              [dimMeta.field]: cleanVal
                                             } : it));
                                           }}
                                         >
                                           <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                            <SelectValue placeholder="Centro de Custo" />
+                                            <SelectValue placeholder={dimMeta.sapLabel} />
                                           </SelectTrigger>
                                           <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
                                             <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
                                             {distRules
-                                              .filter((r: any) => Number(r.InWhichDimension) === Number(dim.DimensionCode || dim.DimensionNumber))
+                                              .filter((r: any) => Number(r.InWhichDimension) === dimMeta.code)
                                               .map((rule: any) => (
                                                 <SelectItem key={rule.FactorCode} value={rule.FactorCode} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0 hover:bg-evo-teal/5">
                                                   <span className="text-evo-teal font-black mr-2">{rule.FactorCode}</span> {rule.FactorDescription}
@@ -3813,12 +4149,11 @@ function CreateOrderView({
                                       </div>
                                     ))}
 
-                                    {/* SAP Project Section */}
-                                    {/* Projeto (Centro de Custo - Dim 4 / OcrCode4) */}
+                                    {/* Item 17: Projetos (SAP Desktop Name for CostingCode4 / ProjectCode) */}
                                     <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
                                       <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Projeto (Dim 4 / Centro de Custo)</Label>
-                                        <div className="text-[9px] font-bold text-evo-dark/30">DIM 4 / PROJ</div>
+                                        <Label className="text-[11px] font-black uppercase tracking-[0.15em] text-evo-teal text-left">Projetos</Label>
+                                        <div className="text-[9px] font-bold text-evo-dark/30">CostingCode4 / Proj</div>
                                       </div>
                                       <Select
                                         value={item.CostingCode4 || item.ProjectCode || 'none'}
@@ -3852,46 +4187,89 @@ function CreateOrderView({
                                       </Select>
                                     </div>
 
-                                    {/* Usage Section */}
-                                    <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md">
+                                    {/* Items 6 & 17: Nat. da Operação (Utilização) with Type-Ahead Search */}
+                                    <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md sm:col-span-2 relative">
                                       <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-teal text-left">Utilização Fiscal</Label>
-                                        <div className="text-[9px] font-bold text-evo-dark/30">USO</div>
+                                        <Label className="text-[11px] font-black uppercase tracking-[0.15em] text-evo-teal text-left">Nat. da Operação (Utilização)</Label>
+                                        <div className="text-[9px] font-bold text-evo-dark/30">Digite para buscar ex: uso e consumo</div>
                                       </div>
-                                      <Select
-                                        value={item.Usage?.toString() || 'none'}
-                                        onValueChange={(val) => {
-                                          const cleanUsage = val === 'none' ? undefined : val;
-                                          if (cleanUsage && !selectedUsage) {
-                                            setSelectedUsage(cleanUsage);
-                                            setOrderItems(orderItems.map((it, i) => {
-                                              if (i === idx) return { ...it, Usage: cleanUsage };
-                                              if (!it.Usage || it.Usage === 'none') return { ...it, Usage: cleanUsage };
-                                              return it;
-                                            }));
-                                          } else {
-                                            setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: cleanUsage } : it));
+                                      <div className="relative">
+                                        <Search className="w-3.5 h-3.5 text-evo-dark/40 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                        <Input
+                                          type="text"
+                                          placeholder="Digite ex: uso e consumo, ativo, serviço..."
+                                          className="h-11 pl-9 pr-8 rounded-none border-evo-bg bg-evo-bg/10 text-xs font-black uppercase text-evo-dark"
+                                          value={
+                                            openLineUsageIdx === idx
+                                              ? (lineUsageQueryMap[idx] ?? '')
+                                              : (() => {
+                                                  if (!item.Usage || item.Usage === 'none') return lineUsageQueryMap[idx] ?? '';
+                                                  const matchUsage = usages.find((u: any) => String(u.ID) === String(item.Usage));
+                                                  return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${item.Usage}`;
+                                                })()
                                           }
-                                        }}
-                                      >
-                                        <SelectTrigger className="w-full h-11 rounded-none border-evo-bg bg-evo-bg/10 text-[10px] font-black uppercase tracking-tight shadow-none group-hover:bg-white transition-colors">
-                                          <SelectValue placeholder="Selecionar Utilização">
-                                            {(() => {
-                                              if (!item.Usage || item.Usage === 'none') return 'Selecionar Utilização';
-                                              const matchUsage = usages.find((u: any) => u.ID?.toString() === item.Usage?.toString());
-                                              return matchUsage ? matchUsage.Usage : `Utilização ${item.Usage}`;
-                                            })()}
-                                          </SelectValue>
-                                        </SelectTrigger>
-                                        <SelectContent className="rounded-none min-w-[320px] border-evo-bg shadow-xl">
-                                          <SelectItem value="none" className="text-[10px] font-bold uppercase tracking-widest text-evo-dark/40 py-3">Nenhum Selecionado</SelectItem>
-                                          {usages.map((u: any) => (
-                                            <SelectItem key={u.ID} value={u.ID.toString()} className="text-[11px] uppercase font-bold tracking-wider py-3 border-b border-gray-50 last:border-0">
-                                              <span className="text-evo-teal font-black mr-2">[{u.ID}]</span> {u.Usage}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
+                                          onFocus={() => {
+                                            setLineUsageQueryMap(prev => ({ ...prev, [idx]: '' }));
+                                            setOpenLineUsageIdx(idx);
+                                          }}
+                                          onBlur={() => {
+                                            setTimeout(() => setOpenLineUsageIdx(null), 200);
+                                          }}
+                                          onChange={(e) => {
+                                            setLineUsageQueryMap(prev => ({ ...prev, [idx]: e.target.value }));
+                                            setOpenLineUsageIdx(idx);
+                                          }}
+                                        />
+                                        {item.Usage && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: undefined } : it));
+                                              setLineUsageQueryMap(prev => ({ ...prev, [idx]: '' }));
+                                            }}
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/40 hover:text-rose-600"
+                                          >
+                                            <X className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+                                        {openLineUsageIdx === idx && (() => {
+                                          const matchedLineUsages = filterAndRankUsages(usages, lineUsageQueryMap[idx] || '');
+                                          return (
+                                            <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white border border-evo-bg shadow-2xl max-h-64 overflow-y-auto divide-y divide-evo-bg">
+                                              <div className="px-3 py-1 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500 sticky top-0 z-10 border-b border-evo-bg flex justify-between items-center">
+                                                <span>Utilizações SAP</span>
+                                                <span className="text-evo-teal">{matchedLineUsages.length} de {usages.length}</span>
+                                              </div>
+                                              {matchedLineUsages.map((u: any) => (
+                                                <button
+                                                  key={u.ID}
+                                                  type="button"
+                                                  onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    const cleanUsage = String(u.ID);
+                                                    if (!selectedUsage) {
+                                                      setSelectedUsage(cleanUsage);
+                                                      setOrderItems(orderItems.map((it, i) => {
+                                                        if (i === idx) return { ...it, Usage: cleanUsage };
+                                                        if (!it.Usage || it.Usage === 'none') return { ...it, Usage: cleanUsage };
+                                                        return it;
+                                                      }));
+                                                    } else {
+                                                      setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: cleanUsage } : it));
+                                                    }
+                                                    setLineUsageQueryMap(prev => ({ ...prev, [idx]: `[${u.ID}] ${u.Usage}` }));
+                                                    setOpenLineUsageIdx(null);
+                                                  }}
+                                                  className="w-full text-left px-3.5 py-2.5 hover:bg-evo-teal/10 text-[11px] font-bold uppercase tracking-tight flex items-center gap-2"
+                                                >
+                                                  <span className="text-evo-teal font-black shrink-0">[{u.ID}]</span>
+                                                  <span className="text-evo-dark whitespace-normal leading-tight">{u.Usage}</span>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          );
+                                        })()}
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -3937,9 +4315,24 @@ function CreateOrderView({
 
         {/* Sidebar Context */}
         <div className="lg:col-span-4 space-y-10">
-          {/* BP Selection */}
+          {/* BP Selection (Items 5 & 13: Supplier Modal with CNPJ & Only F codes) */}
+          <CustomerSelectionModal
+            isOpen={isSupplierModalOpen}
+            onClose={() => setIsSupplierModalOpen(false)}
+            partnerType="supplier"
+            title="Selecionar Fornecedor (Iniciados com F • CNPJ)"
+            onSelect={(bp) => {
+              setSelectedSupplier(bp);
+              if (bp.PayTermsGrpCode !== undefined && bp.PayTermsGrpCode !== null) {
+                handlePaymentGroupChange(String(bp.PayTermsGrpCode));
+              }
+            }}
+          />
+
           <section className="space-y-4">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Entidade Parceira</h2>
+            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">
+              {isRequest ? 'Fornecedor Sugerido (Opcional)' : 'Fornecedor (Iniciados com F)'}
+            </h2>
             <Card className="evo-card border-none">
               <CardContent className="pt-8 pb-8 px-8 space-y-6">
                 {selectedSupplier ? (
@@ -3948,26 +4341,41 @@ function CreateOrderView({
                     <div className="relative z-10">
                       <p className="text-[11px] font-black uppercase tracking-tight truncate leading-tight">{selectedSupplier.CardName}</p>
                       <p className="text-[9px] font-bold tracking-[0.2em] text-evo-teal mt-1">{selectedSupplier.CardCode}</p>
-                      {selectedSupplier.FederalTaxID && (
-                        <div className="mt-4 flex items-center justify-between">
-                          <span className="text-[8px] uppercase tracking-widest font-black text-white/30">Tax ID / CNPJ</span>
-                          <span className="text-[10px] font-bold text-white/70">{selectedSupplier.FederalTaxID}</span>
-                        </div>
-                      )}
-                      <Button
-                        variant="link"
-                        className="p-0 h-auto mt-4 text-[9px] uppercase tracking-widest font-black text-rose-400 hover:text-rose-300"
-                        onClick={() => setSelectedSupplier(null)}
-                      >
-                        [ Alterar Parceiro ]
-                      </Button>
+                      <div className="mt-4 flex items-center justify-between">
+                        <span className="text-[8px] uppercase tracking-widest font-black text-white/30">CNPJ / Tax ID</span>
+                        <span className="text-[10px] font-mono font-bold text-white/90">{selectedSupplier.FederalTaxID || selectedSupplier.federalTaxId || '-'}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-4">
+                        <Button
+                          variant="link"
+                          className="p-0 h-auto text-[9px] uppercase tracking-widest font-black text-evo-teal hover:text-teal-300"
+                          onClick={() => setIsSupplierModalOpen(true)}
+                        >
+                          [ Trocar na Lista c/ CNPJ ]
+                        </Button>
+                        <Button
+                          variant="link"
+                          className="p-0 h-auto text-[9px] uppercase tracking-widest font-black text-rose-400 hover:text-rose-300"
+                          onClick={() => setSelectedSupplier(null)}
+                        >
+                          [ Remover ]
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-5">
+                  <div className="space-y-4">
+                    <Button
+                      type="button"
+                      onClick={() => setIsSupplierModalOpen(true)}
+                      className="w-full h-11 rounded-none bg-evo-dark hover:bg-evo-teal hover:text-evo-dark text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-md transition-all"
+                    >
+                      <Building2 className="w-4 h-4 text-evo-teal" />
+                      Selecionar Fornecedor (Modal c/ CNPJ)
+                    </Button>
                     <div className="flex gap-2">
                       <Input
-                        placeholder="NOME DO FORNECEDOR..."
+                        placeholder="BUSCAR FORNECEDOR (CÓD F, NOME OU CNPJ)..."
                         className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest"
                         value={supplierSearch}
                         onChange={(e) => setSupplierSearch(e.target.value)}
@@ -3977,49 +4385,83 @@ function CreateOrderView({
                           }
                         }}
                       />
-                      <Button type="button" size="icon" className="h-11 w-11 rounded-none bg-evo-dark" onClick={searchSuppliers}><Search className="w-4 h-4" /></Button>
+                      <Button type="button" size="icon" className="h-11 w-11 rounded-none bg-evo-dark" onClick={() => setIsSupplierModalOpen(true)} title="Abrir modal de fornecedores com CNPJ"><Search className="w-4 h-4" /></Button>
                     </div>
-                    <div className="max-h-80 overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white shadow-inner">
-                      {suppliers.map(s => (
-                        <button
-                          key={s.CardCode}
-                          type="button"
-                          className="w-full text-left p-4 hover:bg-evo-teal/10 transition-all group cursor-pointer border-none outline-none block relative z-30"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            console.log('Selecionando BP:', s.CardCode);
-                            setSelectedSupplier(s);
-                            if (s.PayTermsGrpCode !== undefined && s.PayTermsGrpCode !== null) {
-                              handlePaymentGroupChange(String(s.PayTermsGrpCode));
-                            }
-                          }}
-                        >
-                          <p className="text-[10px] font-black uppercase tracking-tight text-evo-dark group-hover:text-evo-teal leading-tight pointer-events-none">{s.CardName}</p>
-                          <p className="text-[9px] font-bold tracking-[0.2em] text-evo-dark/30 mt-0.5 pointer-events-none">{s.CardCode}</p>
-                        </button>
-                      ))}
-                      {suppliers.length === 0 && (
-                        <div className="p-10 text-center text-[9px] font-black uppercase tracking-widest text-evo-dark/20 italic">
-                          Aguardando busca...
-                        </div>
-                      )}
-                    </div>
+                    {suppliers.length > 0 && (
+                      <div className="max-h-72 overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white shadow-inner">
+                        {suppliers.map(s => (
+                          <button
+                            key={s.CardCode}
+                            type="button"
+                            className="w-full text-left p-3.5 hover:bg-evo-teal/10 transition-all group cursor-pointer border-none outline-none block relative z-30"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSelectedSupplier(s);
+                              if (s.PayTermsGrpCode !== undefined && s.PayTermsGrpCode !== null) {
+                                handlePaymentGroupChange(String(s.PayTermsGrpCode));
+                              }
+                            }}
+                          >
+                            <p className="text-[10px] font-black uppercase tracking-tight text-evo-dark group-hover:text-evo-teal leading-tight pointer-events-none">{s.CardName}</p>
+                            <div className="flex items-center justify-between mt-1 pointer-events-none">
+                              <span className="text-[9px] font-bold tracking-[0.2em] text-evo-teal">{s.CardCode}</span>
+                              {s.FederalTaxID && (
+                                <span className="text-[9px] font-mono font-bold text-slate-500">CNPJ: {s.FederalTaxID}</span>
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>
             </Card>
           </section>
 
+          {/* Item 10: Drag-and-Drop Attachments Box on Request, Quotation & Order */}
           {allowAttachments && (
             <section className="space-y-4">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Anexos e Mídias</h2>
+              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Enviar Anexos (Clique ou Arraste)</h2>
               <Card className="evo-card border-none">
                 <CardContent className="pt-8 pb-8 px-8 space-y-6">
-                  <Label htmlFor="attachments" className="cursor-pointer block">
-                    <div className="border border-dashed border-evo-dark/20 bg-evo-bg/20 rounded-none p-10 text-center hover:border-evo-teal transition-all group">
-                      <Plus className="w-8 h-8 text-evo-dark/10 mx-auto mb-3 group-hover:text-evo-teal/40 transition-colors" />
-                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Selecionar Aquivos</p>
+                  <Label
+                    htmlFor="attachments"
+                    className="cursor-pointer block"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (!isDraggingAttachments) setIsDraggingAttachments(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDraggingAttachments(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDraggingAttachments(false);
+                      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                        const dropped = Array.from(e.dataTransfer.files);
+                        setSelectedFiles(prev => [...prev, ...dropped]);
+                        toast.success(`${dropped.length} arquivo(s) anexado(s)!`);
+                      }
+                    }}
+                  >
+                    <div className={`border-2 border-dashed rounded-none p-8 text-center transition-all group ${
+                      isDraggingAttachments
+                        ? 'border-evo-teal bg-evo-teal/10 scale-[1.01]'
+                        : 'border-evo-dark/20 bg-evo-bg/20 hover:border-evo-teal'
+                    }`}>
+                      <Plus className="w-8 h-8 text-evo-teal mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                      <p className="text-[10px] font-black uppercase tracking-widest text-evo-dark">
+                        Clique para selecionar ou Arraste e Solte os arquivos aqui
+                      </p>
+                      <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider mt-1">
+                        Cotações, propostas, especificações técnicas, PDFs, planilhas ou imagens
+                      </p>
                     </div>
                     <input
                       id="attachments"
@@ -4182,7 +4624,8 @@ function ListOrdersView({
   title = "Pedidos de Compra",
   fetchOrders = sapService.getPurchaseOrders,
   fetchOrderDetail = sapService.getPurchaseOrder,
-  userEmail = ""
+  userEmail = "",
+  onCopyToQuotation
 }: {
   key?: string,
   selectedDocEntry: number | null,
@@ -4191,7 +4634,8 @@ function ListOrdersView({
   title?: string,
   fetchOrders?: (options?: any) => Promise<any[]>,
   fetchOrderDetail?: (id: number) => Promise<any>,
-  userEmail?: string
+  userEmail?: string,
+  onCopyToQuotation?: (order: any) => void
 }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -4212,6 +4656,10 @@ function ListOrdersView({
     clientCnpj: ''
   });
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [buyerFilter, setBuyerFilter] = useState<string>('all');
+  const [buyersList, setBuyersList] = useState<any[]>([]);
+  const [updatingBuyerDocEntry, setUpdatingBuyerDocEntry] = useState<number | null>(null);
+  const [mapDoc, setMapDoc] = useState<any | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [hasMore, setHasMore] = useState(true);
@@ -4222,9 +4670,109 @@ function ListOrdersView({
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [orderForPrint, setOrderForPrint] = useState<any>(null);
 
+  const isPurchaseRequestView = title.includes('Solicita');
+  const currentTypeHint = isPurchaseRequestView
+    ? 'request'
+    : title.includes('Cota') || title.includes('Oferta')
+    ? 'quotation'
+    : title.includes('Adiantamento')
+    ? 'downpayment'
+    : 'order';
+
+  useEffect(() => {
+    sapService.getBuyers().then((res) => {
+      if (Array.isArray(res)) setBuyersList(res);
+    }).catch(() => {});
+  }, []);
+
+  const resolveOrderBuyer = (order: any) => {
+    if (!order) return { code: -1, name: '-Nenhum comprador-', email: '', phone: '' };
+    const code = Number(order.SalesPersonCode ?? -1);
+    const match = buyersList.find((b: any) => Number(b.SalesEmployeeCode ?? b.code) === code);
+    if (match) {
+      const bCode = Number(match.SalesEmployeeCode ?? match.code);
+      const bName = match.SalesEmployeeName || match.name || '-Nenhum comprador-';
+      const bEmail = match.Email || match.contactEmail || order.BuyerEmail || '';
+      const bPhone = match.Phone || match.Telephone || match.Mobile || match.contactPhone || order.BuyerPhone || '';
+      return {
+        code: bCode,
+        name: bName,
+        email: bEmail,
+        phone: bPhone
+      };
+    }
+    return {
+      code,
+      name: order.BuyerName || (code > 0 ? `Comprador #${code}` : '-Nenhum comprador-'),
+      email: order.BuyerEmail || '',
+      phone: order.BuyerPhone || ''
+    };
+  };
+
+  const handleChangeOrderBuyer = async (order: any, newSalesPersonCode: number) => {
+    if (!order?.DocEntry) return;
+    setUpdatingBuyerDocEntry(order.DocEntry);
+    try {
+      await sapService.updatePurchaseRequest(
+        order.DocEntry,
+        { SalesPersonCode: newSalesPersonCode },
+        Boolean(order._isDraft)
+      );
+      const matched = buyersList.find((b: any) => Number(b.SalesEmployeeCode ?? b.code) === Number(newSalesPersonCode));
+      const matchedName = matched?.SalesEmployeeName || matched?.name || '-Nenhum comprador-';
+      const updatedFields = {
+        SalesPersonCode: newSalesPersonCode,
+        BuyerName: matchedName,
+        BuyerEmail: matched?.Email || matched?.contactEmail || '',
+        BuyerPhone: matched?.Phone || matched?.Telephone || matched?.Mobile || matched?.contactPhone || ''
+      };
+      setOrders((prev) =>
+        prev.map((item) => (item.DocEntry === order.DocEntry ? { ...item, ...updatedFields } : item))
+      );
+      if (selectedOrder && selectedOrder.DocEntry === order.DocEntry) {
+        setSelectedOrder((prev: any) => (prev ? { ...prev, ...updatedFields } : prev));
+      }
+      toast.success(`Comprador alterado para "${matched?.name || newSalesPersonCode}" na Solicitação #${order.DocNum || order.DocEntry}!`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error?.message?.value || err?.message || 'Erro ao alterar o comprador da solicitação.');
+    } finally {
+      setUpdatingBuyerDocEntry(null);
+    }
+  };
+
   const handleOpenPrintModal = (orderToPrint: any) => {
     setOrderForPrint(orderToPrint);
     setIsPrintModalOpen(true);
+  };
+
+  const defaultTableName = currentTypeHint === "request" ? "OPRQ" : currentTypeHint === "quotation" ? "OPQT" : currentTypeHint === "downpayment" ? "ODPO" : "OPOR";
+  const defaultObjType = currentTypeHint === "request" ? "1470000113" : currentTypeHint === "quotation" ? "540000006" : currentTypeHint === "downpayment" ? "204" : "22";
+
+  const handleCancelOrDeleteOrder = async (orderToCancel: any) => {
+    if (!orderToCancel?.DocEntry) return;
+    const isDraftDoc = Boolean(orderToCancel._isDraft);
+    const objType = orderToCancel.ObjectType || defaultObjType;
+    const tableCode = orderToCancel.TargetTable || defaultTableName;
+    const confirmMsg = isDraftDoc
+      ? `Deseja cancelar/excluir o Esboço ODRF (ObjType 112) #${orderToCancel.DocNum || orderToCancel.DocEntry} (vinculado ao ObjType ${objType} - ${tableCode})?`
+      : `Deseja cancelar o documento #${orderToCancel.DocNum || orderToCancel.DocEntry} (${tableCode} - ObjType ${objType}) no SAP Business One?`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await sapService.cancelMarketingDocument(
+        objType,
+        orderToCancel.DocEntry,
+        isDraftDoc,
+        "Cancelado/excluído pelo usuário no Portal de Compras",
+        userEmail
+      );
+      setOrders((prev) => prev.filter((o: any) => o.DocEntry !== orderToCancel.DocEntry));
+      if (selectedOrder && selectedOrder.DocEntry === orderToCancel.DocEntry) {
+        onBack();
+      }
+      toast.success(isDraftDoc ? `Esboço ODRF #${orderToCancel.DocEntry} excluído/cancelado com sucesso!` : `Documento #${orderToCancel.DocNum || orderToCancel.DocEntry} cancelado com sucesso!`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error?.message?.value || err?.response?.data?.error || err?.message || "Erro ao cancelar/excluir documento.");
+    }
   };
 
   const handleSendEmail = (to: string, cc: string, subject: string, body: string) => {
@@ -4312,6 +4860,7 @@ function ListOrdersView({
     };
     setFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
+    setBuyerFilter('all');
     setPage(0);
     handleFetchOrders(0, emptyFilters, pageSize);
   };
@@ -4335,6 +4884,12 @@ function ListOrdersView({
       (statusFilter === 'open' && isOpen) ||
       (statusFilter === 'closed' && !isOpen);
     if (!matchesStatus) return false;
+
+    // 1b. Buyer Filter (Comprador)
+    if (buyerFilter !== 'all') {
+      const orderBuyerCode = String(order.SalesPersonCode ?? '-1');
+      if (orderBuyerCode !== String(buyerFilter)) return false;
+    }
 
     // 2. DocNum
     if (appliedFilters.docNum.trim()) {
@@ -4468,7 +5023,27 @@ function ListOrdersView({
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-teal">Protocolo Gerado via Service Layer</p>
           </div>
           {selectedOrder && (
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setMapDoc(selectedOrder)}
+                className="rounded-none border-indigo-600 text-indigo-700 hover:bg-indigo-50 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-sm"
+                title="Visualizar Mapa de Relação (Documento Base e Destino)"
+              >
+                <GitBranch className="w-3.5 h-3.5" /> Mapa de Relação
+              </Button>
+              {isPurchaseRequestView && onCopyToQuotation && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => onCopyToQuotation(selectedOrder)}
+                  className="rounded-none bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-sm"
+                  title="Copiar esta Solicitação de Compra para uma Nova Oferta de Compra (Cotação)"
+                >
+                  <Copy className="w-3.5 h-3.5" /> Copiar p/ Oferta de Compra
+                </Button>
+              )}
               {title === "Cotações de Compra" && (
                 <>
                   <Button
@@ -4552,10 +5127,55 @@ function ListOrdersView({
                 </CardHeader>
                 <CardContent className="p-8 space-y-6">
                   <div className="space-y-1">
-                    <Label className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Parceiro / Solicitante</Label>
-                    <p className="text-xs font-black uppercase tracking-tight text-evo-dark">{selectedOrder?.CardName || selectedOrder?.RequesterName || '-'}</p>
-                    <p className="text-[9px] font-bold text-evo-teal tracking-[0.2em]">{selectedOrder?.CardCode || ''}</p>
+                    <Label className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">
+                      {isPurchaseRequestView ? 'Solicitante' : 'Fornecedor'}
+                    </Label>
+                    <p className="text-xs font-black uppercase tracking-tight text-evo-dark">
+                      {isPurchaseRequestView
+                        ? (selectedOrder?.RequesterName || selectedOrder?.Requester || selectedOrder?.CardName || '-')
+                        : (selectedOrder?.CardName || selectedOrder?.RequesterName || '-')}
+                    </p>
+                    <p className="text-[9px] font-bold text-evo-teal tracking-[0.2em]">
+                      {isPurchaseRequestView ? (selectedOrder?.RequesterEmail || selectedOrder?.Requester || '') : (selectedOrder?.CardCode || '')}
+                    </p>
                   </div>
+                  {(() => {
+                    const buyerInfo = resolveOrderBuyer(selectedOrder);
+                    return (
+                      <div className="space-y-2 p-3 bg-slate-50 border border-slate-200">
+                        <Label className="text-[9px] font-black uppercase tracking-widest text-evo-dark/60 block">
+                          Comprador(a) Responsável (SAP B1)
+                        </Label>
+                        {isPurchaseRequestView ? (
+                          <select
+                            value={String(selectedOrder?.SalesPersonCode ?? -1)}
+                            disabled={updatingBuyerDocEntry === selectedOrder?.DocEntry}
+                            onChange={(e) => handleChangeOrderBuyer(selectedOrder, Number(e.target.value))}
+                            className="w-full h-9 px-2 bg-white border border-slate-300 text-xs font-bold text-evo-dark rounded-none focus:outline-none focus:border-evo-teal"
+                          >
+                            <option value="-1">-Nenhum comprador-</option>
+                            {buyersList.filter((b: any) => Number(b.SalesEmployeeCode ?? b.code) !== -1).map((b: any) => {
+                              const bCode = b.SalesEmployeeCode ?? b.code;
+                              const bName = b.SalesEmployeeName || b.name || `Comprador #${bCode}`;
+                              return (
+                                <option key={bCode} value={String(bCode)}>
+                                  {bName}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        ) : (
+                          <p className="text-xs font-black uppercase text-evo-dark">{buyerInfo.name}</p>
+                        )}
+                        {(buyerInfo.email || buyerInfo.phone) && (
+                          <div className="pt-1 border-t border-slate-200/80 space-y-0.5 text-[10px] font-semibold text-slate-600">
+                            {buyerInfo.email && <p>E-mail: <span className="font-bold text-evo-teal">{buyerInfo.email}</span></p>}
+                            {buyerInfo.phone && <p>Tel: <span className="font-bold text-slate-800">{buyerInfo.phone}</span></p>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="space-y-1">
                     <Label className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Data de Emissão</Label>
                     <p className="text-xs font-black text-evo-dark">{selectedOrder?.DocDate ? new Date(selectedOrder?.DocDate).toLocaleDateString('pt-BR') : '-'}</p>
@@ -4591,6 +5211,13 @@ function ListOrdersView({
           order={orderForPrint || selectedOrder}
           userEmail={userEmail}
         />
+        {mapDoc && (
+          <RelationshipMapModal
+            doc={mapDoc}
+            currentTypeHint={currentTypeHint}
+            onClose={() => setMapDoc(null)}
+          />
+        )}
       </motion.div>
     );
   }
@@ -4613,8 +5240,8 @@ function ListOrdersView({
       <DocumentListFilterBar
         docNumberLabel={title.includes('Pedido') ? 'Nº Pedido Compra' : 'Nº Documento'}
         docNumberPlaceholder="Ex: 1029..."
-        clientLabel="Fornecedor / Cliente"
-        partnerType="all"
+        clientLabel={isPurchaseRequestView ? 'Solicitante' : 'Fornecedor (Início F)'}
+        partnerType={isPurchaseRequestView ? 'all' : 'supplier'}
         filters={filters}
         onChangeFilters={setFilters}
         onSearch={handleApplySearch}
@@ -4627,28 +5254,76 @@ function ListOrdersView({
         totalResults={filteredOrders.length}
       />
 
+      {/* Filtro de Comprador (SAP B1) */}
+      <div className="bg-white border border-evo-bg px-5 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-[10px] font-black uppercase tracking-widest text-evo-dark/60 flex items-center gap-1.5">
+            <User className="w-3.5 h-3.5 text-evo-teal" />
+            Filtrar por Comprador(a) SAP B1:
+          </span>
+          <select
+            value={buyerFilter}
+            onChange={(e) => setBuyerFilter(e.target.value)}
+            className="h-9 px-3 bg-slate-50 border border-slate-300 text-xs font-bold text-evo-dark rounded-none focus:outline-none focus:border-evo-teal min-w-[240px]"
+          >
+            <option value="all">Todos os Compradores ({buyersList.length || orders.length})</option>
+            <option value="-1">-Nenhum comprador-</option>
+            {buyersList.filter((b: any) => Number(b.SalesEmployeeCode ?? b.code) !== -1).map((b: any) => {
+              const bCode = b.SalesEmployeeCode ?? b.code;
+              const bName = b.SalesEmployeeName || b.name || `Comprador #${bCode}`;
+              const bEmail = b.Email || b.contactEmail || '';
+              return (
+                <option key={bCode} value={String(bCode)}>
+                  {bName} {bEmail ? `(${bEmail})` : ''}
+                </option>
+              );
+            })}
+          </select>
+          {buyerFilter !== 'all' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setBuyerFilter('all')}
+              className="h-8 px-2.5 text-[10px] font-black uppercase tracking-wider text-red-600 hover:bg-red-50 rounded-none"
+            >
+              Limpar Comprador
+            </Button>
+          )}
+        </div>
+        {isPurchaseRequestView && (
+          <p className="text-[10px] font-bold text-slate-500">
+            Dica: Você pode alterar o <span className="text-evo-dark font-black">Comprador</span> diretamente na coluna da Solicitação ou copiar para <span className="text-amber-700 font-black">Oferta de Compra</span>.
+          </p>
+        )}
+      </div>
+
       <Card className="evo-card border-none overflow-hidden">
         <div className="overflow-x-auto">
           <Table className="min-w-full">
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[110px]">Nº Documento</TableHead>
-                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[260px]">Nome do Fornecedor</TableHead>
-                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[170px]">CNPJ</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[240px]">
+                  {isPurchaseRequestView ? 'Solicitante' : 'Nome do Fornecedor'}
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[220px]">Comprador(a) (SAP B1)</TableHead>
+                {!isPurchaseRequestView && (
+                  <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[165px]">CNPJ</TableHead>
+                )}
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[110px]">Data do Documento</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[130px]">Valor Total</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[120px]">Filial</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[140px]">Centro de Custos</TableHead>
-                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[180px]">Condição / Forma PG</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[170px]">Condição / Forma PG</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[105px]">WO</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[115px]">PO</TableHead>
-                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 text-right whitespace-nowrap w-[95px]">Ações</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 text-right whitespace-nowrap w-[140px]">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-20">
+                  <TableCell colSpan={12} className="text-center py-20">
                     <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-dark/20 animate-pulse">Estabelecendo conexão com Service Layer...</p>
                   </TableCell>
                 </TableRow>
@@ -4656,6 +5331,7 @@ function ListOrdersView({
                 const orderCnpjFormatted = getOrderCnpj(order);
                 const orderPoValue = getOrderPO(order);
                 const orderWoValue = getDocumentWO(order) || order.CostingCode4 || order.DocumentLines?.[0]?.CostingCode4 || 'BASE';
+                const buyerInfo = resolveOrderBuyer(order);
 
                 return (
                   <TableRow
@@ -4664,26 +5340,84 @@ function ListOrdersView({
                     onClick={() => onViewDetails(order.DocEntry)}
                   >
                     <TableCell className="px-4 py-3.5 font-black text-xs text-evo-dark whitespace-nowrap w-[110px]">
-                      #{order.DocNum || order.DocEntry}
+                      <div>#{order.DocNum || order.DocEntry}</div>
+                      {order._isDraft && (
+                        <span className="mt-1 inline-block px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[8px] font-black uppercase tracking-wider" title={`Esboço salvo na tabela ODRF (ObjType 112) vinculado a ${order.TargetTable || defaultTableName} (ObjType ${order.ObjectType || defaultObjType})`}>
+                          ODRF (112) → {order.TargetTable || defaultTableName} ({order.ObjectType || defaultObjType})
+                        </span>
+                      )}
                     </TableCell>
-                    <TableCell className="px-4 py-3.5 whitespace-normal min-w-[260px] max-w-[340px]">
+                    <TableCell className="px-4 py-3.5 whitespace-normal min-w-[240px] max-w-[320px]">
                       <p className="text-xs font-black uppercase tracking-tight text-evo-dark leading-snug group-hover:text-evo-teal transition-colors whitespace-normal break-words">
-                        {order.CardName || order.RequesterName || '-'}
+                        {isPurchaseRequestView
+                          ? (order.RequesterName || order.Requester || order.CardName || '-')
+                          : (order.CardName || order.RequesterName || '-')}
                       </p>
                       <p className="text-[9px] font-bold text-evo-dark/40 tracking-wider mt-0.5">
-                        {order.CardCode || ''}
+                        {isPurchaseRequestView
+                          ? (order.RequesterEmail || order.Requester || '')
+                          : (order.CardCode || '')}
                       </p>
                     </TableCell>
-                    <TableCell className="px-4 py-3.5 font-mono text-[11px] font-bold text-slate-700 whitespace-nowrap min-w-[170px]">
-                      <span className="px-2 py-1 bg-slate-100 border border-slate-200 text-slate-800 rounded-none inline-block">
-                        {orderCnpjFormatted}
-                      </span>
+                    <TableCell
+                      className="px-4 py-3.5 whitespace-nowrap min-w-[220px]"
+                      onClick={(e) => {
+                        if (isPurchaseRequestView) e.stopPropagation();
+                      }}
+                    >
+                      {isPurchaseRequestView ? (
+                        <div className="space-y-1">
+                          <select
+                            value={String(order.SalesPersonCode ?? -1)}
+                            disabled={updatingBuyerDocEntry === order.DocEntry}
+                            onChange={(e) => handleChangeOrderBuyer(order, Number(e.target.value))}
+                            className="h-8 px-2 bg-white border border-slate-300 text-[11px] font-bold text-evo-dark rounded-none focus:outline-none focus:border-evo-teal w-full max-w-[210px]"
+                          >
+                            <option value="-1">-Nenhum comprador-</option>
+                            {buyersList.filter((b: any) => Number(b.SalesEmployeeCode ?? b.code) !== -1).map((b: any) => {
+                              const bCode = b.SalesEmployeeCode ?? b.code;
+                              const bName = b.SalesEmployeeName || b.name || `Comprador #${bCode}`;
+                              return (
+                                <option key={bCode} value={String(bCode)}>
+                                  {bName}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {(buyerInfo.email || buyerInfo.phone) && (
+                            <div className="text-[9px] font-semibold text-slate-500 leading-tight">
+                              {buyerInfo.email && <p className="truncate max-w-[210px]" title={buyerInfo.email}>{buyerInfo.email}</p>}
+                              {buyerInfo.phone && <p>{buyerInfo.phone}</p>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-0.5">
+                          <p className="text-[11px] font-black uppercase text-evo-dark">{buyerInfo.name}</p>
+                          {buyerInfo.email && (
+                            <p className="text-[9px] font-bold text-evo-teal truncate max-w-[200px]" title={buyerInfo.email}>
+                              {buyerInfo.email}
+                            </p>
+                          )}
+                          {buyerInfo.phone && (
+                            <p className="text-[9px] font-semibold text-slate-500">{buyerInfo.phone}</p>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
+                    {!isPurchaseRequestView && (
+                      <TableCell className="px-4 py-3.5 font-mono text-[11px] font-bold text-slate-700 whitespace-nowrap min-w-[165px]">
+                        <span className="px-2 py-1 bg-slate-100 border border-slate-200 text-slate-800 rounded-none inline-block">
+                          {orderCnpjFormatted}
+                        </span>
+                      </TableCell>
+                    )}
                     <TableCell className="px-4 py-3.5 text-xs font-bold text-slate-700 whitespace-nowrap w-[105px]">
                       {order.DocDate ? new Date(order.DocDate).toLocaleDateString('pt-BR') : '-'}
                     </TableCell>
                     <TableCell className="px-4 py-3.5 font-black text-sm text-evo-dark tracking-tight whitespace-nowrap w-[125px]">
-                      R$ {order.DocTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
+                      {order.DocCurrency && order.DocCurrency !== 'R$' && order.DocCurrency !== 'BRL' ? order.DocCurrency : 'R$'}{' '}
+                      {order.DocTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
                     </TableCell>
                     <TableCell className="px-4 py-3.5 text-xs font-bold text-slate-700 whitespace-nowrap w-[115px]">
                       <Badge variant="outline" className="rounded-none border-slate-300 font-bold text-[10px] uppercase px-2 py-0.5 bg-slate-50">
@@ -4695,7 +5429,7 @@ function ListOrdersView({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Depto:</span>
                           <span className="text-[10px] font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 border border-slate-200">
-                            {order.CostingCode || order.DocumentLines?.[0]?.CostingCode || 'QC'}
+                            {order.CostingCode3 || order.DocumentLines?.[0]?.CostingCode3 || order.CostingCode || order.DocumentLines?.[0]?.CostingCode || 'QC'}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -4706,11 +5440,11 @@ function ListOrdersView({
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[180px]">
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[170px]">
                       <p className="text-[11px] font-bold text-slate-800 leading-tight">
                         {order.PaymentGroupCode || order.GroupNumber ? `Cond: ${order.PaymentGroupCode || order.GroupNumber}` : '--'}
                       </p>
-                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-tight mt-0.5 truncate max-w-[170px]" title={order.PaymentMethod || order.PeyMethod || order.U_FormaPG || 'P-TRF-ITA-43410'}>
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-tight mt-0.5 truncate max-w-[160px]" title={order.PaymentMethod || order.PeyMethod || order.U_FormaPG || 'P-TRF-ITA-43410'}>
                         {order.PaymentMethod || order.PeyMethod || order.U_FormaPG || 'P-TRF-ITA-43410'}
                       </p>
                     </TableCell>
@@ -4724,8 +5458,34 @@ function ListOrdersView({
                         {orderPoValue}
                       </span>
                     </TableCell>
-                    <TableCell className="px-4 py-3.5 text-right whitespace-nowrap w-[95px]">
+                    <TableCell className="px-4 py-3.5 text-right whitespace-nowrap w-[140px]">
                       <div className="flex items-center justify-end gap-1.5">
+                        {isPurchaseRequestView && onCopyToQuotation && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 text-amber-600 hover:bg-amber-600 hover:text-white transition-all rounded-none border border-amber-200 bg-amber-50/60"
+                            title="Copiar Solicitação para Oferta de Compra (Cotação)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCopyToQuotation(order);
+                            }}
+                          >
+                            <Copy className="w-4 h-4" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all rounded-none border border-indigo-200 bg-indigo-50/50"
+                          title="Mapa de Relação (Documento Base / Destino)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMapDoc(order);
+                          }}
+                        >
+                          <GitBranch className="w-4 h-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -4737,6 +5497,18 @@ function ListOrdersView({
                           }}
                         >
                           <Printer className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 text-rose-600 hover:bg-rose-600 hover:text-white transition-all rounded-none border border-rose-200 bg-rose-50/40"
+                          title={order._isDraft ? "Excluir/Cancelar Esboço ODRF (ObjType 112)" : "Cancelar Documento no SAP"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancelOrDeleteOrder(order);
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -4757,7 +5529,7 @@ function ListOrdersView({
               })}
               {!isLoading && filteredOrders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
+                  <TableCell colSpan={12} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
                     Nenhum registro localizado sob os critérios informados.
                   </TableCell>
                 </TableRow>
@@ -4826,6 +5598,13 @@ function ListOrdersView({
         order={orderForPrint}
         userEmail={userEmail}
       />
+      {mapDoc && (
+        <RelationshipMapModal
+          doc={mapDoc}
+          currentTypeHint={currentTypeHint}
+          onClose={() => setMapDoc(null)}
+        />
+      )}
     </motion.div>
   );
 }
@@ -4844,15 +5623,17 @@ function ApprovalsView() {
       '15': 'Entrega',
       '16': 'Devolução de Mercadorias',
       '17': 'Pedido de Venda',
-      '18': 'Nota Fiscal de Entrada',
-      '19': 'Nota Fiscal de Entrada (Devolução)',
-      '20': 'Recebimento de Mercadorias',
-      '21': 'Devolução de Mercadorias (Compra)',
-      '22': 'Pedido de Compra',
-      '23': 'Cotação de Venda',
-      '112': 'Rascunho',
-      '1470000113': 'Solicitação de Compra',
-      '540000006': 'Cotação de Compra'
+      '1470000113': 'Solicitação de compra (OPRQ - 1470000113)',
+      '540000006': 'Oferta de compra / Cotação (OPQT - 540000006)',
+      '22': 'Pedido de compra (OPOR - 22)',
+      '20': 'Recebimento de mercadorias (OPDN - 20)',
+      '21': 'Devolução de mercadorias (ORPD - 21)',
+      '18': 'Nota fiscal de entrada (OPCH - 18)',
+      '19': 'Dev. nota fiscal de entrada (ORPC - 19)',
+      '204': 'Solicitação de adiantamento / Adiantamento p/ fornecedor (ODPO - 204)',
+      '69': 'Despesas de importação (OIPF - 69)',
+      '112': 'Esboço de documento (ODRF - 112)',
+      '23': 'Cotação de Venda'
     };
     return types[String(type)] || `Tipo ${type}`;
   };
@@ -6940,8 +7721,9 @@ function QuotationsView({
       const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
       const data = await sapService.getQuotations({
         skip: targetPage * targetPageSize,
-        top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
-        search: searchTarget
+        top: targetFilters.wo ? Math.max(targetPageSize, 100) : targetPageSize,
+        search: searchTarget,
+        wo: targetFilters.wo?.trim() || undefined
       });
       const quoteList = Array.isArray(data) ? data : [];
       setQuotations(quoteList);
@@ -7720,7 +8502,8 @@ function QuotationsView({
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px] w-[140px]">Unidade (Dim 3)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[150px] w-[150px]">Projeto / WO (Dim 4)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[170px]">Receitas (Pessoal / Locação)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[120px] text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[115px] text-right">Taxas</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[125px] text-right">Total Linha</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -7730,7 +8513,9 @@ function QuotationsView({
                           const lineDiscPct = Number(line.DiscountPercent) || 0;
                           const hasTaxa = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && parseDecimalInput(line.Taxa) > 0;
                           const taxaVal = hasTaxa ? parseDecimalInput(line.Taxa) : 0;
-                          const baseLineCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+                          const baseAmount = unitPrice * qty;
+                          const taxaAmount = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
+                          const baseLineCalc = baseAmount + taxaAmount;
                           const lineTotalCalc = baseLineCalc * (1 - lineDiscPct / 100);
                           const hasPersMeasurement = Number(line.linePersonnelCost) > 0;
                           const hasRentalMeasurement = Number(line.lineRentalCost) > 0;
@@ -8053,12 +8838,22 @@ function QuotationsView({
                                   );
                                 })()}
                               </TableCell>
-                              <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
+                              <TableCell className="px-2 py-4 font-black text-xs text-right text-evo-teal bg-evo-teal/5 min-w-[115px] w-[115px]">
                                 <div>
-                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                  R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  {hasTaxa && (
+                                    <span className="block text-[8px] font-bold text-evo-dark/60 font-mono">
+                                      ({taxaVal}%)
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[125px] w-[125px]">
+                                <div>
+                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   {hasTaxa && (
                                     <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                      (Taxa {taxaVal}%)
+                                      (Base + Taxa {taxaVal}%)
                                     </span>
                                   )}
                                   {lineDiscPct > 0 && (
@@ -8084,7 +8879,9 @@ function QuotationsView({
                     const lineDisc = Number(l.DiscountPercent) || 0;
                     const hasTaxa = l.Taxa !== undefined && l.Taxa !== null && String(l.Taxa).trim() !== '' && parseDecimalInput(l.Taxa) > 0;
                     const taxaVal = hasTaxa ? parseDecimalInput(l.Taxa) : 0;
-                    const baseCalc = hasTaxa ? (price * (taxaVal / 100)) * qty : (price * qty);
+                    const baseAmount = price * qty;
+                    const taxaAmount = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
+                    const baseCalc = baseAmount + taxaAmount;
                     return acc + (baseCalc * (1 - lineDisc / 100));
                   }, 0);
 
@@ -8532,8 +9329,9 @@ function SalesOrdersView({
       const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
       const data = await sapService.getOrders({
         skip: targetPage * targetPageSize,
-        top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
-        search: searchTarget
+        top: targetFilters.wo ? Math.max(targetPageSize, 100) : targetPageSize,
+        search: searchTarget,
+        wo: targetFilters.wo?.trim() || undefined
       });
       const rawList = Array.isArray(data) ? data : [];
       const orderList = rawList.filter(isOrderServiceMainUsage);
@@ -9319,7 +10117,8 @@ function SalesOrdersView({
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px] w-[140px]">Unidade (Dim 3)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[150px] w-[150px]">Projeto / WO (Dim 4)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[170px]">Receitas (Pessoal / Locação)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[120px] text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[115px] text-right">Taxas</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[125px] text-right">Total Linha</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 w-10 min-w-[40px] text-center"></TableHead>
                         </TableRow>
                       </TableHeader>
@@ -9330,7 +10129,9 @@ function SalesOrdersView({
                           const lineDiscPct = Number(line.DiscountPercent) || 0;
                           const hasTaxa = line.Taxa !== undefined && line.Taxa !== null && String(line.Taxa).trim() !== '' && parseDecimalInput(line.Taxa) > 0;
                           const taxaVal = hasTaxa ? parseDecimalInput(line.Taxa) : 0;
-                          const baseLineCalc = hasTaxa ? (unitPrice * (taxaVal / 100)) * qty : (unitPrice * qty);
+                          const baseAmount = unitPrice * qty;
+                          const taxaAmount = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
+                          const baseLineCalc = baseAmount + taxaAmount;
                           const lineTotalCalc = baseLineCalc * (1 - lineDiscPct / 100);
                           return (
                             <TableRow key={idx} className="border-evo-bg hover:bg-evo-teal/5 transition-colors">
@@ -9624,12 +10425,22 @@ function SalesOrdersView({
                                   );
                                 })()}
                               </TableCell>
-                              <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[120px] w-[120px]">
+                              <TableCell className="px-2 py-4 font-black text-xs text-right text-evo-teal bg-evo-teal/5 min-w-[115px] w-[115px]">
                                 <div>
-                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                  R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  {hasTaxa && (
+                                    <span className="block text-[8px] font-bold text-evo-dark/60 font-mono">
+                                      ({taxaVal}%)
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[125px] w-[125px]">
+                                <div>
+                                  R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   {hasTaxa && (
                                     <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                      (Taxa {taxaVal}%)
+                                      (Base + Taxa {taxaVal}%)
                                     </span>
                                   )}
                                   {lineDiscPct > 0 && (
@@ -9662,7 +10473,9 @@ function SalesOrdersView({
                     const lineDisc = Number(l.DiscountPercent) || 0;
                     const hasTaxa = l.Taxa !== undefined && l.Taxa !== null && String(l.Taxa).trim() !== '' && parseDecimalInput(l.Taxa) > 0;
                     const taxaVal = hasTaxa ? parseDecimalInput(l.Taxa) : 0;
-                    const baseCalc = hasTaxa ? (price * (taxaVal / 100)) * qty : (price * qty);
+                    const baseAmount = price * qty;
+                    const taxaAmount = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
+                    const baseCalc = baseAmount + taxaAmount;
                     return acc + (baseCalc * (1 - lineDisc / 100));
                   }, 0);
 

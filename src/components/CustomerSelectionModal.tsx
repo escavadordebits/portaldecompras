@@ -9,7 +9,7 @@ import { formatTaxId, matchPartnerQuery } from '../utils/taxUtils';
 export interface CustomerSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (customer: { cardCode: string; cardName: string; federalTaxId: string }) => void;
+  onSelect: (customer: { cardCode: string; cardName: string; federalTaxId: string; [key: string]: any }) => void;
   title?: string;
   partnerType?: 'customer' | 'supplier' | 'all';
 }
@@ -86,9 +86,13 @@ export function CustomerSelectionModal({
   const handleSelectItem = (bp: any) => {
     setSelectedCode(bp.CardCode);
     onSelect({
+      ...bp,
       cardCode: bp.CardCode || '',
       cardName: bp.CardName || '',
-      federalTaxId: bp.FederalTaxID || ''
+      federalTaxId: bp.FederalTaxID || '',
+      CardCode: bp.CardCode || '',
+      CardName: bp.CardName || '',
+      FederalTaxID: bp.FederalTaxID || ''
     });
     onClose();
   };
@@ -153,7 +157,11 @@ export function CustomerSelectionModal({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Digite o código (ex: C001, C000016), nome (ex: ForSea) ou CNPJ..."
+              placeholder={
+                partnerType === 'supplier'
+                  ? 'Digite o código (ex: F00010, F00150), Razão Social ou CNPJ do Fornecedor...'
+                  : 'Digite o código (ex: C001, C000016), nome (ex: ForSea) ou CNPJ...'
+              }
               className="pl-10 pr-10 h-11 rounded-none border-evo-bg font-bold text-xs uppercase tracking-wider focus:border-evo-teal"
               autoFocus
             />

@@ -63,6 +63,8 @@ export interface SupplierOffer {
   cardCode?: string;
   contactEmail?: string;
   phone?: string;
+  currency?: string; // ex: 'R$', 'USD', 'EUR', 'GBP'
+  availableCurrencies?: string[]; // Moedas vinculadas ao PN
   freightType: 'CIF' | 'FOB';
   freightTotal: number;
   paymentTerms: string; // ex: "30 DDL", "15/30 DDL"
@@ -94,8 +96,11 @@ export function BidComparativeView({
   const [isLoadingReqs, setIsLoadingReqs] = useState<boolean>(false);
   const [isGeneratingSAPPO, setIsGeneratingSAPPO] = useState<boolean>(false);
 
-  // Critério automático (Padrão de Prazo e Preço) e Seleção de Itens / Fornecedor Manual
+  // Critério automático (Padrão de Prazo e Preço) e Seleção de Itens / Fornecedor Manual / Moeda do Pedido
   const [autoCriterion, setAutoCriterion] = useState<'price_and_deadline' | 'lowest_price' | 'fastest_deadline'>('price_and_deadline');
+  const [selectedOrderCurrencies, setSelectedOrderCurrencies] = useState<string[]>(['R$']);
+  const [poCurrencyOverride, setPoCurrencyOverride] = useState<string>('R$');
+  const ALL_PARTNER_CURRENCIES = ['R$', 'USD', 'EUR', 'GBP', 'CAD', 'CHF'];
   const [selectedItemsForPO, setSelectedItemsForPO] = useState<Record<string, boolean>>({
     'item-1': true,
     'item-2': true,
@@ -1216,13 +1221,19 @@ export function BidComparativeView({
         const modeTag = grp.isManual
           ? 'SELEÇÃO MANUAL (Oferta Automática Ignorada)'
           : 'Vencedor Automático (Prazo e Preço)';
+        const chosenCurrency = grp.supplier.currency || poCurrencyOverride || selectedOrderCurrencies[0] || 'R$';
+        const linesWithCurrency = grp.lines.map(l => ({
+          ...l,
+          Currency: chosenCurrency
+        }));
         const poPayload = {
           CardCode: grp.supplier.cardCode || 'F0001',
-          Comments: `Pedido gerado via BID Comparativo REQ #${bidData.reqNumber} [${modeTag}] - Fornecedor: ${grp.supplier.supplierName} (${grp.lines.length} item/ns)`,
-          DocumentLines: grp.lines
+          DocCurrency: chosenCurrency,
+          Comments: `Pedido gerado via BID Comparativo REQ #${bidData.reqNumber} [Moeda: ${chosenCurrency} | ${modeTag}] - Fornecedor: ${grp.supplier.supplierName} (${grp.lines.length} item/ns)`,
+          DocumentLines: linesWithCurrency
         };
-        const createdPO = await sapService.createPurchaseOrder(poPayload);
-        createdDocs.push(`${grp.supplier.supplierName}: #${createdPO.DocNum || createdPO.DocEntry || 'Gerado'}`);
+        const createdPO = await sapService.createPurchaseOrder(poPayload, userEmail);
+        createdDocs.push(`${grp.supplier.supplierName} (${chosenCurrency}): #${createdPO.DocNum || createdPO.DocEntry || 'Gerado'}`);
         if (onGeneratePO) {
           onGeneratePO(createdPO);
         }
@@ -1406,6 +1417,66 @@ export function BidComparativeView({
               <SelectItem value="fastest_deadline">MENOR PRAZO (DESEMPATE PREÇO)</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      </div>
+
+      {/* Multi-Currency Selector Bar for Business Partners (PN) */}
+      <div className="bg-white px-4 py-3 border border-evo-bg flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-black uppercase tracking-wider text-evo-dark flex items-center gap-1.5">
+            <DollarSign className="w-3.5 h-3.5 text-evo-teal" />
+            Moedas Vinculadas ao PN (Selecione uma ou mais moedas para Cotação / Pedido de Compra):
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {ALL_PARTNER_CURRENCIES.map(curr => {
+              const isSelected = selectedOrderCurrencies.includes(curr);
+              return (
+                <button
+                  key={curr}
+                  type="button"
+                  onClick={() => {
+                    setSelectedOrderCurrencies(prev => {
+                      const next = prev.includes(curr)
+                        ? (prev.length > 1 ? prev.filter(c => c !== curr) : prev)
+                        : [...prev, curr];
+                      if (!next.includes(poCurrencyOverride)) {
+                        setPoCurrencyOverride(next[0]);
+                      }
+                      return next;
+                    });
+                    setPoCurrencyOverride(curr);
+                  }}
+                  className={`px-2.5 py-1 text-[10px] font-black uppercase border transition-all ${
+                    isSelected
+                      ? 'bg-evo-dark text-white border-evo-dark shadow-sm'
+                      : 'bg-slate-50 text-slate-600 border-slate-300 hover:border-evo-dark'
+                  }`}
+                >
+                  {curr} {isSelected ? '✓' : ''}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-black uppercase text-indigo-800">Moeda Principal do Pedido (PO):</span>
+          <select
+            value={poCurrencyOverride}
+            onChange={(e) => {
+              const val = e.target.value;
+              setPoCurrencyOverride(val);
+              setBidData(prev => ({
+                ...prev,
+                suppliers: prev.suppliers.map(s => ({ ...s, currency: val }))
+              }));
+            }}
+            className="h-8 px-2.5 text-xs font-black bg-indigo-50 border border-indigo-300 text-indigo-900 uppercase"
+          >
+            {selectedOrderCurrencies.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -1663,6 +1734,17 @@ export function BidComparativeView({
                     <div className="flex flex-wrap items-center justify-between gap-2 px-3">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate max-w-[180px]">{sup.supplierName}</span>
+                        <select
+                          value={sup.currency || poCurrencyOverride || 'R$'}
+                          onChange={(e) => handleUpdateSupplierMeta(sup.id, 'currency' as any, e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          title="Selecionar moeda vinculada ao Fornecedor (PN)"
+                          className="h-6 px-1.5 text-[10px] font-black bg-amber-400 text-slate-900 border border-amber-500 uppercase cursor-pointer"
+                        >
+                          {selectedOrderCurrencies.map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
                         {hasManualItemsForSup && (
                           <Badge className="bg-indigo-500 text-white text-[9px] font-black uppercase rounded-none">
                             ✓ SELECIONADO MANUAL
