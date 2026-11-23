@@ -2512,21 +2512,34 @@ function DashboardView({
   activeModules?: any;
   onOpenMeasurements?: () => void;
 }) {
-  const [stats, setStats] = useState<any>({
-    orders: [],
-    requests: [],
-    quotations: [],
-    downpayments: [],
-    approvals: [],
-    salesOrders: [],
-    salesQuotations: [],
-    personnelCosts: [],
-    rentalCosts: [],
-    quality: [],
-    maintenance: [],
-    calibration: []
+  const [stats, setStats] = useState<any>(() => {
+    try {
+      const cached = sessionStorage.getItem('qualitech_dashboard_stats_cache');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return {
+      orders: [],
+      requests: [],
+      quotations: [],
+      downpayments: [],
+      approvals: [],
+      salesOrders: [],
+      salesQuotations: [],
+      personnelCosts: [],
+      rentalCosts: [],
+      quality: [],
+      maintenance: [],
+      calibration: []
+    };
   });
-  const [isLoading, setIsLoading] = useState(true);
+
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    try {
+      const cached = sessionStorage.getItem('qualitech_dashboard_stats_cache');
+      if (cached) return false;
+    } catch {}
+    return true;
+  });
 
   const hasProcurement = Boolean(activeModules.procurement);
   const hasSalesOrders = Boolean(activeModules.salesOrders);
@@ -2543,61 +2556,55 @@ function DashboardView({
 
     const fetchStats = async () => {
       try {
-        const batch1 = await Promise.all([
-          hasProcurement ? sapService.getPurchaseOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'order' }))).catch(() => []) : Promise.resolve([]),
-          hasProcurement ? sapService.getPurchaseRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'request' }))).catch(() => []) : Promise.resolve([]),
-          hasApprovals ? sapService.getApprovalRequests().then(res => (res || []).map((r: any) => ({ ...r, _type: 'approval' }))).catch(() => []) : Promise.resolve([])
-        ]);
-        const [orders, requests, approvals] = batch1;
+        const loadCategory = async (key: string, fetchFn: () => Promise<any[]>, typeTag?: string) => {
+          try {
+            const raw = await fetchFn();
+            const items = (raw || []).map((r: any) => typeTag ? { ...r, _type: typeTag } : r);
+            if (!isCancelled) {
+              setStats((prev: any) => {
+                const next = { ...prev, [key]: items };
+                try {
+                  sessionStorage.setItem('qualitech_dashboard_stats_cache', JSON.stringify(next));
+                } catch {}
+                return next;
+              });
+              setIsLoading(false);
+            }
+            return items;
+          } catch {
+            return [];
+          }
+        };
 
-        const batch2 = await Promise.all([
-          hasNegotiations ? sapService.getPurchaseQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quotation' }))).catch(() => []) : Promise.resolve([]),
-          hasProcurement ? sapService.getPurchaseDownPayments().then(res => (res || []).map((r: any) => ({ ...r, _type: 'down-payment' }))).catch(() => []) : Promise.resolve([]),
-          hasSalesOrders ? sapService.getOrders().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-order' }))).catch(() => []) : Promise.resolve([])
-        ]);
-        const [quotations, downpayments, salesOrders] = batch2;
+        // All active module queries run simultaneously in true parallel with progressive rendering
+        const tasks = [
+          hasProcurement ? loadCategory('orders', () => sapService.getPurchaseOrders({ top: 40 }), 'order') : null,
+          hasProcurement ? loadCategory('requests', () => sapService.getPurchaseRequests({ top: 40 }), 'request') : null,
+          hasApprovals ? loadCategory('approvals', () => sapService.getApprovalRequests(), 'approval') : null,
+          hasNegotiations ? loadCategory('quotations', () => sapService.getPurchaseQuotations({ top: 40 }), 'quotation') : null,
+          hasProcurement ? loadCategory('downpayments', () => sapService.getPurchaseDownPayments({ top: 40 }), 'down-payment') : null,
+          hasSalesOrders ? loadCategory('salesOrders', () => sapService.getOrders({ top: 40 }), 'sales-order') : null,
+          hasQuotations ? loadCategory('salesQuotations', () => sapService.getQuotations({ top: 40 }), 'sales-quotation') : null,
+          hasCosts ? loadCategory('personnelCosts', () => sapService.getPersonnelCosts(), 'personnel-cost') : null,
+          hasCosts ? loadCategory('rentalCosts', () => sapService.getRentalCosts(), 'rental-cost') : null,
+          hasQuality ? loadCategory('quality', () => sapService.getQualityRecords(), 'quality') : null,
+          hasMaintenance ? loadCategory('maintenance', () => sapService.getMaintenanceRecords(), 'maintenance') : null,
+          hasCalibration ? loadCategory('calibration', () => sapService.getCalibrationRecords(), 'calibration') : null,
+        ].filter(Boolean);
 
-        const batch3 = await Promise.all([
-          hasQuotations ? sapService.getQuotations().then(res => (res || []).map((r: any) => ({ ...r, _type: 'sales-quotation' }))).catch(() => []) : Promise.resolve([]),
-          hasCosts ? sapService.getPersonnelCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'personnel-cost' }))).catch(() => []) : Promise.resolve([]),
-          hasCosts ? sapService.getRentalCosts().then(res => (res || []).map((r: any) => ({ ...r, _type: 'rental-cost' }))).catch(() => []) : Promise.resolve([])
-        ]);
-        const [salesQuotations, personnelCosts, rentalCosts] = batch3;
-
-        const batch4 = await Promise.all([
-          hasQuality ? sapService.getQualityRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'quality' }))).catch(() => []) : Promise.resolve([]),
-          hasMaintenance ? sapService.getMaintenanceRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'maintenance' }))).catch(() => []) : Promise.resolve([]),
-          hasCalibration ? sapService.getCalibrationRecords().then(res => (res || []).map((r: any) => ({ ...r, _type: 'calibration' }))).catch(() => []) : Promise.resolve([])
-        ]);
-        const [quality, maintenance, calibration] = batch4;
-
-        if (isCancelled) return;
-
-        setStats({
-          orders,
-          requests,
-          quotations,
-          downpayments,
-          approvals,
-          salesOrders,
-          salesQuotations,
-          personnelCosts,
-          rentalCosts,
-          quality,
-          maintenance,
-          calibration
-        });
+        await Promise.allSettled(tasks);
       } catch (error) {
         toast.error('Erro ao carregar estatísticas do dashboard.');
       } finally {
-        setIsLoading(false);
+        if (!isCancelled) setIsLoading(false);
       }
     };
+
     fetchStats();
     return () => {
       isCancelled = true;
     };
-  }, [hasProcurement, hasSalesOrders, hasNegotiations, hasApprovals, hasCosts, hasQuality, hasMaintenance, hasCalibration]);
+  }, [hasProcurement, hasSalesOrders, hasNegotiations, hasQuotations, hasApprovals, hasCosts, hasQuality, hasMaintenance, hasCalibration]);
 
   // Financial calculations
   const totalPurchaseOrdersValue = stats.orders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
@@ -2621,7 +2628,8 @@ function DashboardView({
     hasCosts ? { name: 'Receita Pessoa', value: Math.round(totalPersonnelCosts), color: '#00D1FF' } : null,
     hasCosts ? { name: 'Receita Locação', value: Math.round(totalRentalCosts), color: '#3b82f6' } : null,
     hasSalesOrders ? { name: 'Ped. Venda', value: Math.round(totalSalesOrdersValue), color: '#10b981' } : null,
-    hasNegotiations ? { name: 'Cotações', value: Math.round(totalSalesQuotationsValue), color: '#f59e0b' } : null,
+    hasQuotations ? { name: 'Cot. Venda', value: Math.round(totalSalesQuotationsValue), color: '#10b981' } : null,
+    hasNegotiations ? { name: 'Cot. Compra', value: Math.round(totalPurchaseQuotationsValue), color: '#f59e0b' } : null,
     hasProcurement ? { name: 'Ped. Compra', value: Math.round(totalPurchaseOrdersValue), color: '#8b5cf6' } : null,
   ].filter(Boolean) as { name: string; value: number; color: string }[];
 

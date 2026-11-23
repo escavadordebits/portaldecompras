@@ -476,11 +476,26 @@ export function resolveMarketingObjectMeta(input?: string | number | null, fallb
   return SAP_MARKETING_OBJECTS_CATALOG[2]; // 22 - OPOR
 }
 
+let cachedUnifiedApprovals: { data: any[]; timestamp: number } | null = null;
+async function fetchCachedUnifiedApprovals(): Promise<any[]> {
+  const now = Date.now();
+  if (cachedUnifiedApprovals && (now - cachedUnifiedApprovals.timestamp < 15000)) {
+    return cachedUnifiedApprovals.data;
+  }
+  try {
+    const res = await api.get('/approvals/unified');
+    const list = Array.isArray(res.data?.approvals) ? res.data.approvals : [];
+    cachedUnifiedApprovals = { data: list, timestamp: now };
+    return list;
+  } catch {
+    return cachedUnifiedApprovals ? cachedUnifiedApprovals.data : [];
+  }
+}
+
 async function mergePendingPortalDraftsForObjectType(effectiveDocs: any[], targetObjType: string): Promise<any[]> {
   try {
     const meta = resolveMarketingObjectMeta(targetObjType);
-    const unifiedRes = await api.get('/approvals/unified');
-    const approvals = Array.isArray(unifiedRes.data?.approvals) ? unifiedRes.data.approvals : [];
+    const approvals = await fetchCachedUnifiedApprovals();
     const matchingDrafts = approvals.filter((rec: any) => {
       const recMeta = resolveMarketingObjectMeta(rec.objectType, rec.docObjectCode);
       const isPending = rec.status === 'W' && !rec.convertedDocEntry;
