@@ -3520,8 +3520,18 @@ function CreateOrderView({
       let attachmentEntry = null;
       if (allowAttachments && selectedFiles.length > 0) {
         toast.info('Enviando anexos...');
-        const attachResult = await sapService.uploadAttachments(selectedFiles);
-        attachmentEntry = attachResult.AbsoluteEntry;
+        try {
+          const attachResult = await sapService.uploadAttachments(selectedFiles);
+          attachmentEntry = attachResult?.AbsoluteEntry || null;
+        } catch (attachErr) {
+          const errMsg = attachErr?.response?.data?.error?.message?.value || attachErr?.message || '';
+          console.warn('Falha no upload de anexos para o SAP Attachments2:', errMsg);
+          if (errMsg.includes('Attachments folder') || errMsg.includes('Pasta de anexos')) {
+            toast.warning('Aviso SAP B1: A pasta de anexos do SAP não está acessível no servidor Service Layer. O documento será gerado e os anexos salvos no portal.', { duration: 6000 });
+          } else {
+            toast.warning(`Aviso no envio de anexos ao SAP: ${errMsg}. Prosseguindo com a gravação do documento.`, { duration: 5000 });
+          }
+        }
       }
 
       const parsedPaymentGroup = selectedPaymentGroup !== '' ? parseInt(selectedPaymentGroup, 10) : -1;
@@ -3583,6 +3593,40 @@ function CreateOrderView({
       }
 
       const response = await onSubmit(orderData, userEmail);
+
+      // Persist attachments in portal storage for the created document entry
+      if (selectedFiles.length > 0 && response?.DocEntry) {
+        try {
+          const docTypeKey = isRequest ? 'purchase-request' : isQuotation ? 'quotation' : 'purchase-order';
+          const storedKey = `sap_attachments_${docTypeKey}_${response.DocEntry}`;
+          const filePromises = selectedFiles.map((file) => {
+            return new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                resolve({
+                  name: file.name,
+                  size: file.size,
+                  type: file.type,
+                  dataUrl: e.target?.result,
+                  uploadedAt: new Date().toISOString()
+                });
+              };
+              reader.onerror = () => resolve({
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                uploadedAt: new Date().toISOString()
+              });
+              reader.readAsDataURL(file);
+            });
+          });
+          Promise.all(filePromises).then((processedFiles) => {
+            try {
+              localStorage.setItem(storedKey, JSON.stringify({ files: processedFiles }));
+            } catch {}
+          }).catch(() => {});
+        } catch {}
+      }
 
       // Only show portal email prompt for Purchase Quotations
       if (title === "Nova Cotação de Compra" && response?.DocEntry) {

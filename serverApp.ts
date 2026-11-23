@@ -674,7 +674,14 @@ apiRouter.post('/sap/Attachments2', upload.array('files'), async (req, res) => {
       data: typeof errorData === 'string' && errorData.includes('<!DOCTYPE') ? '[HTML Error]' : JSON.stringify(errorData, null, 2)
     });
     
-    res.status(error.response?.status || 500).json(errorData || { error: 'Erro ao enviar anexos ao SAP.', details: sapErrorMessage });
+    if (typeof sapErrorMessage === 'string' && (sapErrorMessage.includes('Attachments folder') || sapErrorMessage.includes('Pasta de anexos'))) {
+      console.warn('⚠️ A pasta de anexos configurada no SAP B1 (Administração > Inicialização do Sistema > Configurações Gerais > Caminho) não está acessível pelo serviço do Service Layer no servidor.');
+    }
+    res.status(error.response?.status || 500).json(errorData || { 
+      error: 'Erro ao enviar anexos ao SAP.', 
+      details: sapErrorMessage,
+      help: 'Verifique se o caminho da pasta de anexos no SAP B1 (Administração > Configurações Gerais > Caminho) é acessível com permissões de gravação pelo serviço do Service Layer e se o botão "Atualizar caminhos em documentos" foi clicado.'
+    });
   }
 });
 
