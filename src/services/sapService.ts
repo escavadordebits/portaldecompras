@@ -768,6 +768,8 @@ export const sapService = {
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             Currency: lineCurrency,
+            ...(line.MeasureUnit ? { MeasureUnit: line.MeasureUnit } : {}),
+            ...(line.UoMCode ? { UoMCode: line.UoMCode } : (line.MeasureUnit ? { UoMCode: line.MeasureUnit } : {})),
             CostingCode: line.CostingCode || 'BR',
             CostingCode2: line.CostingCode2 || 'MATRIZ',
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -871,6 +873,8 @@ export const sapService = {
             ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            ...(line.MeasureUnit ? { MeasureUnit: line.MeasureUnit } : {}),
+            ...(line.UoMCode ? { UoMCode: line.UoMCode } : (line.MeasureUnit ? { UoMCode: line.MeasureUnit } : {})),
             RequiredDate: lineReqDate,
             ShipDate: lineReqDate,
             CostingCode: line.CostingCode || 'BR',
@@ -1044,6 +1048,8 @@ export const sapService = {
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
             Currency: lineCurrency,
+            ...(line.MeasureUnit ? { MeasureUnit: line.MeasureUnit } : {}),
+            ...(line.UoMCode ? { UoMCode: line.UoMCode } : (line.MeasureUnit ? { UoMCode: line.MeasureUnit } : {})),
             RequiredDate: lineReqDate,
             ShipDate: lineReqDate,
             CostingCode: line.CostingCode || 'BR',
@@ -1157,6 +1163,8 @@ export const sapService = {
             ItemDescription: line.ItemDescription || line.ItemName || line.Dscription || undefined,
             Quantity: line.Quantity,
             UnitPrice: line.Price !== undefined ? line.Price : (line.UnitPrice || 0),
+            ...(line.MeasureUnit ? { MeasureUnit: line.MeasureUnit } : {}),
+            ...(line.UoMCode ? { UoMCode: line.UoMCode } : (line.MeasureUnit ? { UoMCode: line.MeasureUnit } : {})),
             CostingCode: line.CostingCode || 'BR',
             CostingCode2: line.CostingCode2 || 'MATRIZ',
             CostingCode3: line.CostingCode3 || 'OPER_OFF',
@@ -1692,7 +1700,7 @@ export const sapService = {
     try {
       const rawQuery = (name || '').trim();
       const sanitizedName = rawQuery.replace(/'/g, "''");
-      const baseSelect = "ItemCode,ItemName,Frozen,ItemPrices";
+      const baseSelect = "ItemCode,ItemName,Frozen,ItemPrices,PurchaseUnit,SalesUnit,InventoryUOM";
 
       if (sanitizedName) {
         // Build rich search variants to match case-sensitive & accent-sensitive SAP DB
@@ -1897,7 +1905,7 @@ export const sapService = {
   getItemPriceList1: async (itemCode: string): Promise<{ price: number; currency: string; foundInList1: boolean }> => {
     try {
       const cleanCode = itemCode.trim();
-      const response = await api.get(`/sap/Items('${encodeURIComponent(cleanCode)}')?$select=ItemCode,ItemName,ItemPrices`);
+      const response = await api.get(`/sap/Items('${encodeURIComponent(cleanCode)}')?$select=ItemCode,ItemName,ItemPrices,PurchaseUnit,SalesUnit,InventoryUOM`);
       const itemPrices = response.data?.ItemPrices || [];
       const list1 = itemPrices.find((p: any) => Number(p.PriceList) === 1);
       

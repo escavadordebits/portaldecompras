@@ -3198,6 +3198,33 @@ function StatCard({ title, value, icon, description }: any) {
   );
 }
 
+const STANDARD_UOM_OPTIONS = [
+  { code: "UN", label: "UN - Unidade" },
+  { code: "PC", label: "PC - Peça" },
+  { code: "CX", label: "CX - Caixa" },
+  { code: "KG", label: "KG - Quilograma" },
+  { code: "M", label: "M - Metro" },
+  { code: "M2", label: "M² - Metro Quadrado" },
+  { code: "M3", label: "M³ - Metro Cúbico" },
+  { code: "L", label: "L - Litro" },
+  { code: "CJ", label: "CJ - Conjunto" },
+  { code: "PAR", label: "PAR - Par" },
+  { code: "ROLO", label: "ROLO - Rolo" },
+  { code: "FD", label: "FD - Fardo" },
+  { code: "PCT", label: "PCT - Pacote" },
+  { code: "KIT", label: "KIT - Kit" },
+  { code: "TON", label: "TON - Tonelada" },
+  { code: "TB", label: "TB - Tubo" },
+  { code: "GL", label: "GL - Galão" },
+  { code: "LT", label: "LT - Lata" },
+  { code: "SC", label: "SC - Saco" },
+  { code: "JG", label: "JG - Jogo" },
+  { code: "HR", label: "HR - Hora" },
+  { code: "DIA", label: "DIA - Diária" },
+  { code: "MES", label: "MES - Mês" },
+  { code: "SERV", label: "SERV - Serviço" },
+];
+
 function CreateOrderView({
   title = "Novo Pedido de Compra",
   onSubmit = sapService.createPurchaseOrder,
@@ -3324,12 +3351,16 @@ function CreateOrderView({
     const reqLines = Array.isArray(initialFromRequest.DocumentLines) ? initialFromRequest.DocumentLines : [];
     if (reqLines.length > 0) {
       setOrderItems(
-        reqLines.map((l: any, idx: number) => ({
-          ItemCode: l.ItemCode,
-          ItemName: l.ItemDescription || l.ItemName || l.ItemCode,
-          ItemDescription: l.ItemDescription || l.ItemName || l.ItemCode,
-          Quantity: Number(l.Quantity || 1),
-          Price: Number(l.Price || l.UnitPrice || 0),
+        reqLines.map((l: any, idx: number) => {
+          const reqUnit = (l.MeasureUnit || l.UoM || l.UomCode || l.PurchaseUnit || "UN").trim();
+          return {
+            ItemCode: l.ItemCode,
+            ItemName: l.ItemDescription || l.ItemName || l.ItemCode,
+            ItemDescription: l.ItemDescription || l.ItemName || l.ItemCode,
+            Quantity: Number(l.Quantity || 1),
+            Price: Number(l.Price || l.UnitPrice || 0),
+            MeasureUnit: reqUnit,
+            UoMCode: reqUnit,
           CostingCode: l.CostingCode || 'BR',
           CostingCode2: l.CostingCode2 || 'MATRIZ',
           CostingCode3: l.CostingCode3 || 'OPER_OFF',
@@ -3339,7 +3370,8 @@ function CreateOrderView({
           BaseType: 1470000113,
           BaseEntry: initialFromRequest.DocEntry,
           BaseLine: l.LineNum !== undefined ? Number(l.LineNum) : idx
-        }))
+        };
+      })
       );
     }
     if (initialFromRequest.BPL_IDAssignedToInvoice || initialFromRequest.BPLID) {
@@ -3457,12 +3489,23 @@ function CreateOrderView({
       setLastAddedIdx(existingIdx);
       targetIdx = existingIdx;
     } else {
+      const defaultUnit = (
+        item.PurchaseUnit ||
+        item.BuyUnitMsr ||
+        item.SalUnitMsr ||
+        item.SalesUnit ||
+        item.InventoryUOM ||
+        item.MeasureUnit ||
+        "UN"
+      ).trim();
       const newItems = [
         ...orderItems,
         {
           ...item,
           Quantity: 1,
           Price: 0,
+          MeasureUnit: defaultUnit || "UN",
+          UoMCode: defaultUnit || "UN",
           CostingCode: 'BR',
           CostingCode2: 'MATRIZ',
           CostingCode3: 'OPER_OFF',
@@ -3562,11 +3605,14 @@ function CreateOrderView({
         DocumentLines: orderItems.map(i => {
           const lineProject = i.CostingCode4 || i.ProjectCode || 'BASE';
           const lineUsage = parsedHeaderUsage || (i.Usage && i.Usage !== 'none' ? parseInt(String(i.Usage), 10) : undefined);
+          const lineUnit = (i.MeasureUnit || i.UoMCode || i.PurchaseUnit || "UN").trim();
           return {
             ItemCode: i.ItemCode,
             ItemDescription: i.ItemDescription || i.ItemName,
             Quantity: i.Quantity,
             Price: i.Price,
+            MeasureUnit: lineUnit,
+            UoMCode: lineUnit,
             RequiredDate: docDueDate,
             ShipDate: docDueDate,
             CostingCode: i.CostingCode || 'BR',
@@ -4113,6 +4159,7 @@ function CreateOrderView({
                     <TableRow className="border-evo-bg hover:bg-transparent">
                       <TableHead className="text-[9px] font-black uppercase tracking-[0.2em] text-evo-dark/40 px-2">Descrição</TableHead>
                       <TableHead className="text-[9px] font-black uppercase tracking-[0.2em] text-evo-dark/40 px-2 w-24">Quantidade</TableHead>
+                      <TableHead className="text-[9px] font-black uppercase tracking-[0.2em] text-evo-dark/40 px-2 w-28 text-center">Unidade</TableHead>
                       <TableHead className="text-[9px] font-black uppercase tracking-[0.2em] text-evo-dark/40 px-2 w-32 text-right">Preço Unit.</TableHead>
                       <TableHead className="text-[9px] font-black uppercase tracking-[0.2em] text-evo-dark/40 px-2 w-16 text-center">Config.</TableHead>
                       <TableHead className="w-10 px-2"></TableHead>
@@ -4135,6 +4182,69 @@ function CreateOrderView({
                               setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Quantity: val } : it));
                             }}
                           />
+                        </TableCell>
+                        <TableCell className="px-2 py-4">
+                          <div className="flex items-center">
+                            {item._isCustomUnit ? (
+                              <div className="flex items-center gap-1 w-full">
+                                <Input
+                                  type="text"
+                                  className="h-9 w-20 rounded-none border-evo-bg bg-white text-xs font-bold text-center uppercase px-1"
+                                  placeholder="UN"
+                                  maxLength={10}
+                                  value={item.MeasureUnit || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value.toUpperCase();
+                                    setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, MeasureUnit: val, UoMCode: val } : it));
+                                  }}
+                                  autoFocus
+                                />
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Voltar para lista de unidades"
+                                  className="h-9 w-6 px-0 text-slate-400 hover:text-evo-teal text-[10px]"
+                                  onClick={() => {
+                                    setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, _isCustomUnit: false } : it));
+                                  }}
+                                >
+                                  ✕
+                                </Button>
+                              </div>
+                            ) : (
+                              <select
+                                className="h-9 w-28 rounded-none border border-evo-bg bg-white text-xs font-bold text-center text-evo-dark cursor-pointer focus:outline-none focus:ring-1 focus:ring-evo-teal uppercase transition-colors"
+                                value={
+                                  STANDARD_UOM_OPTIONS.some(o => o.code === (item.MeasureUnit || "UN").toUpperCase())
+                                    ? (item.MeasureUnit || "UN").toUpperCase()
+                                    : (item.MeasureUnit ? item.MeasureUnit.toUpperCase() : "UN")
+                                }
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === "__CUSTOM__") {
+                                    setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, _isCustomUnit: true } : it));
+                                  } else {
+                                    setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, MeasureUnit: val, UoMCode: val, _isCustomUnit: false } : it));
+                                  }
+                                }}
+                              >
+                                {item.MeasureUnit && !STANDARD_UOM_OPTIONS.some(o => o.code === item.MeasureUnit.toUpperCase()) && (
+                                  <option value={item.MeasureUnit.toUpperCase()} className="font-bold text-evo-teal bg-white">
+                                    {item.MeasureUnit.toUpperCase()} (Padrão SAP)
+                                  </option>
+                                )}
+                                {STANDARD_UOM_OPTIONS.map((uom) => (
+                                  <option key={uom.code} value={uom.code} className="bg-white text-slate-900 font-bold">
+                                    {uom.code} - {uom.label.split(" - ")[1]}
+                                  </option>
+                                ))}
+                                <option value="__CUSTOM__" className="bg-slate-100 text-evo-teal font-black">
+                                  ✏️ Outra unidade...
+                                </option>
+                              </select>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="px-2 py-4">
                           <div className="flex items-center justify-end gap-1.5">
@@ -5136,7 +5246,9 @@ function ListOrdersView({
                             <p className="text-[11px] font-black uppercase tracking-tight text-evo-dark">{line.ItemDescription || line.ItemName || line.Dscription || '-'}</p>
                             <p className="text-[9px] font-bold text-evo-teal/60 tracking-widest">{line.ItemCode}</p>
                           </TableCell>
-                          <TableCell className="px-6 py-5 font-bold text-xs text-evo-dark">{line.Quantity}</TableCell>
+                          <TableCell className="px-6 py-5 font-bold text-xs text-evo-dark">
+                            {line.Quantity} {line.MeasureUnit || line.UoM || line.UomCode || ""}
+                          </TableCell>
                           <TableCell className="px-6 py-5 text-xs font-bold text-evo-dark/60">R$ {line.Price?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                           <TableCell className="px-6 py-5 text-right pr-8 font-black text-sm text-evo-dark">R$ {line.LineTotal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
                         </TableRow>
