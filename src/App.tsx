@@ -4314,28 +4314,38 @@ function CreateOrderView({
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-4">
+                  <div className="flex flex-col gap-3.5 w-full">
                     <Button
                       type="button"
                       onClick={() => setIsSupplierModalOpen(true)}
-                      className="w-full h-11 rounded-none bg-evo-dark hover:bg-evo-teal hover:text-evo-dark text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-md transition-all"
+                      className="w-full h-11 rounded-none bg-evo-dark hover:bg-evo-teal hover:text-evo-dark text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-md transition-all shrink-0"
                     >
                       <Building2 className="w-4 h-4 text-evo-teal" />
                       Selecionar Fornecedor (Modal c/ CNPJ)
                     </Button>
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="BUSCAR FORNECEDOR (CÓD F, NOME OU CNPJ)..."
-                        className="h-11 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest"
-                        value={supplierSearch}
-                        onChange={(e) => setSupplierSearch(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            searchSuppliers();
-                          }
-                        }}
-                      />
-                      <Button type="button" size="icon" className="h-11 w-11 rounded-none bg-evo-dark" onClick={() => setIsSupplierModalOpen(true)} title="Abrir modal de fornecedores com CNPJ"><Search className="w-4 h-4" /></Button>
+                    <div className="flex items-center gap-2 w-full">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-evo-dark/40 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <Input
+                          placeholder="BUSCAR FORNECEDOR (CÓD F, NOME OU CNPJ)..."
+                          className="h-11 pl-9 pr-3 rounded-none border-evo-bg bg-evo-bg/30 text-[10px] font-bold uppercase tracking-widest w-full"
+                          value={supplierSearch}
+                          onChange={(e) => setSupplierSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              searchSuppliers();
+                            }
+                          }}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => searchSuppliers()}
+                        className="h-11 px-4 rounded-none bg-evo-dark hover:bg-evo-teal hover:text-evo-dark text-white text-[10px] font-black uppercase tracking-wider shrink-0 transition-all"
+                        title="Buscar Fornecedores no SAP"
+                      >
+                        Buscar
+                      </Button>
                     </div>
                     {suppliers.length > 0 && (
                       <div className="max-h-72 overflow-y-auto border border-evo-bg divide-y divide-evo-bg bg-white shadow-inner">
@@ -4772,7 +4782,8 @@ function ListOrdersView({
         const match = sapService.findCustomerMatch(targetFilters.clientName);
         clientTarget = match ? match.CardCode : targetFilters.clientName;
       }
-      const searchTarget = targetFilters.docNum || clientTarget || targetFilters.wo || targetFilters.po || '';
+      // When searching by WO, pass wo explicitly to getOrders and do not pass it as searchTarget (which causes DocNum OData match failure)
+      const searchTarget = targetFilters.docNum || clientTarget || targetFilters.po || '';
       const data = await fetchOrders({
         skip: targetPage * targetPageSize,
         top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
@@ -5321,14 +5332,14 @@ function ListOrdersView({
                             value={String(order.SalesPersonCode ?? -1)}
                             disabled={updatingBuyerDocEntry === order.DocEntry}
                             onChange={(e) => handleChangeOrderBuyer(order, Number(e.target.value))}
-                            className="h-8 px-2 bg-white border border-slate-300 text-[11px] font-bold text-evo-dark rounded-none focus:outline-none focus:border-evo-teal w-full max-w-[210px]"
+                            className="h-8 px-2 bg-white text-slate-900 border border-slate-300 text-[11px] font-bold rounded-none focus:outline-none focus:border-evo-teal w-full max-w-[210px] shadow-sm cursor-pointer"
                           >
-                            <option value="-1">-Nenhum comprador-</option>
+                            <option value="-1" className="bg-white text-slate-900 font-bold py-1">-Nenhum comprador-</option>
                             {buyersList.filter((b: any) => Number(b.SalesEmployeeCode ?? b.code) !== -1).map((b: any) => {
                               const bCode = b.SalesEmployeeCode ?? b.code;
                               const bName = b.SalesEmployeeName || b.name || `Comprador #${bCode}`;
                               return (
-                                <option key={bCode} value={String(bCode)}>
+                                <option key={bCode} value={String(bCode)} className="bg-white text-slate-900 font-bold py-1">
                                   {bName}
                                 </option>
                               );
@@ -8452,8 +8463,8 @@ function QuotationsView({
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[140px] w-[140px]">Unidade (Dim 3)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[150px] w-[150px]">Projeto / WO (Dim 4)</TableHead>
                           <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[170px]">Receitas (Pessoal / Locação)</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/60 min-w-[115px] text-right">Taxas</TableHead>
-                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/60 min-w-[125px] text-right">Total Linha</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-2 py-4 text-white/70 min-w-[115px] text-right" title="Taxas calculadas sobre a linha">Taxas (Calc.)</TableHead>
+                          <TableHead className="text-[9px] font-black uppercase px-3 py-4 text-white/70 min-w-[130px] text-right" title="Total Geral da linha incluindo Base + Taxas">Total Linha</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -8791,19 +8802,21 @@ function QuotationsView({
                               <TableCell className="px-2 py-4 font-black text-xs text-right text-evo-teal bg-evo-teal/5 min-w-[115px] w-[115px]">
                                 <div>
                                   R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                  {hasTaxa && (
+                                  {hasTaxa ? (
                                     <span className="block text-[8px] font-bold text-evo-dark/60 font-mono">
-                                      ({taxaVal}%)
+                                      (Taxa {taxaVal}%)
                                     </span>
+                                  ) : (
+                                    <span className="block text-[8px] font-bold text-slate-400 font-mono">-</span>
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[125px] w-[125px]">
+                              <TableCell className="px-3 py-4 font-black text-sm text-right text-evo-dark bg-evo-bg/10 min-w-[130px] w-[130px]">
                                 <div>
                                   R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   {hasTaxa && (
                                     <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                      (Base + Taxa {taxaVal}%)
+                                      (R$ {baseAmount.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} + R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 0 })})
                                     </span>
                                   )}
                                   {lineDiscPct > 0 && (
@@ -10378,19 +10391,21 @@ function SalesOrdersView({
                               <TableCell className="px-2 py-4 font-black text-xs text-right text-evo-teal bg-evo-teal/5 min-w-[115px] w-[115px]">
                                 <div>
                                   R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                  {hasTaxa && (
+                                  {hasTaxa ? (
                                     <span className="block text-[8px] font-bold text-evo-dark/60 font-mono">
-                                      ({taxaVal}%)
+                                      (Taxa {taxaVal}%)
                                     </span>
+                                  ) : (
+                                    <span className="block text-[8px] font-bold text-slate-400 font-mono">-</span>
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[125px] w-[125px]">
+                              <TableCell className="px-3 py-4 font-black text-xs text-right text-evo-dark bg-evo-bg/10 min-w-[130px] w-[130px]">
                                 <div>
                                   R$ {lineTotalCalc.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   {hasTaxa && (
                                     <span className="block text-[8px] font-bold text-evo-teal font-mono">
-                                      (Base + Taxa {taxaVal}%)
+                                      (R$ {baseAmount.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} + R$ {taxaAmount.toLocaleString('pt-BR', { minimumFractionDigits: 0 })})
                                     </span>
                                   )}
                                   {lineDiscPct > 0 && (

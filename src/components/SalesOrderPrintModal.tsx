@@ -141,6 +141,9 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
                   U_ItemLoc: ol?.U_ItemLoc ?? fl.U_ItemLoc ?? ol?.U_ITEMLOC ?? fl.U_ITEMLOC,
                   U_ITEMLOC: ol?.U_ITEMLOC ?? fl.U_ITEMLOC ?? ol?.U_ItemLoc ?? fl.U_ItemLoc,
                   U_Colaborador: ol?.U_Colaborador || fl.U_Colaborador || '',
+                  Taxa: ol?.Taxa ?? fl.Taxa ?? ol?.CommisionPercent ?? fl.CommisionPercent ?? ol?.CommissionPercent ?? fl.CommissionPercent,
+                  CommisionPercent: ol?.CommisionPercent ?? fl.CommisionPercent ?? ol?.Taxa ?? fl.Taxa,
+                  CommissionPercent: ol?.CommissionPercent ?? fl.CommissionPercent ?? ol?.Taxa ?? fl.Taxa,
                   _persCost: ol?._persCost || fl._persCost,
                   _personnelCost: ol?._personnelCost || fl._personnelCost,
                   _rentalCost: ol?._rentalCost || fl._rentalCost,
@@ -321,7 +324,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
       const isRental = !isLogistics && (line.U_ItemLoc || desc.includes('equipamento') || desc.includes('loca') || desc.includes('kit') || desc.includes('rope') || code.includes('eq') || code.includes('loc'));
 
       const qty = Number(line.Quantity || 1);
-      const unitPrice = Number(line.Price || line.UnitPrice || 0);
+      const rawUnitPrice = Number(line.Price || line.UnitPrice || 0);
 
       // Parse taxa flexibly (supports "10", "10,5", 10, CommissionPercent, Commission, etc.)
       const parseTaxaVal = (val: any) => {
@@ -337,6 +340,20 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
         : (line.CommisionPercent ?? line.CommissionPercent ?? line.Commission);
       const taxaVal = parseTaxaVal(rawTaxa);
       const hasTaxa = taxaVal > 0;
+
+      const nItemKeyEarly = String(line.U_nItem ?? line.U_nITEM ?? line.U_NItem ?? line.U_NITEM ?? '').trim();
+      const custoPessoalEarly = (nItemKeyEarly ? personalCosts[nItemKeyEarly] : null)
+        || personalCosts[`line_${idx}`]
+        || (line.LineNum !== undefined ? personalCosts[`lineNum_${line.LineNum}`] : null)
+        || (line as any)._persCost
+        || (line as any)._personnelCost
+        || (nItemKeyEarly ? sapService.getCachedPersonnelCost(nItemKeyEarly) : null);
+
+      const vlrNormalFallback = (custoPessoalEarly?.U_VlNormal !== undefined && Number(custoPessoalEarly.U_VlNormal) > 0)
+        ? Number(custoPessoalEarly.U_VlNormal)
+        : (Number(line.LineTotal) > 0 ? Number(line.LineTotal) / (qty || 1) : 0);
+
+      const unitPrice = rawUnitPrice > 0 ? rawUnitPrice : vlrNormalFallback;
       const baseAmount = unitPrice * qty;
       const valTaxaCalc = hasTaxa ? (baseAmount * (taxaVal / 100)) : 0;
       const baseCalc = baseAmount + valTaxaCalc;
@@ -439,7 +456,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
         const valDobra = qtdDobra * (vlrNormalNum * (percDobra / 100));
 
         // When line has Taxa or Dobra, reflect clearly in print draft
-        const valTaxaItem = hasTaxa ? (unitPrice * (taxaVal / 100) * qty) : 0;
+        const valTaxaItem = hasTaxa ? valTaxaCalc : 0;
         const totalTaxasLinha = valDobra > 0 ? valDobra : valTaxaItem;
 
         // Dobra / Taxas Extras column:
@@ -455,9 +472,11 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
           taxaDobText = `${taxaVal.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
         }
 
-        const totalTaxasVal = (custoPessoal?.U_TotalGeral !== undefined && Number(custoPessoal.U_TotalGeral) > 0)
-          ? Number(custoPessoal.U_TotalGeral)
-          : totalTaxasLinha;
+        const totalTaxasVal = hasTaxa
+          ? valTaxaItem
+          : (custoPessoal?.U_TotalGeral !== undefined && Number(custoPessoal.U_TotalGeral) > 0)
+            ? Number(custoPessoal.U_TotalGeral)
+            : totalTaxasLinha;
 
         const totalTaxasStr = totalTaxasVal > 0 
           ? totalTaxasVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -493,7 +512,7 @@ export function SalesOrderPrintModal({ isOpen, onClose, order, userEmail, onEdit
             noturnoNorDob: '-',
             hrExtrasDiurNot: '-',
             taxaDobDiurNot: '-',
-            totalTaxas: totalTaxasVal > 0 ? totalTaxasStr : '-',
+            totalTaxas: (totalTaxasVal > 0 || hasTaxa) ? totalTaxasStr : '-',
             totalGeral: lineTotalFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           });
         } else {

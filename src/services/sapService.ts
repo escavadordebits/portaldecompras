@@ -288,6 +288,7 @@ export const resolveSapFinancialProject = (proj?: string | null): string | undef
  */
 export const getDocumentWO = (doc: any): string => {
   if (!doc) return '-';
+  if (doc._wo && String(doc._wo).trim() !== '') return String(doc._wo).trim();
 
   // 1. Direct header project or WO
   const headerWO = doc.CostingCode4 || doc.U_Projeto || doc.Project || doc.ProjectCode || doc.U_WO || doc.U_NumWO;
@@ -3453,7 +3454,7 @@ export const sapService = {
               await api.post('/sap/SQLQueries', {
                 SqlCode: 'SEARCH_ORDERS_BY_WO',
                 SqlName: 'Search Sales Orders by WO',
-                SqlText: 'SELECT T0."DocEntry" FROM "RDR1" T0 WHERE T0."OcrCode4" = :wo GROUP BY T0."DocEntry" ORDER BY T0."DocEntry" DESC'
+                SqlText: 'SELECT T0."DocEntry" FROM "RDR1" T0 WHERE (T0."OcrCode4" = :wo OR T0."Project" = :wo OR T0."CostingCode4" = :wo) GROUP BY T0."DocEntry" ORDER BY T0."DocEntry" DESC'
               });
               woRes = await api.get(`/sap/SQLQueries('SEARCH_ORDERS_BY_WO')/List?wo='${encodeURIComponent(woTarget)}'`);
             } catch {}
@@ -3464,7 +3465,12 @@ export const sapService = {
               const filterEntries = entries.slice(0, 40).map((e: any) => `DocEntry eq ${e}`).join(' or ');
               const fullDocsRes = await api.get(`/sap/Orders?$filter=${encodeURIComponent(filterEntries)}&$orderby=DocEntry desc`);
               (fullDocsRes.data?.value || []).filter(isServiceOrder).forEach((d: any) => {
-                if (d?.DocEntry) mergedMap.set(Number(d.DocEntry), d);
+                if (d?.DocEntry) {
+                  d._wo = woTarget;
+                  d.CostingCode4 = d.CostingCode4 || woTarget;
+                  d.U_Projeto = d.U_Projeto || woTarget;
+                  mergedMap.set(Number(d.DocEntry), d);
+                }
               });
             }
           }
