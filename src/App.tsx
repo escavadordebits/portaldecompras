@@ -754,14 +754,18 @@ export default function App() {
   // Detect Portal Route on Mount
   useEffect(() => {
     const defaultComp = 'SBO_QUALITECH';
-    const storedComp = localStorage.getItem('sap_portal_company');
-    if (!storedComp || storedComp === 'QUALITECH' || storedComp === 'SBO_QUALITECH_') {
-      localStorage.setItem('sap_portal_company', defaultComp);
-    }
-    const sessionComp = sessionStorage.getItem('sap_portal_company');
-    if (!sessionComp || sessionComp === 'QUALITECH' || sessionComp === 'SBO_QUALITECH_') {
-      sessionStorage.setItem('sap_portal_company', defaultComp);
-    }
+    let userComp: string | null = null;
+    try {
+      const activeUserStr = sessionStorage.getItem('sap_portal_active_user') || localStorage.getItem('sap_portal_active_user');
+      if (activeUserStr) {
+        const parsed = JSON.parse(activeUserStr);
+        if (parsed?.sapCompany) userComp = normalizeSapCompany(parsed.sapCompany);
+      }
+    } catch {}
+
+    const targetBase = userComp || localStorage.getItem('sap_portal_company') || defaultComp;
+    localStorage.setItem('sap_portal_company', targetBase);
+    sessionStorage.setItem('sap_portal_company', targetBase);
 
     const handleProfileUpdate = (e: any) => {
       if (e.detail) {
@@ -1909,6 +1913,13 @@ export default function App() {
                 <span className="font-bold text-lg sm:text-xl tracking-tighter text-white notranslate" translate="no">QUALITECH</span>
                 <span className="bg-evo-teal/30 text-teal-200 border border-teal-400/40 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded tracking-wider shadow-sm">
                   {APP_VERSION_TAG}
+                </span>
+                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded tracking-wider shadow-sm border ${
+                  (userProfile?.sapCompany || '').includes('QAS')
+                    ? 'bg-amber-500/30 text-amber-200 border-amber-400/50'
+                    : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40'
+                }`} title={`Base de dados SAP conectada: ${userProfile?.sapCompany || 'SBO_QUALITECH'}`}>
+                  {(userProfile?.sapCompany || 'SBO_QUALITECH').replace('SBO_QUALITECH_', '').replace('SBO_', '')}
                 </span>
               </div>
               <span className="text-[7px] sm:text-[8px] uppercase tracking-[0.2em] font-medium opacity-70 text-white">Procurement Service</span>
@@ -3536,7 +3547,7 @@ function CreateOrderView({
         } : {}),
         DocumentLines: orderItems.map(i => {
           const lineProject = i.CostingCode4 || i.ProjectCode || 'BASE';
-          const lineUsage = i.Usage && i.Usage !== 'none' ? parseInt(String(i.Usage), 10) : parsedHeaderUsage;
+          const lineUsage = parsedHeaderUsage || (i.Usage && i.Usage !== 'none' ? parseInt(String(i.Usage), 10) : undefined);
           return {
             ItemCode: i.ItemCode,
             ItemDescription: i.ItemDescription || i.ItemName,
@@ -4187,88 +4198,27 @@ function CreateOrderView({
                                       </Select>
                                     </div>
 
-                                    {/* Items 6 & 17: Nat. da Operação (Utilização) with Type-Ahead Search */}
-                                    <div className="group space-y-3 bg-white p-5 border border-evo-bg shadow-sm transition-all hover:border-evo-teal/50 hover:shadow-md sm:col-span-2 relative">
-                                      <div className="flex items-center justify-between border-b border-evo-bg pb-2 mb-2">
-                                        <Label className="text-[11px] font-black uppercase tracking-[0.15em] text-evo-teal text-left">Nat. da Operação (Utilização)</Label>
-                                        <div className="text-[9px] font-bold text-evo-dark/30">Digite para buscar ex: uso e consumo</div>
+                                    {/* Utilização Fiscal: Herdada automaticamente do cabeçalho do documento */}
+                                    <div className="group space-y-2 bg-slate-50 p-5 border border-slate-200 shadow-sm sm:col-span-2">
+                                      <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-1">
+                                        <Label className="text-[11px] font-black uppercase tracking-[0.15em] text-evo-teal text-left">
+                                          Nat. da Operação / Utilização Fiscal
+                                        </Label>
+                                        <span className="text-[9px] font-bold text-slate-500 uppercase">
+                                          Herdada do Cabeçalho
+                                        </span>
                                       </div>
-                                      <div className="relative">
-                                        <Search className="w-3.5 h-3.5 text-evo-dark/40 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                        <Input
-                                          type="text"
-                                          placeholder="Digite ex: uso e consumo, ativo, serviço..."
-                                          className="h-11 pl-9 pr-8 rounded-none border-evo-bg bg-evo-bg/10 text-xs font-black uppercase text-evo-dark"
-                                          value={
-                                            openLineUsageIdx === idx
-                                              ? (lineUsageQueryMap[idx] ?? '')
-                                              : (() => {
-                                                  if (!item.Usage || item.Usage === 'none') return lineUsageQueryMap[idx] ?? '';
-                                                  const matchUsage = usages.find((u: any) => String(u.ID) === String(item.Usage));
-                                                  return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${item.Usage}`;
-                                                })()
-                                          }
-                                          onFocus={() => {
-                                            setLineUsageQueryMap(prev => ({ ...prev, [idx]: '' }));
-                                            setOpenLineUsageIdx(idx);
-                                          }}
-                                          onBlur={() => {
-                                            setTimeout(() => setOpenLineUsageIdx(null), 200);
-                                          }}
-                                          onChange={(e) => {
-                                            setLineUsageQueryMap(prev => ({ ...prev, [idx]: e.target.value }));
-                                            setOpenLineUsageIdx(idx);
-                                          }}
-                                        />
-                                        {item.Usage && (
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: undefined } : it));
-                                              setLineUsageQueryMap(prev => ({ ...prev, [idx]: '' }));
-                                            }}
-                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-evo-dark/40 hover:text-rose-600"
-                                          >
-                                            <X className="w-3.5 h-3.5" />
-                                          </button>
-                                        )}
-                                        {openLineUsageIdx === idx && (() => {
-                                          const matchedLineUsages = filterAndRankUsages(usages, lineUsageQueryMap[idx] || '');
-                                          return (
-                                            <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white border border-evo-bg shadow-2xl max-h-64 overflow-y-auto divide-y divide-evo-bg">
-                                              <div className="px-3 py-1 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500 sticky top-0 z-10 border-b border-evo-bg flex justify-between items-center">
-                                                <span>Utilizações SAP</span>
-                                                <span className="text-evo-teal">{matchedLineUsages.length} de {usages.length}</span>
-                                              </div>
-                                              {matchedLineUsages.map((u: any) => (
-                                                <button
-                                                  key={u.ID}
-                                                  type="button"
-                                                  onMouseDown={(e) => {
-                                                    e.preventDefault();
-                                                    const cleanUsage = String(u.ID);
-                                                    if (!selectedUsage) {
-                                                      setSelectedUsage(cleanUsage);
-                                                      setOrderItems(orderItems.map((it, i) => {
-                                                        if (i === idx) return { ...it, Usage: cleanUsage };
-                                                        if (!it.Usage || it.Usage === 'none') return { ...it, Usage: cleanUsage };
-                                                        return it;
-                                                      }));
-                                                    } else {
-                                                      setOrderItems(orderItems.map((it, i) => i === idx ? { ...it, Usage: cleanUsage } : it));
-                                                    }
-                                                    setLineUsageQueryMap(prev => ({ ...prev, [idx]: `[${u.ID}] ${u.Usage}` }));
-                                                    setOpenLineUsageIdx(null);
-                                                  }}
-                                                  className="w-full text-left px-3.5 py-2.5 hover:bg-evo-teal/10 text-[11px] font-bold uppercase tracking-tight flex items-center gap-2"
-                                                >
-                                                  <span className="text-evo-teal font-black shrink-0">[{u.ID}]</span>
-                                                  <span className="text-evo-dark whitespace-normal leading-tight">{u.Usage}</span>
-                                                </button>
-                                              ))}
-                                            </div>
-                                          );
-                                        })()}
+                                      <div className="flex items-center gap-2 pt-1">
+                                        <span className="text-xs font-bold text-evo-dark">
+                                          {selectedUsage ? (() => {
+                                            const matchUsage = usages.find((u: any) => String(u.ID) === String(selectedUsage));
+                                            return matchUsage ? `[${matchUsage.ID}] ${matchUsage.Usage}` : `Utilização ${selectedUsage}`;
+                                          })() : (
+                                            <span className="text-amber-700 font-semibold italic">
+                                              Informe a Utilização Fiscal no cabeçalho do documento (campo acima)
+                                            </span>
+                                          )}
+                                        </span>
                                       </div>
                                     </div>
                                   </div>

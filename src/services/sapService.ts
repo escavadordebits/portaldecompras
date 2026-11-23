@@ -65,6 +65,10 @@ export const normalizeSapCompany = (comp?: string): string => {
   if (!trimmed || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
+  const upper = trimmed.toUpperCase();
+  if (upper === 'QAS' || upper === 'QUALITECH_QAS' || upper === 'SBO_QUALITECH_QAS') {
+    return 'SBO_QUALITECH_QAS';
+  }
   return trimmed;
 };
 
@@ -90,28 +94,27 @@ api.interceptors.request.use((config) => {
   if (currentUser) config.headers['X-SAP-User'] = currentUser;
   if (currentPassword) config.headers['X-SAP-Password'] = currentPassword;
 
-  // Add company header from active company or user profile in session/storage
-  let rawCompany = sessionStorage.getItem('sap_portal_company') || localStorage.getItem('sap_portal_company');
-  if (!rawCompany) {
-    try {
-      const activeUserStr = sessionStorage.getItem('sap_portal_active_user') || localStorage.getItem('sap_portal_active_user');
-      if (activeUserStr) {
-        const activeUser = JSON.parse(activeUserStr);
-        if (activeUser?.sapCompany) {
-          rawCompany = activeUser.sapCompany;
-          sessionStorage.setItem('sap_portal_company', normalizeSapCompany(rawCompany));
-        }
+  // Always resolve company directly from active user profile first (priority over stale storage)
+  let rawCompany: string | null = null;
+  try {
+    const activeUserStr = sessionStorage.getItem('sap_portal_active_user') || localStorage.getItem('sap_portal_active_user');
+    if (activeUserStr) {
+      const activeUser = JSON.parse(activeUserStr);
+      if (activeUser?.sapCompany) {
+        rawCompany = activeUser.sapCompany;
       }
-    } catch (e) {
-      console.error('Error resolving active company from user profile', e);
     }
+  } catch (e) {
+    console.error('Error resolving active company from user profile', e);
+  }
+
+  if (!rawCompany) {
+    rawCompany = sessionStorage.getItem('sap_portal_company') || localStorage.getItem('sap_portal_company');
   }
   
   const currentCompany = normalizeSapCompany(rawCompany || SAP_CONFIG.defaultCompany);
-  if (rawCompany && rawCompany !== currentCompany) {
-    sessionStorage.setItem('sap_portal_company', currentCompany);
-    localStorage.setItem('sap_portal_company', currentCompany);
-  }
+  sessionStorage.setItem('sap_portal_company', currentCompany);
+  localStorage.setItem('sap_portal_company', currentCompany);
 
   if (currentCompany) {
     config.headers['X-SAP-Company'] = currentCompany;

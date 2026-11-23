@@ -1564,9 +1564,14 @@ export default function UserManagementView({ currentUserEmail }: UserManagementV
                   value={selectedUser?.sapCompany || ''}
                   onChange={(e) => setSelectedUser({ ...selectedUser, sapCompany: e.target.value })}
                   placeholder="SBO_QUALITECH ou SBO_QUALITECH_QAS"
-                  list="sap-company-options"
+                  list="sap-company-options-edit"
                   className="rounded-none border-evo-bg h-10 text-xs font-bold"
                 />
+                <datalist id="sap-company-options-edit">
+                  <option value="SBO_QUALITECH">SBO_QUALITECH (Produção)</option>
+                  <option value="SBO_QUALITECH_QAS">SBO_QUALITECH_QAS (Homologação)</option>
+                  <option value="SBO_QUALITECH_IRML">SBO_QUALITECH_IRML</option>
+                </datalist>
               </div>
             </div>
 

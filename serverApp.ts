@@ -86,6 +86,10 @@ export const normalizeCompany = (comp?: string): string => {
   if (!trimmed || trimmed === 'QUALITECH' || trimmed === 'SBO_QUALITECH_') {
     return 'SBO_QUALITECH';
   }
+  const upper = trimmed.toUpperCase();
+  if (upper === 'QAS' || upper === 'QUALITECH_QAS' || upper === 'SBO_QUALITECH_QAS') {
+    return 'SBO_QUALITECH_QAS';
+  }
   return trimmed;
 };
 
@@ -93,9 +97,9 @@ export const normalizeCompany = (comp?: string): string => {
 const inFlightLogins = new Map<string, Promise<{ sessionId: string; cookieHeader: string; companyDB: string; routeId?: string }>>();
 
 // Helper for automatic SAP authentication with mutex and session cache
-const doSapLogin = async (req: express.Request, res?: express.Response, forceRefresh = false) => {
+const doSapLogin = async (req: express.Request, res?: express.Response, forceRefresh = false, companyOverride?: string) => {
   const sapConfig = getSapConfig(req);
-  const rawCompany = (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+  const rawCompany = companyOverride || (req.headers['x-sap-company'] as string) || (req.body?.companyDB as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
   const companyDB = normalizeCompany(rawCompany);
   const cacheKey = `${sapConfig.baseUrl}_${companyDB}_${sapConfig.user}`;
 
@@ -111,7 +115,7 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
           res.cookie(name, value, cookieOptions);
         }
       }
-      return { sessionId: cached.sessionId, cookieHeader: cached.cookieHeader };
+      return { sessionId: cached.sessionId, cookieHeader: cached.cookieHeader, companyDB: cached.companyDB, routeId: cached.routeId };
     }
   }
 
@@ -131,7 +135,7 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
           res.cookie(name, value, cookieOptions);
         }
       }
-      return { sessionId: auth.sessionId, cookieHeader: auth.cookieHeader };
+      return { sessionId: auth.sessionId, cookieHeader: auth.cookieHeader, companyDB: auth.companyDB, routeId: auth.routeId };
     } catch {
       // If previous in-flight promise failed, proceed to initiate fresh login
     }
@@ -144,7 +148,8 @@ const doSapLogin = async (req: express.Request, res?: express.Response, forceRef
     const candidateUsers = [sapConfig.user, 'manager', 'Manager', 'B1i'];
     const usersToTry = Array.from(new Set(candidateUsers.filter(Boolean)));
     const candidatePasswords = Array.from(new Set([sapConfig.password, '1234', 'manager', 'Manager', 'B1i', 'sap1234'].filter(Boolean)));
-    const candidateCompanies = Array.from(new Set([companyDB, 'SBO_QUALITECH'].filter(Boolean)));
+    // STRICT: Only authenticate to the exact requested database, never silently fallback to production!
+    const candidateCompanies = [companyDB];
 
     let lastError: any = null;
 
@@ -761,11 +766,13 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
     const draftDocEntry = Number(draftData.DocEntry);
 
     // Register line-by-line approval record with exact target ObjType and DocObjectCode
+    const targetDbName = auth.companyDB || normalizeCompany((req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB']);
     const record = registerPortalDraftApproval({
       draftDocEntry,
       draftDocNum: draftData.DocNum || draftDocEntry,
       objectType: meta.objType,
       docObjectCode: meta.docObjectCode,
+      companyDB: targetDbName,
       authorEmail: userEmail || payload.RequesterEmail || '',
       authorName: userName || payload.RequesterName || '',
       headerData: { ...draftData, ...payload, DocObjectCode: meta.docObjectCode, ObjectType: meta.objType },
@@ -1341,10 +1348,11 @@ apiRouter.post('/approvals/decide', async (req, res) => {
     }
 
     try {
-      const auth = await doSapLogin(req, res);
+      const targetDb = record.companyDB || (req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB'] || config.sap.defaultCompany;
+      const auth = await doSapLogin(req, res, false, targetDb);
       const sapConfig = getSapConfig(req);
 
-      console.log(`[CONVERSION] Starting conversion of Draft(${docEntry}) to effective SAP document...`);
+      console.log(`[CONVERSION] Starting conversion of Draft(${docEntry}) to effective SAP document on database '${auth.companyDB || targetDb}'...`);
 
       let convertedDocEntry: number | null = null;
       let convertedDocNum: number | null = null;
@@ -1470,9 +1478,9 @@ apiRouter.all('/sap/*', async (req, res) => {
     .map(([key, value]) => `${key}=${value}`)
     .join('; ');
   
-  if (!sessionId) {
+  if (!sessionId || isCompanyMismatch) {
     try {
-      const auth = await doSapLogin(req, res);
+      const auth = await doSapLogin(req, res, isCompanyMismatch, requestedCompany);
       sessionId = auth.sessionId;
       cookieHeader = auth.cookieHeader;
     } catch (loginErr: any) {

@@ -209,6 +209,7 @@ export interface PortalApprovalRecord {
   objectType: string; // '1470000113' | '540000006' | '22' | '20' | '21' | '18' | '19' | '204' | '69'
   targetTable?: string; // 'OPRQ' | 'OPQT' | 'OPOR' | 'OPDN' | 'ORPD' | 'OPCH' | 'ORPC' | 'ODPO' | 'OIPF'
   docObjectCode: string; // 'oPurchaseRequests' | 'oPurchaseQuotations' | 'oPurchaseOrders' | ...
+  companyDB?: string; // Database where the draft was created (e.g. SBO_QUALITECH_QAS or SBO_QUALITECH)
   objectTypeLabel?: string; // Nome em Português
   origin: 'PORTAL' | 'SAP_DESKTOP';
   status: 'W' | 'Y' | 'N';
@@ -638,6 +639,7 @@ export function registerPortalDraftApproval(params: {
   draftDocNum?: number | null;
   objectType: string;
   docObjectCode: string;
+  companyDB?: string;
   authorEmail?: string;
   authorName?: string;
   headerData: any;
@@ -703,6 +705,7 @@ export function registerPortalDraftApproval(params: {
     objectType: meta.objType,
     targetTable: meta.tableName,
     docObjectCode: meta.docObjectCode,
+    companyDB: params.companyDB || params.headerData?.CompanyDB || params.headerData?.companyDB,
     objectTypeLabel: meta.labelPt,
     origin: 'PORTAL',
     status: 'W',
