@@ -2601,6 +2601,7 @@ function DashboardView({
 
   // Financial calculations
   const totalPurchaseOrdersValue = stats.orders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
+  const totalPurchaseQuotationsValue = stats.quotations.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
   const totalSalesOrdersValue = stats.salesOrders.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
   const totalSalesQuotationsValue = stats.salesQuotations.reduce((acc: number, curr: any) => acc + (Number(curr.DocTotal) || 0), 0);
 
@@ -2686,12 +2687,20 @@ function DashboardView({
                 description={`${stats.salesOrders.length} pedidos de venda ativos`}
               />
             )}
-            {hasNegotiations && (
+            {hasQuotations && (
               <StatCard
                 title="Cotações de Venda"
                 value={`R$ ${(totalSalesQuotationsValue / 1000).toFixed(1)}k`}
                 icon={<ClipboardList />}
                 description={`${stats.salesQuotations.length} cotações em negociação`}
+              />
+            )}
+            {hasNegotiations && (
+              <StatCard
+                title="Cotações de Compra"
+                value={`R$ ${(totalPurchaseQuotationsValue / 1000).toFixed(1)}k`}
+                icon={<ClipboardList />}
+                description={`${stats.quotations.length} ofertas / cotações ativas`}
               />
             )}
             {hasProcurement && (
@@ -2819,12 +2828,12 @@ function DashboardView({
             </Card>
           )}
 
-          {/* DETAILED DASHBOARD SECTION: VENDAS & NEGOCIAÇÕES */}
-          {(hasSalesOrders || hasNegotiations) && (
+          {/* DETAILED DASHBOARD SECTION: VENDAS & NEGOCIAÇÕES COMERCIAIS */}
+          {(hasSalesOrders || hasQuotations) && (
             <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5">
               <CardHeader className="bg-evo-dark px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Análise de Vendas & Negociações</CardTitle>
+                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Análise Comercial de Vendas</CardTitle>
                   <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Acompanhamento Comercial de Pedidos de Venda e Cotações</p>
                 </div>
                 <Badge className="bg-emerald-500 text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo Comercial</Badge>
@@ -2847,14 +2856,14 @@ function DashboardView({
                       <p className="text-[9px] font-bold text-teal-500 mt-1">Valor médio por pedido</p>
                     </div>
                   )}
-                  {hasNegotiations && (
+                  {hasQuotations && (
                     <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
                       <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Volume Cotações de Venda</p>
                       <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalSalesQuotationsValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                       <p className="text-[9px] font-bold text-amber-500 mt-1">{stats.salesQuotations.length} cotações ativas</p>
                     </div>
                   )}
-                  {hasNegotiations && (
+                  {hasQuotations && (
                     <div className="bg-evo-bg/50 p-6 border-l-4 border-indigo-500">
                       <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total de Oportunidades</p>
                       <p className="text-2xl font-black text-evo-dark mt-1">{stats.salesOrders.length + stats.salesQuotations.length}</p>
@@ -2870,7 +2879,7 @@ function DashboardView({
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={[
                           ...(hasSalesOrders ? [{ name: 'Pedidos de Venda', valor: totalSalesOrdersValue }] : []),
-                          ...(hasNegotiations ? [{ name: 'Cotações de Venda', valor: totalSalesQuotationsValue }] : [])
+                          ...(hasQuotations ? [{ name: 'Cotações de Venda', valor: totalSalesQuotationsValue }] : [])
                         ]}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                           <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800 }} />
@@ -2918,6 +2927,7 @@ function DashboardView({
           )}
 
           {/* RESUMO DAS COTAÇÕES POR PROJETO / MEDIÇÕES (PRINT PROJETO.PNG) */}
+          {(hasSalesOrders || hasQuotations) && (
           <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5 bg-white">
             <CardHeader className="bg-[#1b2a4e] px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">
@@ -3077,6 +3087,103 @@ function DashboardView({
               </div>
             </CardContent>
           </Card>
+          )}
+
+          {/* DETAILED DASHBOARD SECTION: COMPRAS & SUPRIMENTOS */}
+          {(hasProcurement || hasNegotiations) && (
+            <Card className="evo-card border-none overflow-hidden shadow-2xl shadow-evo-dark/5">
+              <CardHeader className="bg-evo-dark px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-[12px] font-black uppercase tracking-[0.3em] text-white">Gestão de Compras & Suprimentos</CardTitle>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">Acompanhamento Operacional de Pedidos de Compra, Solicitações e Cotações</p>
+                </div>
+                <Badge className="bg-purple-600 text-white border-none text-[9px] font-black uppercase tracking-widest px-3 py-1 self-start md:self-auto">Módulo de Compras</Badge>
+              </CardHeader>
+              <CardContent className="p-8 space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {hasProcurement && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-purple-600">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Total Pedidos de Compra</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalPurchaseOrdersValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-[9px] font-bold text-purple-600 mt-1">{stats.orders.length} pedidos registrados</p>
+                    </div>
+                  )}
+                  {hasProcurement && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-indigo-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Solicitações Pendentes</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">{openRequests}</p>
+                      <p className="text-[9px] font-bold text-indigo-500 mt-1">De um total de {stats.requests.length} solicitações</p>
+                    </div>
+                  )}
+                  {hasNegotiations && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-amber-500">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Cotações / Ofertas de Compra</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">R$ {totalPurchaseQuotationsValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-[9px] font-bold text-amber-500 mt-1">{stats.quotations.length} cotações ativas</p>
+                    </div>
+                  )}
+                  {hasApprovals && (
+                    <div className="bg-evo-bg/50 p-6 border-l-4 border-evo-teal">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-evo-dark/40">Aprovações Pendentes</p>
+                      <p className="text-2xl font-black text-evo-dark mt-1">{pendingApprovals}</p>
+                      <p className="text-[9px] font-bold text-evo-teal mt-1">Decisão de gestores de compras</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Volume de Compras por Categoria (R$)</h4>
+                    <div className="h-[240px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={[
+                          ...(hasProcurement ? [{ name: 'Pedidos de Compra', valor: totalPurchaseOrdersValue }] : []),
+                          ...(hasNegotiations ? [{ name: 'Cotações de Compra', valor: totalPurchaseQuotationsValue }] : [])
+                        ]}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800 }} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 700 }} />
+                          <Tooltip formatter={(val) => [`R$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Valor Total']} />
+                          <Bar dataKey="valor" fill="#9333ea" barSize={50} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-evo-dark/50 mb-4">Últimos Pedidos & Solicitações de Compra</h4>
+                    <div className="divide-y divide-evo-bg max-h-[240px] overflow-y-auto border border-evo-bg">
+                      {[...stats.orders, ...stats.requests]
+                        .sort((a, b) => new Date(b.DocDate || b.CreationDate || 0).getTime() - new Date(a.DocDate || a.CreationDate || 0).getTime())
+                        .slice(0, 5)
+                        .map((doc, i) => {
+                          const isOrder = doc._type === 'order';
+                          return (
+                            <div key={i} className="p-4 flex items-center justify-between hover:bg-purple-600/5 transition-colors">
+                              <div className="flex items-center gap-3">
+                                <div className={`p-2 text-white ${isOrder ? 'bg-purple-600' : 'bg-indigo-600'}`}>
+                                  {isOrder ? <TrendingUp className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-evo-dark">{doc.CardName || doc.RequesterName || `Fornecedor #${doc.CardCode || doc.DocNum || doc.DocEntry}`}</p>
+                                  <p className="text-[9px] font-bold text-evo-dark/40 uppercase tracking-wider">{isOrder ? 'Pedido de Compra' : 'Solicitação de Compra'} #{doc.DocNum || doc.DocEntry}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-black text-evo-dark">R$ {(Number(doc.DocTotal) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {[...stats.orders, ...stats.requests].length === 0 && (
+                        <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-evo-dark/30 italic">Nenhum documento de compras encontrado</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* GLOBAL VOLUME CHART AND RECENT ACTIVITY STREAM */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -4769,7 +4876,7 @@ function ListOrdersView({
   onViewDetails: (id: number) => void,
   title?: string,
   fetchOrders?: (options?: any) => Promise<any[]>,
-  fetchOrderDetail?: (id: number) => Promise<any>,
+  fetchOrderDetail?: (id: number, isDraft?: boolean) => Promise<any>,
   userEmail?: string,
   onCopyToQuotation?: (order: any) => void
 }) {
@@ -4792,6 +4899,7 @@ function ListOrdersView({
     clientCnpj: ''
   });
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [draftsOnly, setDraftsOnly] = useState<boolean>(false);
   const [buyerFilter, setBuyerFilter] = useState<string>('all');
   const [buyersList, setBuyersList] = useState<any[]>([]);
   const [updatingBuyerDocEntry, setUpdatingBuyerDocEntry] = useState<number | null>(null);
@@ -4929,7 +5037,9 @@ function ListOrdersView({
   const handleFetchOrderDetail = async (docEntry: number) => {
     setIsDetailLoading(true);
     try {
-      const data = await fetchOrderDetail(docEntry);
+      const targetOrder = orders.find((o: any) => o.DocEntry === docEntry);
+      const isDraft = Boolean(targetOrder?._isDraft || draftsOnly);
+      const data = await fetchOrderDetail(docEntry, isDraft);
       setSelectedOrder(data);
 
       // Fetch Supplier Email if CardCode exists
@@ -4949,7 +5059,12 @@ function ListOrdersView({
     }
   };
 
-  const handleFetchOrders = async (targetPage = page, targetFilters = appliedFilters, targetPageSize = pageSize) => {
+  const handleFetchOrders = async (
+    targetPage = page,
+    targetFilters = appliedFilters,
+    targetPageSize = pageSize,
+    targetDraftsOnly = draftsOnly
+  ) => {
     setIsLoading(true);
     try {
       // Determine query search string for SAP Service Layer with customer auto-resolution
@@ -4963,7 +5078,8 @@ function ListOrdersView({
       const data = await fetchOrders({
         skip: targetPage * targetPageSize,
         top: (clientTarget && targetFilters.wo) ? Math.max(targetPageSize, 100) : targetPageSize,
-        search: searchTarget
+        search: searchTarget,
+        draftsOnly: targetDraftsOnly
       });
       const orderList = Array.isArray(data) ? data : [];
       setOrders(orderList);
@@ -4973,6 +5089,12 @@ function ListOrdersView({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleToggleDraftsOnly = (val: boolean) => {
+    setDraftsOnly(val);
+    setPage(0);
+    handleFetchOrders(0, appliedFilters, pageSize, val);
   };
 
   useEffect(() => {
@@ -5385,10 +5507,12 @@ function ListOrdersView({
         onChangeFilters={setFilters}
         onSearch={handleApplySearch}
         onClear={handleClearSearch}
-        onRefresh={() => handleFetchOrders(page, appliedFilters, pageSize)}
+        onRefresh={() => handleFetchOrders(page, appliedFilters, pageSize, draftsOnly)}
         isLoading={isLoading}
         statusFilter={statusFilter}
         onChangeStatusFilter={setStatusFilter}
+        draftsOnlyFilter={draftsOnly}
+        onChangeDraftsOnlyFilter={handleToggleDraftsOnly}
         appliedFiltersSummary={appliedFiltersSummary}
         totalResults={filteredOrders.length}
       />
@@ -5435,6 +5559,23 @@ function ListOrdersView({
           </p>
         )}
       </div>
+
+      {draftsOnly && (
+        <div className="bg-amber-500/10 border border-amber-500/30 px-5 py-3 flex items-center justify-between text-xs font-bold text-amber-900 shadow-sm">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            Filtro ativo: Exibindo apenas <strong>Esboços de Documentos (ODRF / Drafts)</strong>. Documentos gravados na tabela padrão estão ocultados.
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleToggleDraftsOnly(false)}
+            className="h-7 text-[10px] font-black uppercase text-amber-800 hover:bg-amber-100 rounded-none"
+          >
+            Ver Todos os Documentos
+          </Button>
+        </div>
+      )}
 
       <Card className="evo-card border-none overflow-hidden">
         <div className="overflow-x-auto">

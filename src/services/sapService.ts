@@ -539,6 +539,52 @@ async function mergePendingPortalDraftsForObjectType(effectiveDocs: any[], targe
   }
 }
 
+async function getDraftsForDocObjectCode(
+  docObjectCode: string,
+  targetObjType: string,
+  options?: number | (ODataQueryOptions & { draftsOnly?: boolean })
+): Promise<any[]> {
+  try {
+    const meta = resolveMarketingObjectMeta(targetObjType, docObjectCode);
+    let skip = 0;
+    let top = 20;
+    let search = '';
+    if (typeof options === 'number') {
+      skip = options;
+    } else if (typeof options === 'object' && options !== null) {
+      if (options.skip !== undefined) skip = options.skip;
+      if (options.top !== undefined) top = options.top;
+      if (options.search) search = options.search.trim();
+    }
+
+    const baseFilter = `DocObjectCode eq '${docObjectCode}'`;
+    let url = `/sap/Drafts?$filter=${encodeURIComponent(baseFilter)}&$orderby=DocEntry desc&$top=${top}&$skip=${skip}`;
+
+    let draftsFromSap: any[] = [];
+    try {
+      const res = await api.get(url);
+      draftsFromSap = Array.isArray(res.data?.value) ? res.data.value : [];
+    } catch (sapErr: any) {
+      console.warn(`[getDraftsForDocObjectCode] Erro ao buscar rascunhos de ${docObjectCode}:`, sapErr?.message);
+    }
+
+    const mappedSapDrafts = draftsFromSap.map((d: any) => ({
+      ...d,
+      DocObjectCode: docObjectCode,
+      ObjectType: meta.objType,
+      TargetTable: meta.tableName,
+      DraftObjectType: '112',
+      DraftTable: 'ODRF',
+      _isDraft: true,
+      DocumentStatus: d.DocumentStatus || 'bost_Open'
+    }));
+
+    return await mergePendingPortalDraftsForObjectType(mappedSapDrafts, targetObjType);
+  } catch {
+    return [];
+  }
+}
+
 export const sapService = {
   isServiceOrder,
   SAP_MARKETING_OBJECTS_CATALOG,
@@ -568,8 +614,11 @@ export const sapService = {
     }
   },
 
-  getPurchaseOrders: async (options?: number | ODataQueryOptions) => {
+  getPurchaseOrders: async (options?: number | (ODataQueryOptions & { draftsOnly?: boolean })) => {
     try {
+      if (typeof options === 'object' && Boolean(options?.draftsOnly)) {
+        return await getDraftsForDocObjectCode('oPurchaseOrders', '22', options);
+      }
       const url = buildODataQuery('/sap/PurchaseOrders', options, 20, 'DocEntry desc');
       const response = await api.get(url);
       const list = response.data.value || [];
@@ -588,8 +637,11 @@ export const sapService = {
     }
   },
 
-  getPurchaseRequests: async (options?: number | ODataQueryOptions) => {
+  getPurchaseRequests: async (options?: number | (ODataQueryOptions & { draftsOnly?: boolean })) => {
     try {
+      if (typeof options === 'object' && Boolean(options?.draftsOnly)) {
+        return await getDraftsForDocObjectCode('oPurchaseRequests', '1470000113', options);
+      }
       const url = buildODataQuery('/sap/PurchaseRequests', options, 20, 'DocEntry desc');
       const response = await api.get(url);
       const list = response.data.value || [];
@@ -608,8 +660,11 @@ export const sapService = {
     }
   },
 
-  getPurchaseQuotations: async (options?: number | ODataQueryOptions) => {
+  getPurchaseQuotations: async (options?: number | (ODataQueryOptions & { draftsOnly?: boolean })) => {
     try {
+      if (typeof options === 'object' && Boolean(options?.draftsOnly)) {
+        return await getDraftsForDocObjectCode('oPurchaseQuotations', '540000006', options);
+      }
       const url = buildODataQuery('/sap/PurchaseQuotations', options, 20, 'DocEntry desc');
       const response = await api.get(url);
       const list = response.data.value || [];
@@ -628,8 +683,11 @@ export const sapService = {
     }
   },
 
-  getPurchaseDownPayments: async (options?: number | ODataQueryOptions) => {
+  getPurchaseDownPayments: async (options?: number | (ODataQueryOptions & { draftsOnly?: boolean })) => {
     try {
+      if (typeof options === 'object' && Boolean(options?.draftsOnly)) {
+        return await getDraftsForDocObjectCode('oPurchaseDownPayments', '204', options);
+      }
       const url = buildODataQuery('/sap/PurchaseDownPayments', options, 20, 'DocEntry desc');
       const response = await api.get(url);
       const list = response.data.value || [];
@@ -639,8 +697,24 @@ export const sapService = {
     }
   },
 
-  getPurchaseOrder: async (docEntry: number) => {
+  getPurchaseOrder: async (docEntry: number, isDraft = false) => {
     try {
+      if (isDraft) {
+        try {
+          const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+          if (draftRes.data) {
+            return {
+              ...draftRes.data,
+              DocEntry: docEntry,
+              ObjectType: '22',
+              TargetTable: 'OPOR',
+              DraftObjectType: '112',
+              DraftTable: 'ODRF',
+              _isDraft: true
+            };
+          }
+        } catch {}
+      }
       try {
         const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
         if (draftCheck.data?.approvalRecord?.objectType === '22' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
@@ -666,8 +740,24 @@ export const sapService = {
     }
   },
 
-  getPurchaseRequest: async (docEntry: number) => {
+  getPurchaseRequest: async (docEntry: number, isDraft = false) => {
     try {
+      if (isDraft) {
+        try {
+          const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+          if (draftRes.data) {
+            return {
+              ...draftRes.data,
+              DocEntry: docEntry,
+              ObjectType: '1470000113',
+              TargetTable: 'OPRQ',
+              DraftObjectType: '112',
+              DraftTable: 'ODRF',
+              _isDraft: true
+            };
+          }
+        } catch {}
+      }
       try {
         const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
         if (draftCheck.data?.approvalRecord?.objectType === '1470000113' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
@@ -693,8 +783,24 @@ export const sapService = {
     }
   },
 
-  getPurchaseDownPayment: async (docEntry: number) => {
+  getPurchaseDownPayment: async (docEntry: number, isDraft = false) => {
     try {
+      if (isDraft) {
+        try {
+          const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+          if (draftRes.data) {
+            return {
+              ...draftRes.data,
+              DocEntry: docEntry,
+              ObjectType: '204',
+              TargetTable: 'ODPO',
+              DraftObjectType: '112',
+              DraftTable: 'ODRF',
+              _isDraft: true
+            };
+          }
+        } catch {}
+      }
       try {
         const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
         if (draftCheck.data?.approvalRecord?.objectType === '204' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {
@@ -925,8 +1031,24 @@ export const sapService = {
     }
   },
 
-  getPurchaseQuotation: async (docEntry: number) => {
+  getPurchaseQuotation: async (docEntry: number, isDraft = false) => {
     try {
+      if (isDraft) {
+        try {
+          const draftRes = await api.get(`/sap/Drafts(${docEntry})`);
+          if (draftRes.data) {
+            return {
+              ...draftRes.data,
+              DocEntry: docEntry,
+              ObjectType: '540000006',
+              TargetTable: 'OPQT',
+              DraftObjectType: '112',
+              DraftTable: 'ODRF',
+              _isDraft: true
+            };
+          }
+        } catch {}
+      }
       try {
         const draftCheck = await api.get(`/approvals/draft-detail/${docEntry}`);
         if (draftCheck.data?.approvalRecord?.objectType === '540000006' && !draftCheck.data?.approvalRecord?.convertedDocEntry && draftCheck.data?.draftData) {

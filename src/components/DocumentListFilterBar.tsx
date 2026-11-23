@@ -30,6 +30,8 @@ export interface DocumentListFilterBarProps {
   isLoading?: boolean;
   statusFilter?: 'all' | 'open' | 'closed';
   onChangeStatusFilter?: (status: 'all' | 'open' | 'closed') => void;
+  draftsOnlyFilter?: boolean;
+  onChangeDraftsOnlyFilter?: (draftsOnly: boolean) => void;
   appliedFiltersSummary?: string | null;
   totalResults?: number;
 }
@@ -47,6 +49,8 @@ export function DocumentListFilterBar({
   isLoading = false,
   statusFilter,
   onChangeStatusFilter,
+  draftsOnlyFilter = false,
+  onChangeDraftsOnlyFilter,
   appliedFiltersSummary,
   totalResults
 }: DocumentListFilterBarProps) {
@@ -436,6 +440,26 @@ export function DocumentListFilterBar({
               <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
+
+          {/* Middle: Drafts only flag / checkbox */}
+          {onChangeDraftsOnlyFilter !== undefined && (
+            <label className="flex items-center gap-2.5 cursor-pointer select-none bg-amber-50 hover:bg-amber-100/80 border border-amber-300 px-3.5 h-11 transition-colors">
+              <input
+                type="checkbox"
+                checked={Boolean(draftsOnlyFilter)}
+                onChange={(e) => onChangeDraftsOnlyFilter(e.target.checked)}
+                className="w-4 h-4 text-amber-600 rounded-none border-amber-400 focus:ring-amber-500 cursor-pointer"
+              />
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-950 leading-tight">
+                  Apenas Esboços (Drafts)
+                </span>
+                <span className="text-[8px] font-bold text-amber-700 uppercase">
+                  Buscar no endpoint de esboços
+                </span>
+              </div>
+            </label>
+          )}
 
           {/* Right: Status Filters if provided */}
           {statusFilter && onChangeStatusFilter && (
