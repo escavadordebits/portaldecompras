@@ -3208,7 +3208,7 @@ function CreateOrderView({
 }: {
   key?: string,
   title?: string,
-  onSubmit?: (data: any, email?: string) => Promise<any>,
+  onSubmit?: (data: any, email?: string, asDraft?: boolean) => Promise<any>,
   userEmail?: string,
   allowAttachments?: boolean,
   initialFromRequest?: any,
@@ -3312,6 +3312,7 @@ function CreateOrderView({
   const [docDueDate, setDocDueDate] = useState<string>(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSearchingItems, setIsSearchingItems] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [isItemLookupOpen, setIsItemLookupOpen] = useState(false);
   const [lastAddedIdx, setLastAddedIdx] = useState<number | null>(null);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
@@ -3498,18 +3499,21 @@ function CreateOrderView({
     }, 150);
   };
 
-  const handleFormSubmit = async () => {
-    if ((!selectedSupplier && !isRequest) || orderItems.length === 0 || !selectedBPL) {
+  const handleFormSubmit = async (asDraft = false) => {
+    const isDraftMode = asDraft === true;
+    if ((!selectedSupplier && !isRequest && !isDraftMode) || orderItems.length === 0 || !selectedBPL) {
       toast.error(isRequest ? 'Selecione uma filial e adicione itens.' : 'Selecione um fornecedor, uma filial e adicione itens.');
       return;
     }
 
-    // Validation: Block if project or dimension 1 is missing
+    // Validation: Block if project or dimension 1 is missing (relaxed for draft mode with defaults)
     const missingAccounting = orderItems.some(item => !(item.ProjectCode || item.CostingCode4) || !item.CostingCode);
-    if (missingAccounting) {
+    if (missingAccounting && !isDraftMode) {
       toast.error('Todos os itens devem ter Projeto SAP e Dimensão 1 preenchidos no Detalhamento Contábil.');
       return;
     }
+
+    setIsSavingDraft(isDraftMode);
 
     const firstLineUsage = orderItems.find(i => i.Usage && i.Usage !== 'none')?.Usage;
     const effectiveHeaderUsage = selectedUsage || (firstLineUsage ? String(firstLineUsage) : '');
@@ -3592,7 +3596,11 @@ function CreateOrderView({
         orderData.BPL_IDAssignedToInvoice = parseInt(selectedBPL);
       }
 
-      const response = await onSubmit(orderData, userEmail);
+      if (isDraftMode) {
+        orderData._asDraft = true;
+        orderData._standaloneDraft = true;
+      }
+      const response = await onSubmit(orderData, userEmail, isDraftMode);
 
       // Persist attachments in portal storage for the created document entry
       if (selectedFiles.length > 0 && response?.DocEntry) {
@@ -3633,7 +3641,7 @@ function CreateOrderView({
         setCreatedDocEntry(response.DocEntry);
         setIsEmailModalOpen(true);
       } else {
-        toast.success(`${title} realizado com sucesso!`);
+        toast.success(isDraftMode ? `${title} gravado(a) como Esboço no SAP com sucesso!` : `${title} realizado com sucesso!`);
         setOrderItems([]);
         setSelectedSupplier(null);
         setSelectedFiles([]);
@@ -3683,13 +3691,27 @@ function CreateOrderView({
           <div className="h-1 w-12 bg-evo-teal rounded-full my-2" />
           <p className="text-xs font-bold uppercase tracking-widest text-evo-dark/40">Portal de Operações SAP Business One</p>
         </div>
-        <Button
-          onClick={handleFormSubmit}
-          disabled={isLoading}
-          className="evo-button-primary shadow-xl"
-        >
-          {isLoading ? 'Efetivando...' : 'Efetivar Registro'}
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => handleFormSubmit(true)}
+            disabled={isLoading}
+            className="h-11 px-5 rounded-none border-2 border-slate-300 hover:border-evo-dark hover:bg-slate-100 text-slate-800 font-black text-xs uppercase tracking-widest flex items-center gap-2 shadow-sm transition-all"
+            title="Gravar como Esboço no SAP (ODRF) independente do processo de aprovação"
+          >
+            <FileText className="w-4 h-4 text-amber-600" />
+            {isLoading && isSavingDraft ? 'Salvando...' : 'Gravar como Esboço'}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => handleFormSubmit(false)}
+            disabled={isLoading}
+            className="evo-button-primary shadow-xl h-11 px-8 rounded-none font-black text-xs uppercase tracking-widest flex items-center gap-2"
+          >
+            {isLoading && !isSavingDraft ? 'Efetivando...' : 'Efetivar Registro'}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">

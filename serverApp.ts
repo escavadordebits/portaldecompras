@@ -706,7 +706,7 @@ apiRouter.get('/approvals/catalog', (req, res) => {
 
 // 2. Create Draft in SAP (ODRF - ObjType 112) and register for line-by-line portal approval with exact target ObjType
 apiRouter.post('/approvals/create-draft', async (req, res) => {
-  const { docObjectCode, objectType, payload, userEmail, userName } = req.body;
+  const { docObjectCode, objectType, payload, userEmail, userName, standaloneDraft } = req.body;
   if (!payload || (!docObjectCode && !objectType)) {
     return res.status(400).json({ error: 'Parâmetros "payload" e ("docObjectCode" ou "objectType") são obrigatórios.' });
   }
@@ -771,6 +771,24 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
 
     const draftData = sapResponse.data;
     const draftDocEntry = Number(draftData.DocEntry);
+
+    // If explicitly requested as standalone draft, save directly in SAP ODRF without approval workflow
+    if (Boolean(standaloneDraft || req.body.isStandaloneDraft)) {
+      console.log(`Saved Standalone Draft in SAP ODRF (112) without approval workflow: DocEntry=${draftDocEntry}, Target ObjType=${meta.objType} (${meta.tableName})`);
+      return res.json({
+        success: true,
+        draftDocEntry,
+        draftDocNum: draftData.DocNum || draftDocEntry,
+        draftObjectType: '112',
+        draftTable: 'ODRF',
+        objectType: meta.objType,
+        targetTable: meta.tableName,
+        docObjectCode: meta.docObjectCode,
+        isStandaloneDraft: true,
+        approvalRecord: null,
+        sapDraft: draftData
+      });
+    }
 
     // Register line-by-line approval record with exact target ObjType and DocObjectCode
     const targetDbName = auth.companyDB || normalizeCompany((req.headers['x-sap-company'] as string) || req.cookies['B1COMPANYDB']);

@@ -720,7 +720,7 @@ export const sapService = {
     }
   },
 
-  createPurchaseOrder: async (data: any, userEmail?: string) => {
+  createPurchaseOrder: async (data: any, userEmail?: string, asDraft = false) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
@@ -796,7 +796,8 @@ export const sapService = {
           objectType: '22',
           payload: formattedData,
           userEmail: userEmail || data.RequesterEmail,
-          userName: data.RequesterName
+          userName: data.RequesterName,
+          standaloneDraft: Boolean(asDraft || data._standaloneDraft || data._asDraft)
         });
         if (draftRes.data && draftRes.data.draftDocEntry) {
           return {
@@ -821,7 +822,7 @@ export const sapService = {
     }
   },
 
-  createPurchaseRequest: async (data: any, userEmail?: string) => {
+  createPurchaseRequest: async (data: any, userEmail?: string, asDraft = false) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
@@ -894,7 +895,8 @@ export const sapService = {
           objectType: '1470000113',
           payload: formattedData,
           userEmail,
-          userName: data.RequesterName
+          userName: data.RequesterName,
+          standaloneDraft: Boolean(asDraft || data._standaloneDraft || data._asDraft)
         });
         if (draftRes.data && draftRes.data.draftDocEntry) {
           return {
@@ -989,7 +991,7 @@ export const sapService = {
     }
   },
 
-  createPurchaseQuotation: async (data: any, userEmail?: string) => {
+  createPurchaseQuotation: async (data: any, userEmail?: string, asDraft = false) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
@@ -1108,7 +1110,7 @@ export const sapService = {
     }
   },
 
-  createPurchaseDownPayment: async (data: any, userEmail?: string) => {
+  createPurchaseDownPayment: async (data: any, userEmail?: string, asDraft = false) => {
     try {
       const today = calculateUDataPgtoFromPymntGroup('');
       const headerProject = data.CostingCode4 || data.U_Projeto || data.ProjectCode || data.Project || '';
