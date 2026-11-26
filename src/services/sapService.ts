@@ -346,7 +346,7 @@ export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
     objType: '1470000113',
     tableName: 'OPRQ',
     linesTableName: 'PRQ1',
-    docObjectCode: 'oPurchaseRequests',
+    docObjectCode: 'oPurchaseRequest',
     serviceLayerEndpoint: 'PurchaseRequests',
     labelPt: 'Solicitação de compra'
   },
@@ -354,7 +354,7 @@ export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
     objType: '540000006',
     tableName: 'OPQT',
     linesTableName: 'PQT1',
-    docObjectCode: 'oPurchaseQuotations',
+    docObjectCode: '540000006',
     serviceLayerEndpoint: 'PurchaseQuotations',
     labelPt: 'Oferta de compra (Cotação)'
   },
@@ -572,7 +572,19 @@ async function getDraftsForDocObjectCode(
       if (options.search) search = options.search.trim();
     }
 
-    const baseFilter = `DocObjectCode eq '${docObjectCode}'`;
+    const codeVariants = Array.from(new Set([
+      docObjectCode,
+      meta.docObjectCode,
+      meta.objType,
+      targetObjType,
+      ...(meta.objType === '1470000113' ? ['oPurchaseRequest', 'oPurchaseRequests', '1470000113'] : []),
+      ...(meta.objType === '540000006' ? ['540000006', 'oPurchaseQuotations', 'oPurchaseQuotation'] : []),
+      ...(meta.objType === '22' ? ['oPurchaseOrders', '22'] : []),
+      ...(meta.objType === '204' ? ['oPurchaseDownPayments', '204'] : [])
+    ].filter(Boolean)));
+    const baseFilter = codeVariants.length > 1
+      ? `(${codeVariants.map(c => `DocObjectCode eq '${c}'`).join(' or ')})`
+      : `DocObjectCode eq '${docObjectCode}'`;
     let url = `/sap/Drafts?$filter=${encodeURIComponent(baseFilter)}&$orderby=DocEntry desc&$top=${top}&$skip=${skip}`;
 
     let draftsFromSap: any[] = [];
@@ -1016,7 +1028,7 @@ export const sapService = {
       // Save as Draft in SAP and register for line-by-line approval
       try {
         const draftRes = await api.post('/approvals/create-draft', {
-          docObjectCode: 'oPurchaseRequests',
+          docObjectCode: 'oPurchaseRequest',
           objectType: '1470000113',
           payload: formattedData,
           userEmail,
@@ -1028,6 +1040,10 @@ export const sapService = {
             ...draftRes.data.sapDraft,
             DocEntry: draftRes.data.draftDocEntry,
             DocNum: draftRes.data.draftDocNum || draftRes.data.draftDocEntry,
+            ObjectType: '1470000113',
+            TargetTable: 'OPRQ',
+            DraftObjectType: '112',
+            DraftTable: 'ODRF',
             _isDraft: true,
             _portalApproval: draftRes.data.approvalRecord
           };
@@ -1038,9 +1054,17 @@ export const sapService = {
 
       const response = await api.post('/sap/Drafts', {
         ...formattedData,
-        DocObjectCode: 'oPurchaseRequests'
+        DocObjectCode: 'oPurchaseRequest',
+        ObjectType: '1470000113'
       });
-      return response.data;
+      return {
+        ...response.data,
+        ObjectType: '1470000113',
+        TargetTable: 'OPRQ',
+        DraftObjectType: '112',
+        DraftTable: 'ODRF',
+        _isDraft: true
+      };
     } catch (error) {
       return handleApiError(error, 'createPurchaseRequest');
     }
@@ -1212,11 +1236,12 @@ export const sapService = {
       // Save as Draft in SAP ODRF (112) with target ObjType 540000006 (OPQT / oPurchaseQuotations) and register for line-by-line approval
       try {
         const draftRes = await api.post('/approvals/create-draft', {
-          docObjectCode: 'oPurchaseQuotations',
+          docObjectCode: '540000006',
           objectType: '540000006',
           payload: formattedData,
           userEmail: userEmail || data.RequesterEmail,
-          userName: data.RequesterName
+          userName: data.RequesterName,
+          standaloneDraft: Boolean(asDraft || data._standaloneDraft || data._asDraft)
         });
         if (draftRes.data && draftRes.data.draftDocEntry) {
           return {
@@ -1237,7 +1262,7 @@ export const sapService = {
 
       const response = await api.post('/sap/Drafts', {
         ...formattedData,
-        DocObjectCode: 'oPurchaseQuotations',
+        DocObjectCode: '540000006',
         ObjectType: '540000006'
       });
       return {
@@ -1840,6 +1865,22 @@ export const sapService = {
       const baseSelect = "ItemCode,ItemName,Frozen,ItemPrices,PurchaseUnit,SalesUnit,InventoryUOM";
 
       if (sanitizedName) {
+        const allItems: any[] = [];
+        const seenCodes = new Set<string>();
+
+        // 1. Direct ItemCode lookup attempt (instant and exact in SAP)
+        const directCode = sanitizedName.toUpperCase().trim();
+        try {
+          const directRes = await api.get(`/sap/Items('${encodeURIComponent(directCode)}')?$select=${baseSelect}`);
+          if (directRes.data && directRes.data.ItemCode) {
+            const it = directRes.data;
+            if (it.Frozen === 'tNO' || it.Frozen === 'N' || !it.Frozen) {
+              seenCodes.add(it.ItemCode);
+              allItems.push(it);
+            }
+          }
+        } catch {}
+
         // Build rich search variants to match case-sensitive & accent-sensitive SAP DB
         const rawTokens = sanitizedName.split(/\s+/).filter(Boolean);
         const searchTargets = Array.from(new Set([sanitizedName, ...rawTokens]));
@@ -1847,7 +1888,7 @@ export const sapService = {
         const variants = new Set<string>();
 
         for (const target of searchTargets) {
-          if (!target || target.length < 2) continue;
+          if (!target) continue;
           
           // 1. Original
           variants.add(target);
@@ -1912,23 +1953,22 @@ export const sapService = {
         }
 
         const variantList = Array.from(variants).filter(v => Boolean(v && v.trim()));
-        const allItems: any[] = [];
-        const seenCodes = new Set<string>();
 
-        // Build combined filter clauses in batches of 4 variants to ensure fast parallel requests
-        const batchSize = 4;
+        // Build combined filter clauses in batches of 3 variants
+        const batchSize = 3;
         const batches: string[][] = [];
         for (let i = 0; i < variantList.length; i += batchSize) {
           batches.push(variantList.slice(i, i + batchSize));
         }
 
         await Promise.all(
-          batches.slice(0, 4).map(async (batch) => {
+          batches.slice(0, 5).map(async (batch) => {
             const orConditions: string[] = [];
             for (const v of batch) {
               const safeV = v.replace(/'/g, "''");
               orConditions.push(`contains(ItemName, '${safeV}')`);
               orConditions.push(`contains(ItemCode, '${safeV}')`);
+              orConditions.push(`startswith(ItemCode, '${safeV}')`);
             }
             const filterStr = `(${orConditions.join(' or ')}) and Frozen ne 'tYES'`;
 
@@ -1948,10 +1988,11 @@ export const sapService = {
                 }
                 if (items.length < 40) break;
               } catch (err) {
-                // Fallback for single variant if combined OData fails
+                // Fallback for single variant if combined OData fails: search BOTH ItemCode and ItemName
                 try {
                   for (const singleV of batch) {
-                    const fallbackUrl = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(`contains(ItemName, '${singleV}') and Frozen ne 'tYES'`)}&$skip=${skip}&$top=40`;
+                    const fallbackFilter = `(startswith(ItemCode, '${singleV}') or contains(ItemCode, '${singleV}') or contains(ItemName, '${singleV}')) and Frozen ne 'tYES'`;
+                    const fallbackUrl = `/sap/Items?$select=${baseSelect}&$filter=${encodeURIComponent(fallbackFilter)}&$skip=${skip}&$top=40`;
                     const resp = await api.get(fallbackUrl);
                     const fItems = resp.data?.value || [];
                     for (const it of fItems) {
@@ -1972,32 +2013,40 @@ export const sapService = {
           })
         );
 
-        if (allItems.length > 0) {
-          // Sort items by relevance: exact match or startsWith first, then locale
-          const term = sanitizedName.toUpperCase();
-          const cleanNormTerm = sanitizedName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+        // Sort items by relevance: exact match or startsWith first on ItemCode, then on ItemName
+        const term = sanitizedName.toUpperCase();
+        const cleanNormTerm = sanitizedName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 
-          return allItems.sort((a, b) => {
-            const aCode = (a.ItemCode || '').toUpperCase();
-            const bCode = (b.ItemCode || '').toUpperCase();
-            const aName = (a.ItemName || '').toUpperCase();
-            const bName = (b.ItemName || '').toUpperCase();
-            const aNorm = aName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            const bNorm = bName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return allItems.sort((a, b) => {
+          const aCode = (a.ItemCode || '').toUpperCase();
+          const bCode = (b.ItemCode || '').toUpperCase();
+          const aName = (a.ItemName || '').toUpperCase();
+          const bName = (b.ItemName || '').toUpperCase();
+          const aNorm = aName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          const bNorm = bName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-            // Exact match on Code or Name
-            if (aCode === term || aName === term) return -1;
-            if (bCode === term || bName === term) return 1;
+          // Exact match on Code
+          if (aCode === term && bCode !== term) return -1;
+          if (bCode === term && aCode !== term) return 1;
 
-            // Starts with
-            const aStarts = aCode.startsWith(term) || aName.startsWith(term) || aNorm.startsWith(cleanNormTerm);
-            const bStarts = bCode.startsWith(term) || bName.startsWith(term) || bNorm.startsWith(cleanNormTerm);
-            if (aStarts && !bStarts) return -1;
-            if (!aStarts && bStarts) return 1;
+          // Exact match on Name
+          if (aName === term && bName !== term) return -1;
+          if (bName === term && aName !== term) return 1;
 
-            return aName.localeCompare(bName);
-          });
-        }
+          // Code starts with
+          const aCodeStarts = aCode.startsWith(term);
+          const bCodeStarts = bCode.startsWith(term);
+          if (aCodeStarts && !bCodeStarts) return -1;
+          if (!aCodeStarts && bCodeStarts) return 1;
+
+          // Name starts with
+          const aNameStarts = aName.startsWith(term) || aNorm.startsWith(cleanNormTerm);
+          const bNameStarts = bName.startsWith(term) || bNorm.startsWith(cleanNormTerm);
+          if (aNameStarts && !bNameStarts) return -1;
+          if (!aNameStarts && bNameStarts) return 1;
+
+          return aCode.localeCompare(bCode) || aName.localeCompare(bName);
+        });
       }
 
       // Initial list when no search term is entered - fetch up to 100 active items directly

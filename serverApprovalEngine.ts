@@ -67,7 +67,7 @@ export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
     objType: '1470000113',
     tableName: 'OPRQ',
     linesTableName: 'PRQ1',
-    docObjectCode: 'oPurchaseRequests',
+    docObjectCode: 'oPurchaseRequest',
     serviceLayerEndpoint: 'PurchaseRequests',
     labelPt: 'Solicitação de compra'
   },
@@ -75,7 +75,7 @@ export const SAP_MARKETING_OBJECTS_CATALOG: SapMarketingObjectMeta[] = [
     objType: '540000006',
     tableName: 'OPQT',
     linesTableName: 'PQT1',
-    docObjectCode: 'oPurchaseQuotations',
+    docObjectCode: '540000006',
     serviceLayerEndpoint: 'PurchaseQuotations',
     labelPt: 'Oferta de compra (Cotação)'
   },

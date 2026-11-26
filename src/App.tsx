@@ -1361,35 +1361,6 @@ export default function App() {
   // Menu items definition for searchable sidebar (must be called unconditionally before any early returns)
   const menuSections = useMemo(() => [
     {
-      title: 'Compras',
-      visible: !!activeModules.procurement,
-      items: [
-        {
-          id: 'create-order',
-          label: 'Pedido de Compra',
-          icon: <Plus />,
-          active: currentView === 'create-order',
-          onClick: () => {
-            setCurrentView('create-order');
-            if (window.innerWidth < 1024) setSidebarOpen(false);
-          },
-          keywords: ['pedido', 'compra', 'novo']
-        },
-        {
-          id: 'list-orders',
-          label: 'Listar Pedidos',
-          icon: <Search />,
-          active: currentView === 'list-orders',
-          onClick: () => {
-            setSelectedOrderEntry(null);
-            setCurrentView('list-orders');
-            if (window.innerWidth < 1024) setSidebarOpen(false);
-          },
-          keywords: ['pedidos', 'compras', 'listar', 'buscar']
-        }
-      ]
-    },
-    {
       title: 'Solicitações',
       visible: !!activeModules.procurement,
       items: [
@@ -1419,24 +1390,7 @@ export default function App() {
       ]
     },
     {
-      title: 'Aprovações',
-      visible: !!activeModules.approvals,
-      items: [
-        {
-          id: 'approvals',
-          label: 'Minhas Aprovações',
-          icon: <CheckSquare />,
-          active: currentView === 'approvals',
-          onClick: () => {
-            setCurrentView('approvals');
-            if (window.innerWidth < 1024) setSidebarOpen(false);
-          },
-          keywords: ['aprovações', 'aprovacoes', 'aprovar']
-        }
-      ]
-    },
-    {
-      title: 'Negociações',
+      title: 'Oferta',
       visible: !!activeModules.negotiations,
       items: [
         {
@@ -1472,6 +1426,52 @@ export default function App() {
             if (window.innerWidth < 1024) setSidebarOpen(false);
           },
           keywords: ['bid', 'mapa', 'comparativo', 'quadro']
+        }
+      ]
+    },
+    {
+      title: 'Pedido de Compra',
+      visible: !!activeModules.procurement,
+      items: [
+        {
+          id: 'create-order',
+          label: 'Pedido de Compra',
+          icon: <Plus />,
+          active: currentView === 'create-order',
+          onClick: () => {
+            setCurrentView('create-order');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['pedido', 'compra', 'novo']
+        },
+        {
+          id: 'list-orders',
+          label: 'Listar Pedidos',
+          icon: <Search />,
+          active: currentView === 'list-orders',
+          onClick: () => {
+            setSelectedOrderEntry(null);
+            setCurrentView('list-orders');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['pedidos', 'compras', 'listar', 'buscar']
+        }
+      ]
+    },
+    {
+      title: 'Aprovações',
+      visible: !!activeModules.approvals,
+      items: [
+        {
+          id: 'approvals',
+          label: 'Minhas Aprovações',
+          icon: <CheckSquare />,
+          active: currentView === 'approvals',
+          onClick: () => {
+            setCurrentView('approvals');
+            if (window.innerWidth < 1024) setSidebarOpen(false);
+          },
+          keywords: ['aprovações', 'aprovacoes', 'aprovar']
         }
       ]
     },
@@ -3798,11 +3798,20 @@ function CreateOrderView({
       }
 
       // Only show portal email prompt for Purchase Quotations
+      const genDocNum = response?.DocNum || response?.draftDocNum;
+      const genDocEntry = response?.DocEntry || response?.draftDocEntry;
+      const isDraftCreated = Boolean(isDraftMode || response?._isDraft || response?.draftObjectType === '112' || response?.DocObjectCode);
+      const cleanDocTitle = title.replace('Novo ', '').replace('Nova ', '');
+
       if (title === "Nova Cotação de Compra" && response?.DocEntry) {
         setCreatedDocEntry(response.DocEntry);
         setIsEmailModalOpen(true);
       } else {
-        toast.success(isDraftMode ? `${title} gravado(a) como Esboço no SAP com sucesso!` : `${title} realizado com sucesso!`);
+        if (isDraftCreated) {
+          toast.success(`Esboço de ${cleanDocTitle} Nº ${genDocEntry || genDocNum} gravado com sucesso no SAP!`, { duration: 8000 });
+        } else {
+          toast.success(`${cleanDocTitle} Nº ${genDocNum || genDocEntry} gerado(a) com sucesso no SAP!`, { duration: 8000 });
+        }
         setOrderItems([]);
         setSelectedSupplier(null);
         setSelectedFiles([]);
@@ -3830,7 +3839,8 @@ function CreateOrderView({
         isOpen={isEmailModalOpen}
         onClose={() => {
           setIsEmailModalOpen(false);
-          toast.success(`${title} realizado com sucesso!`);
+          const cleanDocTitle = title.replace('Novo ', '').replace('Nova ', '');
+          toast.success(`${cleanDocTitle} Nº ${createdDocEntry} gerada com sucesso!`, { duration: 8000 });
           setOrderItems([]);
           setSelectedSupplier(null);
           setSelectedFiles([]);
@@ -5591,6 +5601,7 @@ function ListOrdersView({
             <TableHeader className="bg-evo-dark">
               <TableRow className="border-none hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[110px]">Nº Documento</TableHead>
+                <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap w-[105px]">Nº Esboço</TableHead>
                 <TableHead className="text-[10px] font-black uppercase tracking-wider text-white/70 px-4 py-3.5 whitespace-nowrap min-w-[240px]">
                   {isPurchaseRequestView ? 'Solicitante' : 'Nome do Fornecedor'}
                 </TableHead>
@@ -5611,7 +5622,7 @@ function ListOrdersView({
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={12} className="text-center py-20">
+                  <TableCell colSpan={13} className="text-center py-20">
                     <p className="text-[10px] font-black uppercase tracking-[0.3em] text-evo-dark/20 animate-pulse">Estabelecendo conexão com Service Layer...</p>
                   </TableCell>
                 </TableRow>
@@ -5628,11 +5639,31 @@ function ListOrdersView({
                     onClick={() => onViewDetails(order.DocEntry)}
                   >
                     <TableCell className="px-4 py-3.5 font-black text-xs text-evo-dark whitespace-nowrap w-[110px]">
-                      <div>#{order.DocNum || order.DocEntry}</div>
-                      {order._isDraft && (
-                        <span className="mt-1 inline-block px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[8px] font-black uppercase tracking-wider" title={`Esboço salvo na tabela ODRF (ObjType 112) vinculado a ${order.TargetTable || defaultTableName} (ObjType ${order.ObjectType || defaultObjType})`}>
-                          ODRF (112) → {order.TargetTable || defaultTableName} ({order.ObjectType || defaultObjType})
-                        </span>
+                      {order._isDraft ? (
+                        order.ConvertedDocNum ? (
+                          <span className="text-emerald-700 font-black">#{order.ConvertedDocNum}</span>
+                        ) : (
+                          <span className="text-slate-400 font-medium italic text-[11px]">-</span>
+                        )
+                      ) : (
+                        <div>#{order.DocNum || order.DocEntry}</div>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-4 py-3.5 whitespace-nowrap w-[105px]">
+                      {order._isDraft ? (
+                        <div>
+                          <span className="font-black text-xs text-amber-700">#{order.DraftDocEntry || order.DocEntry}</span>
+                          <span className="block mt-0.5 px-1 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[8px] font-black uppercase tracking-wider text-center w-fit">
+                            ODRF (112)
+                          </span>
+                        </div>
+                      ) : order.DraftEntry || order.DraftDocEntry ? (
+                        <div>
+                          <span className="font-bold text-xs text-slate-600">#{order.DraftEntry || order.DraftDocEntry}</span>
+                          <span className="block text-[8px] font-medium text-slate-400 uppercase tracking-tighter">Origem</span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-300 font-medium text-[11px]">-</span>
                       )}
                     </TableCell>
                     <TableCell className="px-4 py-3.5 whitespace-normal min-w-[240px] max-w-[320px]">
@@ -5817,7 +5848,7 @@ function ListOrdersView({
               })}
               {!isLoading && filteredOrders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={12} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
+                  <TableCell colSpan={13} className="text-center py-20 text-[10px] font-black uppercase tracking-widest text-evo-dark/20 italic">
                     Nenhum registro localizado sob os critérios informados.
                   </TableCell>
                 </TableRow>

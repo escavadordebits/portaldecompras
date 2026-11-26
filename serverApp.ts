@@ -725,9 +725,13 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
       payload.RequriedDate || payload.RequiredDate || payload.ReqDate || payload.DocDueDate || payload.DocDate || fallbackToday
     ).split('T')[0];
 
+    const targetDocObjectCode = meta.objType === '540000006'
+      ? '540000006'
+      : (meta.objType === '1470000113' ? 'oPurchaseRequest' : meta.docObjectCode);
+
     const draftPayload: any = {
       ...payload,
-      DocObjectCode: meta.docObjectCode,
+      DocObjectCode: targetDocObjectCode,
       DocDate: String(payload.DocDate || fallbackToday).split('T')[0],
       DocDueDate: String(payload.DocDueDate || resolvedReqDate).split('T')[0],
       TaxDate: String(payload.TaxDate || payload.DocDate || fallbackToday).split('T')[0],
@@ -1563,7 +1567,13 @@ apiRouter.all('/sap/*', async (req, res) => {
     delete body.ProjectCode;
     if (endpoint.startsWith('Drafts') && (body.DocObjectCode || body.ObjectType)) {
       const resolvedDraftMeta = resolveMarketingObjectMeta(body.ObjectType, body.DocObjectCode);
-      body.DocObjectCode = resolvedDraftMeta.docObjectCode;
+      if (resolvedDraftMeta.objType === '540000006') {
+        body.DocObjectCode = '540000006';
+      } else if (resolvedDraftMeta.objType === '1470000113') {
+        body.DocObjectCode = 'oPurchaseRequest';
+      } else {
+        body.DocObjectCode = resolvedDraftMeta.docObjectCode;
+      }
     }
     delete body.ObjectType;
     if (!body.U_DataPgto && body.U_dataPgto) {
