@@ -877,8 +877,11 @@ export const sapService = {
         }
       }
       const docCurrency = data.DocCurrency || 'R$';
+      const resolvedBpl = Number(data.BPL_IDAssignedToInvoice || data.BPLID || 1);
       const formattedData: any = {
         ...data,
+        BPL_IDAssignedToInvoice: resolvedBpl,
+        BPLID: resolvedBpl,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
         DocCurrency: docCurrency,
@@ -981,8 +984,11 @@ export const sapService = {
         }
       }
       const reqDateStr = String(data.RequriedDate || data.RequiredDate || data.ReqDate || data.DocDueDate || today).split('T')[0];
+      const resolvedBpl = Number(data.BPL_IDAssignedToInvoice || data.BPLID || 1);
       const formattedData: any = {
         ...data,
+        BPL_IDAssignedToInvoice: resolvedBpl,
+        BPLID: resolvedBpl,
         DocDate: String(data.DocDate || today).split('T')[0],
         TaxDate: String(data.TaxDate || today).split('T')[0],
         DocDueDate: String(data.DocDueDate || reqDateStr).split('T')[0],
@@ -1181,8 +1187,11 @@ export const sapService = {
       }
       const reqDateStr = String(data.RequriedDate || data.RequiredDate || data.ReqDate || data.DocDueDate || today).split('T')[0];
       const docCurrency = data.DocCurrency || 'R$';
+      const resolvedBpl = Number(data.BPL_IDAssignedToInvoice || data.BPLID || 1);
       const formattedData: any = {
         ...data,
+        BPL_IDAssignedToInvoice: resolvedBpl,
+        BPLID: resolvedBpl,
         DocDate: String(data.DocDate || today).split('T')[0],
         TaxDate: String(data.TaxDate || today).split('T')[0],
         DocDueDate: String(data.DocDueDate || reqDateStr).split('T')[0],
@@ -1301,8 +1310,11 @@ export const sapService = {
           uDataPgto = data.DocDate || today;
         }
       }
+      const resolvedBpl = Number(data.BPL_IDAssignedToInvoice || data.BPLID || 1);
       const formattedData: any = {
         ...data,
+        BPL_IDAssignedToInvoice: resolvedBpl,
+        BPLID: resolvedBpl,
         DocDate: data.DocDate || today,
         TaxDate: data.TaxDate || today,
         DocType: 'dDocument_Items',

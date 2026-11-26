@@ -3750,12 +3750,10 @@ function CreateOrderView({
         orderData.AttachmentEntry = attachmentEntry;
       }
 
-      // Handle Branch Mapping based on document type
-      if (isRequest) {
-        orderData.BPLID = parseInt(selectedBPL);
-      } else {
-        orderData.BPL_IDAssignedToInvoice = parseInt(selectedBPL);
-      }
+      // Handle Branch Mapping based on document type (set both BPLID and BPL_IDAssignedToInvoice for Drafts & Direct documents)
+      const parsedBpl = parseInt(selectedBPL, 10) || 1;
+      orderData.BPLID = parsedBpl;
+      orderData.BPL_IDAssignedToInvoice = parsedBpl;
 
       if (isDraftMode) {
         orderData._asDraft = true;

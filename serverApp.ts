@@ -729,9 +729,13 @@ apiRouter.post('/approvals/create-draft', async (req, res) => {
       ? '540000006'
       : (meta.objType === '1470000113' ? 'oPurchaseRequest' : meta.docObjectCode);
 
+    const resolvedBpl = Number(payload.BPL_IDAssignedToInvoice || payload.BPLID || payload.BPLId || 1);
+
     const draftPayload: any = {
       ...payload,
       DocObjectCode: targetDocObjectCode,
+      BPL_IDAssignedToInvoice: resolvedBpl,
+      BPLID: resolvedBpl,
       DocDate: String(payload.DocDate || fallbackToday).split('T')[0],
       DocDueDate: String(payload.DocDueDate || resolvedReqDate).split('T')[0],
       TaxDate: String(payload.TaxDate || payload.DocDate || fallbackToday).split('T')[0],
@@ -1574,6 +1578,9 @@ apiRouter.all('/sap/*', async (req, res) => {
       } else {
         body.DocObjectCode = resolvedDraftMeta.docObjectCode;
       }
+      const resolvedBpl = Number(body.BPL_IDAssignedToInvoice || body.BPLID || body.BPLId || 1);
+      body.BPL_IDAssignedToInvoice = resolvedBpl;
+      body.BPLID = resolvedBpl;
     }
     delete body.ObjectType;
     if (!body.U_DataPgto && body.U_dataPgto) {
